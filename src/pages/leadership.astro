@@ -5,31 +5,37 @@ const leaders = [
   {
     name: 'Mike',
     title: 'Guild Master',
+    portrait: '/images/leadership/mike.png',
     bio: 'Captain of The Hidden Lodge and our resident foot enthusiast. If he says "one more pull," clear your schedule and stretch your toes.'
   },
   {
     name: 'Keakz',
     title: 'Raid Leader',
+    portrait: '/images/leadership/keakz.png',
     bio: 'Calls mechanics with the calm precision of a flight controller, then out-DPSes your excuses on UH DK.'
   },
   {
     name: 'Nic',
     title: 'Guild Admin',
+    portrait: '/images/leadership/nic.png',
     bio: 'Our logistical mastermind and certified M+ goblin. If a key exists, Nic has timed it, rerolled for it, and theorycrafted it.'
   },
   {
     name: 'Sunsource',
     title: 'Guild Strategist',
+    portrait: '/images/leadership/sunsource.png',
     bio: 'The prodigal son returns bearing spreadsheets, diagrams, and exactly one sentence that instantly fixes the wipe count.'
   },
   {
     name: 'Dale',
     title: 'Guild Management',
+    portrait: '/images/leadership/dale.png',
     bio: 'Handles guild operations with grace while muttering about how he "used to have fun" before being voluntold onto mage duty.'
   },
   {
     name: 'Xing',
     title: 'Guild Consultant',
+    portrait: '/images/leadership/xing.png',
     bio: 'Part advisor, part mythic dad energy. Dispenses wisdom, snacks, and occasional truths that hit harder than raid-wide damage.'
   }
 ];
@@ -52,11 +58,32 @@ const getInitials = (name: string) =>
     </p>
   </section>
 
+  <div id="lightbox" class="lightbox" role="dialog" aria-modal="true" aria-label="Portrait full size" hidden>
+    <button class="lightbox-close" id="lightbox-close" aria-label="Close">&times;</button>
+    <img id="lightbox-img" src="" alt="" />
+  </div>
+
   <section class="grid" aria-label="Guild leadership roster">
     {
       leaders.map((leader) => (
         <article class="card">
-          <div class="portrait" aria-hidden="true">{getInitials(leader.name)}</div>
+          <div class="portrait" aria-hidden="true">
+            {
+              leader.portrait ? (
+                <button
+                  class="portrait-btn"
+                  data-src={leader.portrait}
+                  data-name={leader.name}
+                  aria-label={`View full portrait of ${leader.name}`}
+                  type="button"
+                >
+                  <img src={leader.portrait} alt="" loading="lazy" />
+                </button>
+              ) : (
+                getInitials(leader.name)
+              )
+            }
+          </div>
           <p class="kicker">{leader.title}</p>
           <h2>{leader.name}</h2>
           <p>{leader.bio}</p>
@@ -64,6 +91,42 @@ const getInitials = (name: string) =>
       ))
     }
   </section>
+
+  <script>
+    const lightbox = document.getElementById('lightbox') as HTMLElement;
+    const lightboxImg = document.getElementById('lightbox-img') as HTMLImageElement;
+    const closeBtn = document.getElementById('lightbox-close') as HTMLButtonElement;
+
+    function openLightbox(src: string, name: string) {
+      lightboxImg.src = src;
+      lightboxImg.alt = name;
+      lightbox.hidden = false;
+      lightbox.focus();
+      document.body.style.overflow = 'hidden';
+    }
+
+    function closeLightbox() {
+      lightbox.hidden = true;
+      lightboxImg.src = '';
+      document.body.style.overflow = '';
+    }
+
+    document.querySelectorAll<HTMLButtonElement>('.portrait-btn').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        openLightbox(btn.dataset.src!, btn.dataset.name!);
+      });
+    });
+
+    closeBtn.addEventListener('click', closeLightbox);
+
+    lightbox.addEventListener('click', (e) => {
+      if (e.target === lightbox) closeLightbox();
+    });
+
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && !lightbox.hidden) closeLightbox();
+    });
+  </script>
 </Layout>
 
 <style>
@@ -101,7 +164,7 @@ const getInitials = (name: string) =>
   }
 
   .portrait {
-    width: 3rem;
+    width: 4.75rem;
     aspect-ratio: 1;
     border-radius: 999px;
     border: 1px solid rgba(217, 178, 110, 0.6);
@@ -112,6 +175,74 @@ const getInitials = (name: string) =>
     font-weight: 700;
     letter-spacing: 0.04em;
     margin-top: 0.1rem;
+    overflow: hidden;
+    grid-row: 1 / span 3;
+  }
+
+  .portrait img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+  }
+
+  .portrait-btn {
+    all: unset;
+    display: block;
+    width: 100%;
+    height: 100%;
+    cursor: zoom-in;
+    border-radius: 999px;
+    overflow: hidden;
+  }
+
+  .portrait-btn:focus-visible {
+    outline: 2px solid #e4c27a;
+    outline-offset: 2px;
+  }
+
+  /* Lightbox */
+  .lightbox {
+    position: fixed;
+    inset: 0;
+    z-index: 1000;
+    background: rgba(0, 0, 0, 0.88);
+    display: grid;
+    place-items: center;
+  }
+
+  .lightbox[hidden] {
+    display: none;
+  }
+
+  .lightbox img {
+    max-width: min(90vw, 600px);
+    max-height: 90vh;
+    border-radius: 0.6rem;
+    border: 1px solid rgba(214, 176, 106, 0.5);
+    box-shadow: 0 24px 64px rgba(0, 0, 0, 0.7);
+    object-fit: contain;
+  }
+
+  .lightbox-close {
+    position: absolute;
+    top: 1.25rem;
+    right: 1.5rem;
+    background: transparent;
+    border: 1px solid rgba(214, 176, 106, 0.45);
+    border-radius: 50%;
+    color: #e4c27a;
+    font-size: 1.6rem;
+    line-height: 1;
+    width: 2.4rem;
+    height: 2.4rem;
+    display: grid;
+    place-items: center;
+    cursor: pointer;
+    transition: background 0.15s;
+  }
+
+  .lightbox-close:hover {
+    background: rgba(214, 176, 106, 0.18);
   }
 
   .kicker {
@@ -123,7 +254,7 @@ const getInitials = (name: string) =>
   }
 
   h2 {
-    margin: 0.35rem 0 0.65rem;
+    margin: 0.15rem 0 0;
     color: #e4c27a;
     grid-column: 2;
   }
@@ -132,6 +263,7 @@ const getInitials = (name: string) =>
     color: #d8e2e8;
     line-height: 1.55;
     grid-column: 2;
+    margin-top: 0.15rem;
   }
 
   .portrait + .kicker {

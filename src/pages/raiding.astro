@@ -1,10 +1,11 @@
 ---
 import Layout from '../layouts/Layout.astro';
+import { Icon } from 'astro-icon/components';
 ---
 
 <Layout title="The Hidden Lodge | Raiding" description="Raid schedule and expectations for The Hidden Lodge.">
   <section>
-    <h1>Raiding</h1>
+    <h1 class="title-row"><Icon name="lucide:swords" class="title-icon" aria-hidden="true" />Raiding</h1>
     <p>
       We raid with purpose and respect everyone's time. Two nights a week, hard pulls from the first minute,
       and clear expectations so every raider knows exactly where they stand.
@@ -12,7 +13,7 @@ import Layout from '../layouts/Layout.astro';
   </section>
 
   <section class="panel">
-    <h2>Schedule</h2>
+    <h2 class="title-row"><Icon name="lucide:calendar-days" class="title-icon" aria-hidden="true" />Schedule</h2>
     <ul>
       <li><strong>Thursday:</strong> 9:00 PM – 12:00 AM Eastern</li>
       <li><strong>Friday:</strong> 9:00 PM – 12:00 AM Eastern</li>
@@ -21,7 +22,7 @@ import Layout from '../layouts/Layout.astro';
   </section>
 
   <section class="panel">
-    <h2>Raid Expectations</h2>
+    <h2 class="title-row"><Icon name="lucide:clipboard-check" class="title-icon" aria-hidden="true" />Raid Expectations</h2>
     <ul>
       <li>
         <strong>Come prepared.</strong> Show up on time, fully enchanted, gemmed, and stocked with your own
@@ -63,7 +64,7 @@ import Layout from '../layouts/Layout.astro';
   </section>
 
   <section class="panel">
-    <h2>Required Addons</h2>
+    <h2 class="title-row"><Icon name="lucide:puzzle" class="title-icon" aria-hidden="true" />Required Addons</h2>
     <ul class="addon-links">
       <li>
         <a href="https://www.curseforge.com/wow/addons/method-raid-tools" target="_blank" rel="noopener noreferrer">
@@ -105,6 +106,18 @@ import Layout from '../layouts/Layout.astro';
   h2 {
     margin: 0;
     color: #e4c27a;
+  }
+
+  .title-row {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+
+  .title-icon {
+    width: 1rem;
+    height: 1rem;
+    color: #f1d9a9;
   }
 
   ul {

@@ -1,9 +1,11 @@
 ---
 import Layout from '../layouts/Layout.astro';
+import { Icon } from 'astro-icon/components';
 
 const linkGroups = [
   {
     title: 'General Guides',
+    icon: 'lucide:book-open-text',
     links: [
       { name: 'Icy Veins', href: 'https://www.icy-veins.com/wow/class-guides' },
       { name: 'Wowhead', href: 'https://www.wowhead.com/guides/classes' },
@@ -12,6 +14,7 @@ const linkGroups = [
   },
   {
     title: 'Simming/Gearing',
+    icon: 'lucide:anvil',
     links: [
       { name: 'Raidbots', href: 'https://www.raidbots.com/' },
       { name: 'QE Live (Healer Sims)', href: 'https://questionablyepic.com/live/' },
@@ -20,6 +23,7 @@ const linkGroups = [
   },
   {
     title: 'Talent Specs/Meta (Log data driven)',
+    icon: 'lucide:line-chart',
     links: [
       { name: 'Archon.gg', href: 'https://www.archon.gg/' },
       { name: 'Murlok.io', href: 'https://murlok.io/' },
@@ -29,12 +33,14 @@ const linkGroups = [
   },
   {
     title: 'Loot Upgrade Tracks',
+    icon: 'lucide:gem',
     links: [
       { name: 'Loot Upgrade Tracks', href: 'https://loot.ghostopera.org/' }
     ]
   },
   {
     title: 'Raiding',
+    icon: 'lucide:swords',
     links: [
       { name: 'Mythic Trap (Boss Strats)', href: 'https://www.mythictrap.com/en' },
       { name: 'Lorrgs (CD timing)', href: 'https://lorrgs.io/' },
@@ -45,6 +51,7 @@ const linkGroups = [
   },
   {
     title: 'Mythic+',
+    icon: 'lucide:shield-plus',
     links: [
       { name: 'MythicStats (Meta and spec performance)', href: 'https://mythicstats.com/' },
       { name: 'Raider.io', href: 'https://raider.io/' },
@@ -53,6 +60,7 @@ const linkGroups = [
   },
   {
     title: 'Logs and Analysis',
+    icon: 'lucide:scroll-text',
     links: [
       { name: 'WarcraftLogs', href: 'https://www.warcraftlogs.com/' },
       { name: 'Wipefest.gg (Mechanics analysis)', href: 'https://www.wipefest.gg/' },
@@ -61,6 +69,7 @@ const linkGroups = [
   },
   {
     title: 'UI',
+    icon: 'lucide:layout-dashboard',
     links: [
       { name: 'Wago.io', href: 'https://wago.io/' },
       { name: 'Wago App (Keep WAs up to date)', href: 'https://addons.wago.io/app' }
@@ -68,6 +77,7 @@ const linkGroups = [
   },
   {
     title: 'Misc Stuff',
+    icon: 'lucide:sparkles',
     links: [
       { name: 'Simple Armory (Good mount farming routing)', href: 'https://simplearmory.com/' },
       { name: 'WowAlts.io', href: 'https://www.wowalts.io/' }
@@ -80,7 +90,7 @@ const getFavicon = (href: string) => `https://www.google.com/s2/favicons?sz=64&d
 
 <Layout title="The Hidden Lodge | Useful Links" description="Curated WoW resources for raiding, M+, UI, and gearing.">
   <section class="intro">
-    <h1>Useful Links</h1>
+    <h1 class="title-row"><Icon name="lucide:link" class="title-icon" aria-hidden="true" />Useful Links</h1>
     <p>
       A curated toolbox from guild Discord. Open these in a new tab and keep them handy for prep, logs,
       progression planning, and Mythic+ grinding.
@@ -91,7 +101,10 @@ const getFavicon = (href: string) => `https://www.google.com/s2/favicons?sz=64&d
     {
       linkGroups.map((group) => (
         <article class="panel">
-          <h2>{group.title}</h2>
+          <h2 class="title-row">
+            <Icon name={group.icon} class="title-icon" aria-hidden="true" />
+            {group.title}
+          </h2>
           <ul>
             {
               group.links.map((link) => (
@@ -144,6 +157,19 @@ const getFavicon = (href: string) => `https://www.google.com/s2/favicons?sz=64&d
     margin: 0;
     color: #e4c27a;
     font-size: 1.2rem;
+  }
+
+  .title-row {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+
+  .title-icon {
+    width: 1rem;
+    height: 1rem;
+    color: #f1d9a9;
+    flex-shrink: 0;
   }
 
   .panel ul {

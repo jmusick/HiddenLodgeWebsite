@@ -1,10 +1,11 @@
 ---
 import Layout from '../layouts/Layout.astro';
+import { Icon } from 'astro-icon/components';
 ---
 
 <Layout title="The Hidden Lodge | Recruitment" description="Open classes and raid recruitment info for The Hidden Lodge.">
   <section>
-    <h1>Recruitment</h1>
+    <h1 class="title-row"><Icon name="lucide:users" class="title-icon" aria-hidden="true" />Recruitment</h1>
     <p>
       We recruit players who value consistency, preparation, and a positive progression mindset.
       Exceptional applicants are always welcome.
@@ -12,7 +13,7 @@ import Layout from '../layouts/Layout.astro';
   </section>
 
   <section class="panel">
-    <h2>High Priority</h2>
+    <h2 class="title-row"><Icon name="lucide:target" class="title-icon" aria-hidden="true" />High Priority</h2>
     <ul>
       <li>Ranged DPS (Mage, Warlock, Hunter)</li>
       <li>Flex Healer with DPS off-spec</li>
@@ -20,7 +21,7 @@ import Layout from '../layouts/Layout.astro';
   </section>
 
   <section class="panel">
-    <h2>How to Apply</h2>
+    <h2 class="title-row"><Icon name="lucide:scroll-text" class="title-icon" aria-hidden="true" />How to Apply</h2>
     <ol>
       <li>Prepare your Warcraft Logs and Raider.IO links.</li>
       <li>Message an officer on Discord with your role and goals.</li>
@@ -55,6 +56,18 @@ import Layout from '../layouts/Layout.astro';
   h2 {
     margin: 0;
     color: #e4c27a;
+  }
+
+  .title-row {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+
+  .title-icon {
+    width: 1rem;
+    height: 1rem;
+    color: #f1d9a9;
   }
 
   ul,
