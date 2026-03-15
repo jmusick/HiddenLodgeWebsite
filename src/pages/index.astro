@@ -18,9 +18,21 @@ import { externalLinks } from '../data/externalLinks';
 	</section>
 
 	<section class="grid">
-		<SectionCard title="Raid Schedule" body="Thu / Fri 9:00 PM – 12:00 AM Eastern" icon="lucide:clock-3" />
-		<SectionCard title="Primary Goal" body="Ahead of the Curve each tier, then disciplined Mythic progression." icon="lucide:trophy" />
-		<SectionCard title="Culture" body="Semi hardcore pace with respect, accountability, and consistent improvement." icon="lucide:shield" />
+		<SectionCard title="Raid Schedule" body="Thu / Fri 9:00 PM – 12:00 AM Eastern, with common optional alt raid nights on the side for extra loot, practice, or light chaos." icon="lucide:clock-3" />
+		<SectionCard title="Primary Goal" body="Get Ahead of the Curve each tier, then move into Mythic progression without turning raid night into a second job. We take the game seriously, but not to the point of making everyone miserable." icon="lucide:trophy" />
+		<SectionCard title="Culture" body="We like having fun together, joking around, and keeping raid nights enjoyable, but when the pull starts we lock in and handle business." icon="lucide:shield" />
+	</section>
+
+	<section class="rules-panel" aria-labelledby="guild-rules-title">
+		<h2 id="guild-rules-title">Guild Rules</h2>
+		<ul class="rules-list">
+			<li>Respect the guild. Do not harass people, do not start drama, and do not make things weird for no reason.</li>
+			<li>This is a 21+ guild. If you still need permission to stay up late, this is not the roster for you.</li>
+			<li>No slurs. That includes the N-word and anything adjacent to it.</li>
+			<li>Do not spam. Use the right Discord and guild channels so useful information does not get buried under nonsense.</li>
+			<li>Guild leadership will handle disputes, and their call is final. Court is adjourned.</li>
+			<li>Your main character must be in the guild if you want to raid with the guild.</li>
+		</ul>
 	</section>
 
 	<section class="resource-panel" id="guild-links">
@@ -136,10 +148,33 @@ import { externalLinks } from '../data/externalLinks';
 		background: rgba(10, 20, 30, 0.72);
 	}
 
-	.resource-panel h2 {
+	.rules-panel {
+		margin-top: 1.3rem;
+		padding: 1rem;
+		border-radius: 0.8rem;
+		border: 1px solid rgba(214, 176, 106, 0.35);
+		background:
+			linear-gradient(160deg, rgba(214, 176, 106, 0.08), transparent 50%),
+			rgba(10, 20, 30, 0.72);
+	}
+
+	.resource-panel h2,
+	.rules-panel h2 {
 		margin: 0 0 0.8rem;
 		font-size: 1.35rem;
 		color: #e4c27a;
+	}
+
+	.rules-list {
+		margin: 0;
+		padding-left: 1.2rem;
+		display: grid;
+		gap: 0.7rem;
+		color: #d4dfe6;
+	}
+
+	.rules-list li {
+		line-height: 1.55;
 	}
 
 	.resource-grid {
