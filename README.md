@@ -1,46 +1,72 @@
-# Astro Starter Kit: Basics
+# The Hidden Lodge Website
 
-```sh
-npm create astro@latest -- --template basics
-```
+Official guild website for **The Hidden Lodge** (WoW, Illidan).
 
-> 🧑‍🚀 **Seasoned astronaut?** Delete this file. Have fun!
+This is a static Astro site with no database. Content is managed directly in code and data files.
 
-## 🚀 Project Structure
+## Tech Stack
 
-Inside of your Astro project, you'll see the following folders and files:
+- Astro 6
+- TypeScript (where needed)
+- Static build output (`dist/`)
+
+## Current Pages
+
+- `/` Home
+- `/raiding` Raid schedule, expectations, and required addons
+- `/recruitment` Recruitment details
+- `/leadership` Guild leadership bios
+- `/links` Curated WoW resource links
+
+## Project Structure
 
 ```text
 /
 ├── public/
-│   └── favicon.svg
-├── src
-│   ├── assets
-│   │   └── astro.svg
-│   ├── components
-│   │   └── Welcome.astro
-│   ├── layouts
-│   │   └── Layout.astro
-│   └── pages
-│       └── index.astro
+├── src/
+│   ├── components/
+│   │   └── SectionCard.astro
+│   ├── data/
+│   │   └── externalLinks.ts
+│   ├── layouts/
+│   │   └── Layout.astro
+│   └── pages/
+│       ├── index.astro
+│       ├── raiding.astro
+│       ├── recruitment.astro
+│       ├── leadership.astro
+│       └── links.astro
+├── astro.config.mjs
 └── package.json
 ```
 
-To learn more about the folder structure of an Astro project, refer to [our guide on project structure](https://docs.astro.build/en/basics/project-structure/).
+## Local Development
 
-## 🧞 Commands
+Run from repository root:
 
-All commands are run from the root of the project, from a terminal:
+```sh
+npm install
+npm run dev
+```
 
-| Command                   | Action                                           |
-| :------------------------ | :----------------------------------------------- |
-| `npm install`             | Installs dependencies                            |
-| `npm run dev`             | Starts local dev server at `localhost:4321`      |
-| `npm run build`           | Build your production site to `./dist/`          |
-| `npm run preview`         | Preview your build locally, before deploying     |
-| `npm run astro ...`       | Run CLI commands like `astro add`, `astro check` |
-| `npm run astro -- --help` | Get help using the Astro CLI                     |
+Build and preview production output:
 
-## 👀 Want to learn more?
+```sh
+npm run build
+npm run preview
+```
 
-Feel free to check [our documentation](https://docs.astro.build) or jump into our [Discord server](https://astro.build/chat).
+## Deployment (Cloudflare Pages, GitHub-connected)
+
+Use a **Pages** project (not a Worker service).
+
+- Build command: `npm run build`
+- Build output directory: `dist`
+- Deploy command: leave blank
+- Non-production deploy command: leave blank
+- Environment variable: `NODE_VERSION=22.12.0`
+
+## Notes
+
+- External guild profile links (Raider.IO, Warcraft Logs, WoWProgress) are defined in `src/data/externalLinks.ts`.
+- Useful WoW resources are managed in `src/pages/links.astro`.
