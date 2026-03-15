@@ -1,0 +1,186 @@
+---
+import Layout from '../layouts/Layout.astro';
+import SectionCard from '../components/SectionCard.astro';
+import { externalLinks } from '../data/externalLinks';
+---
+
+<Layout title="The Hidden Lodge | Home" description="A semi hardcore WoW raiding guild focused on AOTC and Mythic progression.">
+	<section class="hero">
+		<p class="eyebrow">World of Warcraft Guild</p>
+		<h1>The Hidden Lodge</h1>
+		<p class="lead">
+			We raid with purpose, clear Heroic for AOTC, and push into Mythic with a team-first mentality.
+		</p>
+		<div class="actions">
+			<a href="/recruitment" class="cta">Apply to Raid</a>
+			<a href="#guild-links" class="ghost">Guild Links</a>
+		</div>
+	</section>
+
+	<section class="grid">
+		<SectionCard title="Raid Schedule" body="Thu / Fri 9:00 PM – 12:00 AM Eastern" />
+		<SectionCard title="Primary Goal" body="Ahead of the Curve each tier, then disciplined Mythic progression." />
+		<SectionCard title="Culture" body="Semi hardcore pace with respect, accountability, and consistent improvement." />
+	</section>
+
+	<section class="resource-panel" id="guild-links">
+		<h2>Guild Links</h2>
+		<div class="resource-grid">
+			{
+				externalLinks.map((link) => (
+					<a class="resource-card" href={link.href} target="_blank" rel="noopener noreferrer">
+						<img src={link.favicon} alt="" loading="lazy" />
+						<div>
+							<h3>{link.name}</h3>
+							<p>{link.description}</p>
+						</div>
+					</a>
+				))
+			}
+		</div>
+	</section>
+</Layout>
+
+<style>
+	.hero {
+		position: relative;
+		padding: 2.5rem 1.2rem 1.35rem;
+		border: 1px solid rgba(214, 176, 106, 0.38);
+		border-radius: 0.9rem;
+		background:
+			linear-gradient(165deg, rgba(214, 176, 106, 0.08), transparent 42%),
+			rgba(10, 20, 30, 0.76);
+		overflow: hidden;
+	}
+
+	.hero::after {
+		content: 'H';
+		position: absolute;
+		right: 1rem;
+		top: 0.4rem;
+		font-size: clamp(3.2rem, 7vw, 5.2rem);
+		line-height: 1;
+		color: rgba(214, 176, 106, 0.16);
+		font-family: 'Cinzel', Georgia, serif;
+		font-weight: 800;
+	}
+
+	.eyebrow {
+		margin: 0;
+		text-transform: uppercase;
+		letter-spacing: 0.12em;
+		font-size: 0.82rem;
+		color: #c7d4de;
+	}
+
+	h1 {
+		margin: 0.35rem 0 0.9rem;
+		font-size: clamp(2rem, 3.2vw, 3.2rem);
+		line-height: 1.08;
+	}
+
+	.lead {
+		max-width: 64ch;
+		font-size: 1.14rem;
+		color: #d4dfe6;
+	}
+
+	.actions {
+		display: flex;
+		gap: 0.85rem;
+		margin-top: 1.3rem;
+		flex-wrap: wrap;
+	}
+
+	.cta,
+	.ghost {
+		display: inline-block;
+		padding: 0.72rem 1.08rem;
+		border-radius: 0.5rem;
+		font-weight: 700;
+		text-transform: uppercase;
+		letter-spacing: 0.04em;
+	}
+
+	.cta {
+		border: 1px solid rgba(233, 201, 135, 0.66);
+		background: linear-gradient(180deg, #e4c27a, #c59a4f);
+		color: #1a2734;
+		box-shadow: inset 0 1px 0 rgba(255, 243, 217, 0.5), 0 8px 22px rgba(0, 0, 0, 0.25);
+	}
+
+	.ghost {
+		border: 1px solid rgba(214, 176, 106, 0.5);
+		background: rgba(17, 30, 41, 0.62);
+		color: #e8eff3;
+	}
+
+	.grid {
+		display: grid;
+		grid-template-columns: repeat(3, minmax(0, 1fr));
+		gap: 1rem;
+		margin-top: 1.35rem;
+	}
+
+	@media (max-width: 900px) {
+		.grid {
+			grid-template-columns: 1fr;
+		}
+	}
+
+	.resource-panel {
+		margin-top: 1.3rem;
+		padding: 1rem;
+		border-radius: 0.8rem;
+		border: 1px solid rgba(214, 176, 106, 0.35);
+		background: rgba(10, 20, 30, 0.72);
+	}
+
+	.resource-panel h2 {
+		margin: 0 0 0.8rem;
+		font-size: 1.35rem;
+		color: #e4c27a;
+	}
+
+	.resource-grid {
+		display: grid;
+		grid-template-columns: repeat(3, minmax(0, 1fr));
+		gap: 0.8rem;
+	}
+
+	.resource-card {
+		display: grid;
+		grid-template-columns: auto 1fr;
+		align-items: start;
+		gap: 0.65rem;
+		padding: 0.75rem;
+		border-radius: 0.6rem;
+		border: 1px solid rgba(214, 176, 106, 0.35);
+		background: linear-gradient(160deg, rgba(214, 176, 106, 0.08), transparent 45%), rgba(9, 18, 28, 0.72);
+	}
+
+	.resource-card img {
+		width: 1.15rem;
+		height: 1.15rem;
+		border-radius: 2px;
+		margin-top: 0.2rem;
+	}
+
+	.resource-card h3 {
+		margin: 0;
+		font-size: 1.05rem;
+		color: #f0d39d;
+	}
+
+	.resource-card p {
+		margin: 0.28rem 0 0;
+		font-size: 0.96rem;
+		color: #d4dfe6;
+	}
+
+	@media (max-width: 900px) {
+		.resource-grid {
+			grid-template-columns: 1fr;
+		}
+	}
+</style>

@@ -1,0 +1,67 @@
+---
+import Layout from '../layouts/Layout.astro';
+---
+
+<Layout title="The Hidden Lodge | Recruitment" description="Open classes and raid recruitment info for The Hidden Lodge.">
+  <section>
+    <h1>Recruitment</h1>
+    <p>
+      We recruit players who value consistency, preparation, and a positive progression mindset.
+      Exceptional applicants are always welcome.
+    </p>
+  </section>
+
+  <section class="panel">
+    <h2>High Priority</h2>
+    <ul>
+      <li>Ranged DPS (Mage, Warlock, Hunter)</li>
+      <li>Flex Healer with DPS off-spec</li>
+    </ul>
+  </section>
+
+  <section class="panel">
+    <h2>How to Apply</h2>
+    <ol>
+      <li>Prepare your Warcraft Logs and Raider.IO links.</li>
+      <li>Message an officer on Discord with your role and goals.</li>
+      <li>Complete a trial raid night with the team.</li>
+    </ol>
+  </section>
+</Layout>
+
+<style>
+  h1 {
+    margin-top: 0;
+    font-size: clamp(2rem, 3.1vw, 2.95rem);
+  }
+
+  p {
+    max-width: 70ch;
+    color: #d8e2e8;
+    font-size: 1.05rem;
+  }
+
+  .panel {
+    margin-top: 1rem;
+    border: 1px solid rgba(214, 176, 106, 0.38);
+    border-radius: 0.75rem;
+    background:
+      linear-gradient(155deg, rgba(214, 176, 106, 0.08), transparent 45%),
+      rgba(11, 21, 32, 0.78);
+    padding: 1rem;
+    box-shadow: 0 14px 28px rgba(0, 0, 0, 0.22);
+  }
+
+  h2 {
+    margin: 0;
+    color: #e4c27a;
+  }
+
+  ul,
+  ol {
+    margin: 0.8rem 0 0;
+    padding-left: 1.1rem;
+    line-height: 1.6;
+    color: #d8e2e8;
+  }
+</style>

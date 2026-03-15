@@ -1,0 +1,146 @@
+---
+import Layout from '../layouts/Layout.astro';
+
+const leaders = [
+  {
+    name: 'Mike',
+    title: 'Guild Master',
+    bio: 'Captain of The Hidden Lodge and our resident foot enthusiast. If he says "one more pull," clear your schedule and stretch your toes.'
+  },
+  {
+    name: 'Keakz',
+    title: 'Raid Leader',
+    bio: 'Calls mechanics with the calm precision of a flight controller, then out-DPSes your excuses on UH DK.'
+  },
+  {
+    name: 'Nic',
+    title: 'Guild Admin',
+    bio: 'Our logistical mastermind and certified M+ goblin. If a key exists, Nic has timed it, rerolled for it, and theorycrafted it.'
+  },
+  {
+    name: 'Sunsource',
+    title: 'Guild Strategist',
+    bio: 'The prodigal son returns bearing spreadsheets, diagrams, and exactly one sentence that instantly fixes the wipe count.'
+  },
+  {
+    name: 'Dale',
+    title: 'Guild Management',
+    bio: 'Handles guild operations with grace while muttering about how he "used to have fun" before being voluntold onto mage duty.'
+  },
+  {
+    name: 'Xing',
+    title: 'Guild Consultant',
+    bio: 'Part advisor, part mythic dad energy. Dispenses wisdom, snacks, and occasional truths that hit harder than raid-wide damage.'
+  }
+];
+
+const getInitials = (name: string) =>
+  name
+    .split(' ')
+    .filter(Boolean)
+    .map((part) => part[0]?.toUpperCase() ?? '')
+    .join('')
+    .slice(0, 2);
+---
+
+<Layout title="The Hidden Lodge | Leadership" description="Meet the leadership team behind The Hidden Lodge.">
+  <section class="intro">
+    <h1>Leadership</h1>
+    <p>
+      These are the heroes behind raid nights, roster puzzles, and the occasional tactical pep talk.
+      They keep the guild moving forward and mostly sane.
+    </p>
+  </section>
+
+  <section class="grid" aria-label="Guild leadership roster">
+    {
+      leaders.map((leader) => (
+        <article class="card">
+          <div class="portrait" aria-hidden="true">{getInitials(leader.name)}</div>
+          <p class="kicker">{leader.title}</p>
+          <h2>{leader.name}</h2>
+          <p>{leader.bio}</p>
+        </article>
+      ))
+    }
+  </section>
+</Layout>
+
+<style>
+  .intro h1 {
+    margin-top: 0;
+    margin-bottom: 0.6rem;
+    font-size: clamp(2rem, 3.2vw, 3rem);
+  }
+
+  .intro p {
+    max-width: 72ch;
+    color: #d8e2e8;
+    font-size: 1.05rem;
+  }
+
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 1rem;
+    margin-top: 1.2rem;
+  }
+
+  .card {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    column-gap: 0.9rem;
+    align-items: start;
+    border: 1px solid rgba(214, 176, 106, 0.38);
+    border-radius: 0.75rem;
+    background:
+      linear-gradient(158deg, rgba(214, 176, 106, 0.08), transparent 44%),
+      rgba(11, 21, 32, 0.78);
+    padding: 1rem;
+    box-shadow: 0 14px 28px rgba(0, 0, 0, 0.22);
+  }
+
+  .portrait {
+    width: 3rem;
+    aspect-ratio: 1;
+    border-radius: 999px;
+    border: 1px solid rgba(217, 178, 110, 0.6);
+    background: linear-gradient(145deg, rgba(217, 178, 110, 0.35), rgba(74, 118, 153, 0.32));
+    color: #f4f7f9;
+    display: grid;
+    place-items: center;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    margin-top: 0.1rem;
+  }
+
+  .kicker {
+    margin: 0;
+    color: #9fb2bf;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    font-size: 0.76rem;
+  }
+
+  h2 {
+    margin: 0.35rem 0 0.65rem;
+    color: #e4c27a;
+    grid-column: 2;
+  }
+
+  .card p {
+    color: #d8e2e8;
+    line-height: 1.55;
+    grid-column: 2;
+  }
+
+  .portrait + .kicker {
+    grid-column: 2;
+  }
+
+  @media (max-width: 900px) {
+    .grid {
+      grid-template-columns: 1fr;
+    }
+  }
+</style>

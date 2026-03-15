@@ -1,0 +1,128 @@
+---
+import Layout from '../layouts/Layout.astro';
+---
+
+<Layout title="The Hidden Lodge | Raiding" description="Raid schedule and expectations for The Hidden Lodge.">
+  <section>
+    <h1>Raiding</h1>
+    <p>
+      We raid with purpose and respect everyone's time. Two nights a week, hard pulls from the first minute,
+      and clear expectations so every raider knows exactly where they stand.
+    </p>
+  </section>
+
+  <section class="panel">
+    <h2>Schedule</h2>
+    <ul>
+      <li><strong>Thursday:</strong> 9:00 PM – 12:00 AM Eastern</li>
+      <li><strong>Friday:</strong> 9:00 PM – 12:00 AM Eastern</li>
+      <li>Alt runs happen regularly and are a great way to gear up, but attendance is never mandatory.</li>
+    </ul>
+  </section>
+
+  <section class="panel">
+    <h2>Raid Expectations</h2>
+    <ul>
+      <li>
+        <strong>Come prepared.</strong> Show up on time, fully enchanted, gemmed, and stocked with your own
+        consumables. The guild provides feasts. We pull at 9:00 PM sharp — not 9:05.
+      </li>
+      <li>
+        <strong>Keep comms clean.</strong> During progression, voice chat is reserved for the raid lead,
+        tanks, and officers. The only exception is fights that specifically require call-outs from other
+        roles — you'll be told when that applies.
+      </li>
+      <li>
+        <strong>BoE guild tax is 20%.</strong> All BoE drops carry a 20% guild tax. These funds go directly
+        into the guild bank and are returned to raiders in the form of cauldrons, feasts, Vantus runes, and
+        other raid consumables.
+      </li>
+      <li>
+        <strong>Benching happens — don't take it personally.</strong> There will be nights where someone sits
+        out due to performance needs or tuning requirements. This is a roster decision, not a personal one.
+        Stay positive and be ready to step back in.
+      </li>
+      <li>
+        <strong>Loot is distributed via Loot Council (RC LootCouncil addon required).</strong> Priority goes
+        to raiders who show up on time, fill their Great Vault, and perform. Consistent effort is rewarded.
+        If you fall short on any of those fronts, loot priority reflects that.
+      </li>
+      <li>
+        <strong>Sign up for raid.</strong> If you can't make it, post in the attendance channel ahead of
+        time. No-shows with no notice are not acceptable.
+      </li>
+      <li>
+        <strong>No alts on progression.</strong> The only exception is if your alt is at a comparable item
+        level to your main AND fills a role the team genuinely needs. This requires officer approval.
+      </li>
+      <li>
+        <strong>Want to swap classes?</strong> Reach out to an officer first. If approved, we'll do our
+        best to help you gear it up to a competitive level before bringing it to progression.
+      </li>
+    </ul>
+  </section>
+
+  <section class="panel">
+    <h2>Required Addons</h2>
+    <ul class="addon-links">
+      <li>
+        <a href="https://www.curseforge.com/wow/addons/method-raid-tools" target="_blank" rel="noopener noreferrer">
+          Method Raid Tools
+        </a>
+      </li>
+      <li>
+        <a href="https://www.curseforge.com/wow/addons/rclootcouncil" target="_blank" rel="noopener noreferrer">
+          RCLootCouncil
+        </a>
+      </li>
+    </ul>
+  </section>
+</Layout>
+
+<style>
+  h1 {
+    margin-top: 0;
+    font-size: clamp(2rem, 3.1vw, 2.95rem);
+  }
+
+  p {
+    max-width: 70ch;
+    color: #d8e2e8;
+    font-size: 1.05rem;
+  }
+
+  .panel {
+    margin-top: 1rem;
+    border: 1px solid rgba(214, 176, 106, 0.38);
+    border-radius: 0.75rem;
+    background:
+      linear-gradient(155deg, rgba(214, 176, 106, 0.08), transparent 45%),
+      rgba(11, 21, 32, 0.78);
+    padding: 1rem;
+    box-shadow: 0 14px 28px rgba(0, 0, 0, 0.22);
+  }
+
+  h2 {
+    margin: 0;
+    color: #e4c27a;
+  }
+
+  ul {
+    margin: 0.8rem 0 0;
+    padding-left: 1.1rem;
+    line-height: 1.6;
+    color: #d8e2e8;
+  }
+
+  .addon-links a {
+    color: #f0d39d;
+    text-decoration: underline;
+    text-decoration-color: rgba(240, 211, 157, 0.55);
+    text-underline-offset: 0.14em;
+  }
+
+  .addon-links a:hover,
+  .addon-links a:focus-visible {
+    color: #ffe6b5;
+  }
+</style>

@@ -1,0 +1,186 @@
+---
+import Layout from '../layouts/Layout.astro';
+
+const linkGroups = [
+  {
+    title: 'General Guides',
+    links: [
+      { name: 'Icy Veins', href: 'https://www.icy-veins.com/wow/class-guides' },
+      { name: 'Wowhead', href: 'https://www.wowhead.com/guides/classes' },
+      { name: 'Class Discords', href: 'https://www.wowhead.com/discord-servers' }
+    ]
+  },
+  {
+    title: 'Simming/Gearing',
+    links: [
+      { name: 'Raidbots', href: 'https://www.raidbots.com/' },
+      { name: 'QE Live (Healer Sims)', href: 'https://questionablyepic.com/live/' },
+      { name: 'Bloodmallet', href: 'https://bloodmallet.com/' }
+    ]
+  },
+  {
+    title: 'Talent Specs/Meta (Log data driven)',
+    links: [
+      { name: 'Archon.gg', href: 'https://www.archon.gg/' },
+      { name: 'Murlok.io', href: 'https://murlok.io/' },
+      { name: 'U.gg', href: 'https://u.gg/wow' },
+      { name: 'Wowmeta.com', href: 'https://wowmeta.com/' }
+    ]
+  },
+  {
+    title: 'Loot Upgrade Tracks',
+    links: [
+      { name: 'Loot Upgrade Tracks', href: 'https://loot.ghostopera.org/' }
+    ]
+  },
+  {
+    title: 'Raiding',
+    links: [
+      { name: 'Mythic Trap (Boss Strats)', href: 'https://www.mythictrap.com/en' },
+      { name: 'Lorrgs (CD timing)', href: 'https://lorrgs.io/' },
+      { name: 'wowaudit', href: 'https://wowaudit.com/us/illidan/hidden-lodge' },
+      { name: 'Viserio CDs', href: 'https://wowutils.com/viserio-cooldowns' },
+      { name: 'Raidplan', href: 'https://raidplan.io/' }
+    ]
+  },
+  {
+    title: 'Mythic+',
+    links: [
+      { name: 'MythicStats (Meta and spec performance)', href: 'https://mythicstats.com/' },
+      { name: 'Raider.io', href: 'https://raider.io/' },
+      { name: 'Skyfury (Fun M+ stats and group finding)', href: 'https://skyfury.co/' }
+    ]
+  },
+  {
+    title: 'Logs and Analysis',
+    links: [
+      { name: 'WarcraftLogs', href: 'https://www.warcraftlogs.com/' },
+      { name: 'Wipefest.gg (Mechanics analysis)', href: 'https://www.wipefest.gg/' },
+      { name: 'WoWAnalyzer (Spec analysis)', href: 'https://wowanalyzer.com/' }
+    ]
+  },
+  {
+    title: 'UI',
+    links: [
+      { name: 'Wago.io', href: 'https://wago.io/' },
+      { name: 'Wago App (Keep WAs up to date)', href: 'https://addons.wago.io/app' }
+    ]
+  },
+  {
+    title: 'Misc Stuff',
+    links: [
+      { name: 'Simple Armory (Good mount farming routing)', href: 'https://simplearmory.com/' },
+      { name: 'WowAlts.io', href: 'https://www.wowalts.io/' }
+    ]
+  }
+];
+
+const getFavicon = (href: string) => `https://www.google.com/s2/favicons?sz=64&domain_url=${encodeURIComponent(href)}`;
+---
+
+<Layout title="The Hidden Lodge | Useful Links" description="Curated WoW resources for raiding, M+, UI, and gearing.">
+  <section class="intro">
+    <h1>Useful Links</h1>
+    <p>
+      A curated toolbox from guild Discord. Open these in a new tab and keep them handy for prep, logs,
+      progression planning, and Mythic+ grinding.
+    </p>
+  </section>
+
+  <section class="grid" aria-label="Useful links by category">
+    {
+      linkGroups.map((group) => (
+        <article class="panel">
+          <h2>{group.title}</h2>
+          <ul>
+            {
+              group.links.map((link) => (
+                <li>
+                  <a href={link.href} target="_blank" rel="noopener noreferrer">
+                    <img src={getFavicon(link.href)} alt="" loading="lazy" />
+                    <span>{link.name}</span>
+                  </a>
+                </li>
+              ))
+            }
+          </ul>
+        </article>
+      ))
+    }
+  </section>
+</Layout>
+
+<style>
+  .intro h1 {
+    margin-top: 0;
+    margin-bottom: 0.55rem;
+    font-size: clamp(2rem, 3.2vw, 3.05rem);
+  }
+
+  .intro p {
+    max-width: 78ch;
+    color: #d8e2e8;
+    font-size: 1.05rem;
+  }
+
+  .grid {
+    margin-top: 1.25rem;
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 1rem;
+  }
+
+  .panel {
+    border: 1px solid rgba(214, 176, 106, 0.38);
+    border-radius: 0.75rem;
+    background:
+      linear-gradient(160deg, rgba(214, 176, 106, 0.08), transparent 45%),
+      rgba(11, 21, 32, 0.78);
+    padding: 1rem;
+    box-shadow: 0 14px 28px rgba(0, 0, 0, 0.22);
+  }
+
+  .panel h2 {
+    margin: 0;
+    color: #e4c27a;
+    font-size: 1.2rem;
+  }
+
+  .panel ul {
+    margin: 0.75rem 0 0;
+    padding: 0;
+    list-style: none;
+    display: grid;
+    gap: 0.45rem;
+  }
+
+  .panel a {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.55rem;
+    color: #d8e2e8;
+    padding: 0.32rem 0.4rem;
+    border-radius: 0.45rem;
+    border: 1px solid transparent;
+    font-size: 1.01rem;
+  }
+
+  .panel a:hover,
+  .panel a:focus-visible {
+    border-color: rgba(214, 176, 106, 0.45);
+    background: rgba(214, 176, 106, 0.08);
+    color: #f5e4be;
+  }
+
+  .panel img {
+    width: 0.95rem;
+    height: 0.95rem;
+    border-radius: 2px;
+  }
+
+  @media (max-width: 900px) {
+    .grid {
+      grid-template-columns: 1fr;
+    }
+  }
+</style>

@@ -1,0 +1,283 @@
+---
+interface Props {
+	title?: string;
+	description?: string;
+}
+
+import { externalLinks } from '../data/externalLinks';
+
+const {
+	title = 'The Hidden Lodge | WoW Guild',
+	description = 'Semi hardcore raiding guild focused on AOTC and Mythic progression.'
+} = Astro.props;
+
+const navItems = [
+	{ href: '/', label: 'Home' },
+	{ href: '/raiding', label: 'Raiding' },
+	{ href: '/recruitment', label: 'Recruitment' },
+	{ href: '/leadership', label: 'Leadership' },
+	{ href: '/links', label: 'Useful Links' }
+];
+---
+
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="UTF-8" />
+		<meta name="viewport" content="width=device-width" />
+		<link rel="preconnect" href="https://fonts.googleapis.com" />
+		<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+		<link
+			href="https://fonts.googleapis.com/css2?family=Cinzel:wght@500;700;800&family=Barlow+Condensed:wght@400;500;600;700&display=swap"
+			rel="stylesheet"
+		/>
+		<link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+		<link rel="icon" href="/favicon.ico" />
+		<meta name="generator" content={Astro.generator} />
+		<meta name="description" content={description} />
+		<title>{title}</title>
+	</head>
+	<body>
+		<div class="background-glow" aria-hidden="true"></div>
+		<header class="site-header">
+			<div class="container shell">
+				<a class="brand" href="/">The Hidden Lodge</a>
+				<nav aria-label="Main navigation" class="nav-shell">
+					<ul>
+						{
+							navItems.map((item) => (
+								<li>
+									<a href={item.href}>{item.label}</a>
+								</li>
+							))
+						}
+					</ul>
+					<ul class="guild-links" aria-label="Guild external links">
+						{
+							externalLinks.map((link) => (
+								<li>
+									<a href={link.href} target="_blank" rel="noopener noreferrer" title={link.name}>
+										<img src={link.favicon} alt="" loading="lazy" />
+										<span>{link.name}</span>
+									</a>
+								</li>
+							))
+						}
+					</ul>
+				</nav>
+			</div>
+		</header>
+
+		<main class="container">
+			<slot />
+		</main>
+
+		<footer class="container site-footer">
+			<p>For Azeroth. For The Hidden Lodge.</p>
+		</footer>
+	</body>
+</html>
+
+<style>
+	:root {
+		color-scheme: dark;
+		--bg: #050b12;
+		--bg-soft: #101a25;
+		--bg-panel: rgba(13, 23, 34, 0.78);
+		--gold: #d6b06a;
+		--gold-bright: #e9c987;
+		--steel: #8ca7bb;
+		--text: #ebf1f5;
+		--muted: #afc1cd;
+		--border: rgba(214, 176, 106, 0.4);
+		--font-display: 'Cinzel', Georgia, 'Times New Roman', serif;
+		--font-body: 'Barlow Condensed', 'Trebuchet MS', sans-serif;
+	}
+
+	* {
+		box-sizing: border-box;
+	}
+
+	html,
+	body {
+		margin: 0;
+		min-height: 100%;
+		font-family: var(--font-body);
+		letter-spacing: 0.02em;
+		background:
+			radial-gradient(circle at 80% 8%, rgba(214, 176, 106, 0.24), transparent 30%),
+			radial-gradient(circle at 18% 24%, rgba(97, 128, 163, 0.2), transparent 36%),
+			linear-gradient(180deg, rgba(7, 17, 26, 0.84), rgba(4, 9, 15, 0.98)),
+			var(--bg);
+		color: var(--text);
+	}
+
+	:global(h1),
+	:global(h2),
+	:global(h3) {
+		font-family: var(--font-display);
+		letter-spacing: 0.04em;
+	}
+
+	a {
+		color: inherit;
+		text-decoration: none;
+	}
+
+	.container {
+		max-width: 72rem;
+		padding-inline: 1rem;
+		margin-inline: auto;
+	}
+
+	.background-glow {
+		position: fixed;
+		inset: 0;
+		pointer-events: none;
+		background:
+			repeating-linear-gradient(
+				125deg,
+				rgba(255, 255, 255, 0.014) 0,
+				rgba(255, 255, 255, 0.014) 2px,
+				transparent 2px,
+				transparent 17px
+			),
+			radial-gradient(circle at 50% 120%, rgba(214, 176, 106, 0.08), transparent 54%);
+		z-index: -1;
+	}
+
+	.site-header {
+		border-bottom: 1px solid var(--border);
+		backdrop-filter: blur(8px);
+		background: linear-gradient(180deg, rgba(16, 28, 40, 0.9), rgba(8, 16, 24, 0.7));
+		box-shadow: 0 10px 28px rgba(0, 0, 0, 0.28);
+		position: sticky;
+		top: 0;
+		z-index: 10;
+	}
+
+	.shell {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 1rem;
+		padding-block: 1rem;
+	}
+
+	.brand {
+		font-family: var(--font-display);
+		font-size: 1.22rem;
+		font-weight: 800;
+		letter-spacing: 0.09em;
+		text-transform: uppercase;
+		color: var(--gold-bright);
+		text-shadow: 0 0 18px rgba(214, 176, 106, 0.28);
+	}
+
+	nav ul {
+		display: flex;
+		align-items: center;
+		gap: 0.6rem;
+		list-style: none;
+		padding: 0;
+		margin: 0;
+	}
+
+	.nav-shell {
+		display: flex;
+		align-items: center;
+		gap: 0.75rem;
+		flex-wrap: wrap;
+	}
+
+	.guild-links {
+		display: flex;
+		align-items: center;
+		gap: 0.45rem;
+		padding-left: 0.8rem;
+		border-left: 1px solid rgba(214, 176, 106, 0.3);
+	}
+
+	.guild-links a {
+		display: inline-flex;
+		align-items: center;
+		gap: 0.42rem;
+		padding: 0.42rem 0.55rem;
+		border-radius: 0.42rem;
+		border: 1px solid transparent;
+		font-size: 0.9rem;
+	}
+
+	.guild-links a:hover,
+	.guild-links a:focus-visible {
+		border-color: rgba(214, 176, 106, 0.45);
+		background: rgba(214, 176, 106, 0.09);
+	}
+
+	.guild-links img {
+		width: 0.95rem;
+		height: 0.95rem;
+		border-radius: 2px;
+	}
+
+	nav a {
+		display: inline-block;
+		font-weight: 600;
+		font-size: 1rem;
+		line-height: 1;
+		padding: 0.5rem 0.68rem;
+		border: 1px solid transparent;
+		border-radius: 0.45rem;
+		color: var(--muted);
+		transition: border-color 160ms ease, color 160ms ease, background 160ms ease;
+	}
+
+	nav a:hover,
+	nav a:focus-visible {
+		border-color: rgba(214, 176, 106, 0.5);
+		background: rgba(214, 176, 106, 0.1);
+		color: var(--text);
+	}
+
+	main {
+		padding-block: 2.5rem;
+		animation: fade-in 360ms ease-out;
+	}
+
+	.site-footer {
+		border-top: 1px solid var(--border);
+		padding-block: 1.5rem;
+		color: var(--muted);
+		font-size: 1rem;
+		text-align: center;
+		letter-spacing: 0.03em;
+	}
+
+	@keyframes fade-in {
+		from {
+			opacity: 0;
+			transform: translateY(6px);
+		}
+
+		to {
+			opacity: 1;
+			transform: translateY(0);
+		}
+	}
+
+	@media (max-width: 760px) {
+		.shell {
+			flex-direction: column;
+			align-items: flex-start;
+		}
+
+		nav ul {
+			flex-wrap: wrap;
+		}
+
+		.guild-links {
+			padding-left: 0;
+			border-left: 0;
+		}
+	}
+</style>

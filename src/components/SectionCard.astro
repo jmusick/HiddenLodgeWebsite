@@ -1,0 +1,51 @@
+---
+interface Props {
+  title: string;
+  body: string;
+}
+
+const { title, body } = Astro.props;
+---
+
+<article class="card">
+  <h2>{title}</h2>
+  <p>{body}</p>
+</article>
+
+<style>
+  .card {
+    position: relative;
+    border: 1px solid rgba(214, 176, 106, 0.38);
+    background:
+      linear-gradient(160deg, rgba(214, 176, 106, 0.07), transparent 48%),
+      rgba(10, 20, 30, 0.78);
+    border-radius: 0.7rem;
+    padding: 1rem 1rem 1.05rem;
+    min-height: 9rem;
+    box-shadow: 0 14px 28px rgba(0, 0, 0, 0.24);
+  }
+
+  .card::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 0.18rem;
+    border-radius: 0.7rem 0.7rem 0 0;
+    background: linear-gradient(90deg, rgba(214, 176, 106, 0.1), rgba(214, 176, 106, 0.8), rgba(214, 176, 106, 0.1));
+  }
+
+  h2 {
+    margin: 0;
+    font-size: 1.16rem;
+    color: #e4c27a;
+  }
+
+  p {
+    margin: 0.65rem 0 0;
+    color: #d8e1e7;
+    line-height: 1.45;
+    font-size: 1.03rem;
+  }
+</style>
