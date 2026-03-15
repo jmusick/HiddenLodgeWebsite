@@ -6,14 +6,19 @@ import { externalLinks } from '../data/externalLinks';
 
 <Layout title="The Hidden Lodge | Home" description="A semi hardcore WoW raiding guild focused on AOTC and Mythic progression.">
 	<section class="hero">
-		<p class="eyebrow">World of Warcraft Guild</p>
-		<h1>The Hidden Lodge</h1>
-		<p class="lead">
-			We raid with purpose, clear Heroic for AOTC, and push into Mythic with a team-first mentality.
-		</p>
-		<div class="actions">
-			<a href="/recruitment" class="cta">Apply to Raid</a>
-			<a href="#guild-links" class="ghost">Guild Links</a>
+		<img
+			src="/images/guild-banner.png"
+			alt="The Hidden Lodge — For Azeroth. For the Hidden Lodge."
+			class="banner-img"
+		/>
+		<div class="hero-foot">
+			<p class="lead">
+				We raid with purpose, clear Heroic for AOTC, and push into Mythic with a team-first mentality.
+			</p>
+			<div class="actions">
+				<a href="/recruitment" class="cta">Apply to Raid</a>
+				<a href="#guild-links" class="ghost">Guild Links</a>
+			</div>
 		</div>
 	</section>
 
@@ -55,40 +60,24 @@ import { externalLinks } from '../data/externalLinks';
 
 <style>
 	.hero {
-		position: relative;
-		padding: 2.5rem 1.2rem 1.35rem;
+		padding: 0;
 		border: 1px solid rgba(214, 176, 106, 0.38);
 		border-radius: 0.9rem;
-		background:
-			linear-gradient(165deg, rgba(214, 176, 106, 0.08), transparent 42%),
-			rgba(10, 20, 30, 0.76);
 		overflow: hidden;
 	}
 
-	.hero::after {
-		content: 'H';
-		position: absolute;
-		right: 1rem;
-		top: 0.4rem;
-		font-size: clamp(3.2rem, 7vw, 5.2rem);
-		line-height: 1;
-		color: rgba(214, 176, 106, 0.16);
-		font-family: 'Cinzel', Georgia, serif;
-		font-weight: 800;
+	.banner-img {
+		display: block;
+		width: 100%;
+		height: auto;
 	}
 
-	.eyebrow {
-		margin: 0;
-		text-transform: uppercase;
-		letter-spacing: 0.12em;
-		font-size: 0.82rem;
-		color: #c7d4de;
-	}
-
-	h1 {
-		margin: 0.35rem 0 0.9rem;
-		font-size: clamp(2rem, 3.2vw, 3.2rem);
-		line-height: 1.08;
+	.hero-foot {
+		padding: 1.1rem 1.2rem 1.35rem;
+		border-top: 1px solid rgba(214, 176, 106, 0.25);
+		background:
+			linear-gradient(165deg, rgba(214, 176, 106, 0.06), transparent 42%),
+			rgba(10, 20, 30, 0.92);
 	}
 
 	.lead {
