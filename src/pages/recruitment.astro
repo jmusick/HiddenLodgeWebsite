@@ -13,20 +13,13 @@ import { Icon } from 'astro-icon/components';
   </section>
 
   <section class="panel">
-    <h2 class="title-row"><Icon name="lucide:target" class="title-icon" aria-hidden="true" />High Priority</h2>
-    <ul>
-      <li>Ranged DPS (Mage, Warlock, Hunter)</li>
-      <li>Flex Healer with DPS off-spec</li>
-    </ul>
+    <h2 class="title-row"><Icon name="lucide:target" class="title-icon" aria-hidden="true" />Current Needs</h2>
+    <p class="panel-text">We are not actively recruiting for any specific class or role at this time. However, we are always open to exceptional players who bring skill, dedication, and a great attitude.</p>
   </section>
 
   <section class="panel">
     <h2 class="title-row"><Icon name="lucide:scroll-text" class="title-icon" aria-hidden="true" />How to Apply</h2>
-    <ol>
-      <li>Prepare your Warcraft Logs and Raider.IO links.</li>
-      <li>Message an officer on Discord with your role and goals.</li>
-      <li>Complete a trial raid night with the team.</li>
-    </ol>
+    <p class="panel-text">Head to our <a href="https://raider.io/guilds/us/illidan/Hidden%20Lodge/" target="_blank" rel="noopener noreferrer">Raider.IO guild page</a> and submit an application through there.</p>
   </section>
 </Layout>
 
@@ -67,6 +60,22 @@ import { Icon } from 'astro-icon/components';
   .title-icon {
     width: 1rem;
     height: 1rem;
+    color: #f1d9a9;
+  }
+
+  .panel-text {
+    margin: 0.6rem 0 0;
+    font-size: 1rem;
+    line-height: 1.6;
+    color: #d8e2e8;
+  }
+
+  ol li a {
+    color: #e4c27a;
+    text-underline-offset: 3px;
+  }
+
+  ol li a:hover {
     color: #f1d9a9;
   }
 
