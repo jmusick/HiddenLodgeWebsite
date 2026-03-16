@@ -13,11 +13,17 @@ const {
 
 const navItems = [
 	{ href: '/', label: 'Home' },
+	{ href: '/roster', label: 'Roster' },
 	{ href: '/raiding', label: 'Raiding' },
 	{ href: '/recruitment', label: 'Recruitment' },
 	{ href: '/leadership', label: 'Leadership' },
-	{ href: '/links', label: 'Useful Links' }
+	{ href: '/links', label: 'Links' }
 ];
+
+const headerLinkLabels: Record<string, string> = {
+	'Raider.IO': 'R.IO',
+	'Warcraft Logs': 'WCL'
+};
 ---
 
 <!doctype html>
@@ -58,7 +64,7 @@ const navItems = [
 								<li>
 									<a href={link.href} target="_blank" rel="noopener noreferrer" title={link.name}>
 										<img src={link.favicon} alt="" loading="lazy" />
-										<span>{link.name}</span>
+										<span>{headerLinkLabels[link.name] ?? link.name}</span>
 									</a>
 								</li>
 							))

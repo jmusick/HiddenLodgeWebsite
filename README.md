@@ -13,6 +13,7 @@ This is a static Astro site with no database. Content is managed directly in cod
 ## Current Pages
 
 - `/` Home
+- `/roster` WoWAudit-powered guild roster
 - `/raiding` Raid schedule, expectations, and required addons
 - `/recruitment` Recruitment details
 - `/leadership` Guild leadership bios
@@ -55,6 +56,11 @@ Build and preview production output:
 npm run build
 npm run preview
 ```
+
+## Environment Variables
+
+- `WOWAUDIT_API_KEY` Required for the `/roster` page. Uses `Authorization: Bearer <key>` against WoWAudit.
+- `WOWAUDIT_API_BASE` Optional. Defaults to `https://wowaudit.com`.
 
 ## Deployment (Cloudflare Pages, GitHub-connected)
 

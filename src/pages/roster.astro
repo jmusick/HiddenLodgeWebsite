@@ -1,0 +1,241 @@
+---
+import Layout from '../layouts/Layout.astro';
+import { Icon } from 'astro-icon/components';
+
+interface Character {
+  id: number;
+  name: string;
+  realm: string;
+  class: string;
+  role: string;
+  rank: string;
+  status: string;
+  note: string | null;
+  tracking_since: string | null;
+}
+
+const apiKey = import.meta.env.WOWAUDIT_API_KEY;
+const apiBase = (import.meta.env.WOWAUDIT_API_BASE ?? 'https://wowaudit.com').replace(/\/$/, '');
+
+let characters: Character[] = [];
+let errorMessage = '';
+
+if (!apiKey) {
+  errorMessage = 'Roster API key is not configured. Set WOWAUDIT_API_KEY in your environment.';
+} else {
+  try {
+    const response = await fetch(`${apiBase}/v1/characters`, {
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        Accept: 'application/json'
+      }
+    });
+
+    if (!response.ok) {
+      throw new Error(`WoWAudit API request failed with status ${response.status}`);
+    }
+
+    const payload = await response.json();
+    characters = Array.isArray(payload) ? payload : [];
+  } catch (error) {
+    errorMessage = error instanceof Error
+      ? error.message
+      : 'Unable to load roster data from WoWAudit.';
+  }
+}
+
+const roleOrder = ['Tank', 'Healer', 'Ranged', 'Melee'];
+
+const sortedCharacters = [...characters].sort((a, b) => {
+  const rankCompare = a.rank.localeCompare(b.rank);
+  if (rankCompare !== 0) return rankCompare;
+
+  const roleA = roleOrder.indexOf(a.role);
+  const roleB = roleOrder.indexOf(b.role);
+  if (roleA !== roleB) return (roleA === -1 ? 99 : roleA) - (roleB === -1 ? 99 : roleB);
+
+  return a.name.localeCompare(b.name);
+});
+---
+
+<Layout title="The Hidden Lodge | Roster" description="Live guild roster pulled from WoWAudit.">
+  <section>
+    <h1 class="title-row"><Icon name="lucide:users-round" class="title-icon" aria-hidden="true" />Roster</h1>
+    <p>
+      Live roster data synced from WoWAudit. This page updates whenever the site is rebuilt.
+    </p>
+  </section>
+
+  {
+    errorMessage ? (
+      <section class="panel error-panel">
+        <h2 class="title-row"><Icon name="lucide:triangle-alert" class="title-icon" aria-hidden="true" />Roster Unavailable</h2>
+        <p class="panel-text">{errorMessage}</p>
+      </section>
+    ) : (
+      <section class="panel">
+        <h2 class="title-row"><Icon name="lucide:list" class="title-icon" aria-hidden="true" />Tracked Characters ({sortedCharacters.length})</h2>
+        <div class="roster-grid">
+          {
+            sortedCharacters.map((character) => (
+              <article class="character-card">
+                <header>
+                  <h3>{character.name}</h3>
+                  <p>{character.realm}</p>
+                </header>
+
+                <dl>
+                  <div>
+                    <dt>Class</dt>
+                    <dd>{character.class}</dd>
+                  </div>
+                  <div>
+                    <dt>Role</dt>
+                    <dd>{character.role}</dd>
+                  </div>
+                  <div>
+                    <dt>Rank</dt>
+                    <dd>{character.rank}</dd>
+                  </div>
+                  <div>
+                    <dt>Status</dt>
+                    <dd>{character.status}</dd>
+                  </div>
+                </dl>
+
+                {
+                  character.note ? (
+                    <p class="note">{character.note}</p>
+                  ) : null
+                }
+              </article>
+            ))
+          }
+        </div>
+      </section>
+    )
+  }
+</Layout>
+
+<style>
+  h1 {
+    margin-top: 0;
+    font-size: clamp(2rem, 3.1vw, 2.95rem);
+  }
+
+  p {
+    max-width: 70ch;
+    color: #d8e2e8;
+    font-size: 1.05rem;
+  }
+
+  .panel {
+    margin-top: 1rem;
+    border: 1px solid rgba(214, 176, 106, 0.38);
+    border-radius: 0.75rem;
+    background:
+      linear-gradient(155deg, rgba(214, 176, 106, 0.08), transparent 45%),
+      rgba(11, 21, 32, 0.78);
+    padding: 1rem;
+    box-shadow: 0 14px 28px rgba(0, 0, 0, 0.22);
+  }
+
+  h2 {
+    margin: 0;
+    color: #e4c27a;
+  }
+
+  .title-row {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+
+  .title-icon {
+    width: 1rem;
+    height: 1rem;
+    color: #f1d9a9;
+  }
+
+  .panel-text {
+    margin: 0.75rem 0 0;
+  }
+
+  .error-panel {
+    border-color: rgba(191, 86, 68, 0.6);
+    background:
+      linear-gradient(155deg, rgba(191, 86, 68, 0.16), transparent 45%),
+      rgba(25, 16, 18, 0.78);
+  }
+
+  .roster-grid {
+    margin-top: 0.85rem;
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 0.75rem;
+  }
+
+  .character-card {
+    border: 1px solid rgba(214, 176, 106, 0.24);
+    border-radius: 0.65rem;
+    background: rgba(5, 10, 16, 0.55);
+    padding: 0.75rem;
+  }
+
+  .character-card header {
+    margin-bottom: 0.55rem;
+  }
+
+  .character-card h3 {
+    margin: 0;
+    font-size: 1.08rem;
+    color: #f5e4be;
+  }
+
+  .character-card header p {
+    margin: 0.1rem 0 0;
+    color: #afc1cd;
+    font-size: 0.95rem;
+  }
+
+  .character-card dl {
+    margin: 0;
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.45rem 0.7rem;
+  }
+
+  .character-card dt {
+    color: #afc1cd;
+    font-size: 0.86rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+
+  .character-card dd {
+    margin: 0.05rem 0 0;
+    color: #d8e2e8;
+    font-size: 0.98rem;
+  }
+
+  .note {
+    margin: 0.62rem 0 0;
+    padding-top: 0.5rem;
+    border-top: 1px solid rgba(214, 176, 106, 0.2);
+    color: #d8e2e8;
+    font-size: 0.95rem;
+    line-height: 1.45;
+  }
+
+  @media (max-width: 1000px) {
+    .roster-grid {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+  }
+
+  @media (max-width: 640px) {
+    .roster-grid {
+      grid-template-columns: 1fr;
+    }
+  }
+</style>
