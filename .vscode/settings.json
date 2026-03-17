@@ -4,6 +4,8 @@
         "git commit": true,
         "git push": true,
         "npx wrangler": true,
-        "npx astro": true
+        "npx astro": true,
+        "0004_nickname.sql": true,
+        "netstat": true
     }
 }
