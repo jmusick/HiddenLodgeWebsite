@@ -1,33 +1,22 @@
 ---
 import Layout from '../layouts/Layout.astro';
 import { Icon } from 'astro-icon/components';
-
-const GUILD_REALM_SLUG = 'illidan';
-const GUILD_NAME_SLUG = 'hidden-lodge';
-const REGION = 'us';
-
-const clientId = import.meta.env.BLIZZARD_CLIENT_ID;
-const clientSecret = import.meta.env.BLIZZARD_CLIENT_SECRET;
-
-interface GuildRosterMember {
-  character: {
-    name: string;
-    id: number;
-    realm: { slug: string; name?: string };
-    level?: number;
-    playable_class?: { name?: string };
-    playable_race?: { name?: string };
-  };
-  rank: number;
-}
+import { loadRosterWithCache } from '../lib/roster-cache';
 
 interface EnrichedMember {
+  blizzardCharId: number;
   name: string;
   realm: string;
+  realmSlug: string;
   className: string;
   raceName: string;
   level: number;
   rank: number;
+  achievementPoints: number;
+  mountCount: number;
+  petCount: number;
+  toyCount: number;
+  detailsSyncedAt: number | null;
 }
 
 const CLASS_COLORS: Record<string, string> = {
@@ -46,82 +35,7 @@ const CLASS_COLORS: Record<string, string> = {
   'Warrior': '#C69B3A',
 };
 
-function formatRealmFromSlug(slug: string): string {
-  return slug
-    .split('-')
-    .filter(Boolean)
-    .map((part) => part[0]?.toUpperCase() + part.slice(1))
-    .join(' ');
-}
-
-const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
-
-let members: EnrichedMember[] = [];
-let errorMessage = '';
-
-if (!clientId || !clientSecret) {
-  errorMessage = 'Blizzard API credentials are not configured. Set BLIZZARD_CLIENT_ID and BLIZZARD_CLIENT_SECRET in your environment.';
-} else {
-  try {
-    const credentials = btoa(`${clientId}:${clientSecret}`);
-    const tokenRes = await fetch('https://oauth.battle.net/token', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/x-www-form-urlencoded',
-        Authorization: `Basic ${credentials}`,
-      },
-      body: 'grant_type=client_credentials',
-    });
-    if (!tokenRes.ok) {
-      throw new Error(`Failed to obtain Blizzard access token (HTTP ${tokenRes.status})`);
-    }
-
-    const { access_token } = await tokenRes.json();
-
-    let rosterRes: Response | null = null;
-    for (let attempt = 1; attempt <= 5; attempt += 1) {
-      rosterRes = await fetch(
-        `https://${REGION}.api.blizzard.com/data/wow/guild/${GUILD_REALM_SLUG}/${GUILD_NAME_SLUG}/roster?namespace=profile-${REGION}&locale=en_US`,
-        { headers: { Authorization: `Bearer ${access_token}` } }
-      );
-
-      if (rosterRes.ok) {
-        break;
-      }
-
-      const retryable = rosterRes.status === 429 || rosterRes.status >= 500;
-      if (!retryable || attempt === 5) {
-        break;
-      }
-
-      const retryAfterHeader = rosterRes.headers.get('retry-after');
-      const retryAfterSeconds = retryAfterHeader ? Number(retryAfterHeader) : 0;
-      const backoff = retryAfterSeconds > 0 ? retryAfterSeconds * 1000 : attempt * 1500;
-      await delay(backoff);
-    }
-
-    if (!rosterRes?.ok) {
-      if (rosterRes?.status === 429) {
-        throw new Error('Blizzard API rate limit reached (HTTP 429). Please wait a minute and refresh.');
-      }
-      throw new Error(`Blizzard guild roster request failed (HTTP ${rosterRes?.status ?? 'unknown'})`);
-    }
-
-    const data = await rosterRes.json();
-    const rosterMembers: GuildRosterMember[] = Array.isArray(data.members) ? data.members : [];
-
-    members = rosterMembers.map((member) => ({
-      name: member.character.name,
-      realm: member.character.realm.name ?? formatRealmFromSlug(member.character.realm.slug),
-      className: member.character.playable_class?.name ?? 'Unknown',
-      raceName: member.character.playable_race?.name ?? 'Unknown',
-      level: Number(member.character.level ?? 0),
-      rank: member.rank,
-    }));
-  } catch (err) {
-    errorMessage = err instanceof Error ? err.message : 'Unable to load roster from Blizzard API.';
-  }
-}
+const { members, status, errorMessage } = await loadRosterWithCache();
 
 const sortedMembers = [...members].sort((a, b) => {
   if (a.rank !== b.rank) return a.rank - b.rank;
@@ -134,30 +48,56 @@ const classOptions = [...new Set(sortedMembers.map((member) => member.className)
 
 const rankOptions = [...new Set(sortedMembers.map((member) => member.rank))].sort((a, b) => a - b);
 
-const maxLevelMembers = sortedMembers.filter((member) => member.level === 90).length;
-const officerCount = sortedMembers.filter((member) => member.rank <= 1).length;
-const uniqueRealmCount = new Set(sortedMembers.map((member) => member.realm)).size;
-const uniqueRaceCount = new Set(sortedMembers.map((member) => member.raceName)).size;
+function topBy(field: keyof Pick<EnrichedMember, 'achievementPoints' | 'mountCount' | 'petCount' | 'toyCount'>) {
+  return sortedMembers.reduce(
+    (best, member) =>
+      member[field] > (best?.value ?? -1)
+        ? { name: member.name, className: member.className, value: member[field] }
+        : best,
+    null as { name: string; className: string; value: number } | null
+  );
+}
 
 const spotlights = [
-  { label: 'Max Level', icon: 'lucide:swords', value: String(maxLevelMembers), detail: 'Level 90 characters' },
-  { label: 'Officers', icon: 'lucide:shield', value: String(officerCount), detail: 'Guild ranks 0-1' },
-  { label: 'Realms', icon: 'lucide:map', value: String(uniqueRealmCount), detail: 'Represented on the roster' },
-  { label: 'Races', icon: 'lucide:footprints', value: String(uniqueRaceCount), detail: 'Different allied faces' },
-];
+  { label: 'Achievements', icon: 'lucide:trophy', field: 'achievementPoints' as const, format: (n: number) => n.toLocaleString() },
+  { label: 'Mounts', icon: 'lucide:dog', field: 'mountCount' as const, format: (n: number) => String(n) },
+  { label: 'Pets', icon: 'lucide:paw-print', field: 'petCount' as const, format: (n: number) => String(n) },
+  { label: 'Toys', icon: 'lucide:puzzle', field: 'toyCount' as const, format: (n: number) => String(n) },
+].map(({ label, icon, field, format }) => {
+  const top = topBy(field);
+  return {
+    label,
+    icon,
+    name: top?.name ?? '—',
+    className: top?.className ?? '',
+    value: top ? format(top.value) : '—',
+  };
+});
+
+const cacheNote =
+  status.pendingDetailCount > 0
+    ? `Roster cache is warming ${status.pendingDetailCount} more member${status.pendingDetailCount === 1 ? '' : 's'}. Missing collection stats will fill in automatically as the cache refreshes.`
+    : 'Roster details are served from the D1 cache and refreshed from Blizzard in safe batches.';
 ---
 
 <Layout title="The Hidden Lodge | Roster" description="Full guild roster sourced live from the Blizzard API.">
   <section>
     <h1 class="title-row"><Icon name="lucide:users-round" class="title-icon" aria-hidden="true" />Roster</h1>
     <p>
-      Live roster sourced directly from the Blizzard API with lightweight guild data to stay within Cloudflare Worker limits.
+      Full guild roster sourced from Blizzard and cached in D1 so the Worker can return detailed stats without exceeding Cloudflare subrequest limits.
     </p>
   </section>
 
   {!errorMessage && (
+    <section class="panel cache-panel">
+      <p class="panel-text">{cacheNote}</p>
+    </section>
+  )}
+
+  {!errorMessage && (
     <section class="spotlights" aria-label="Top players">
-      {spotlights.map(({ label, icon, detail, value }) => {
+      {spotlights.map(({ label, icon, name, className, value }) => {
+        const classColor = CLASS_COLORS[className] ?? '#d8e2e8';
         return (
           <article class="spotlight-card">
             <header class="spotlight-header">
@@ -165,7 +105,7 @@ const spotlights = [
               <span class="spotlight-label">{label}</span>
             </header>
             <p class="spotlight-value">{value}</p>
-            <p class="spotlight-name">{detail}</p>
+            <p class="spotlight-name" style={`color: ${classColor}`}>{name}</p>
           </article>
         );
       })}
@@ -238,10 +178,12 @@ const spotlights = [
               <tr>
                 <th><button class="sort-btn" type="button" data-sort-key="name">Name</button></th>
                 <th><button class="sort-btn" type="button" data-sort-key="class">Class</button></th>
-                <th><button class="sort-btn" type="button" data-sort-key="race">Race</button></th>
-                <th><button class="sort-btn" type="button" data-sort-key="realm">Realm</button></th>
                 <th><button class="sort-btn" type="button" data-sort-key="level">Level</button></th>
                 <th><button class="sort-btn" type="button" data-sort-key="rank">Rank</button></th>
+                <th><button class="sort-btn" type="button" data-sort-key="achievementPoints">Achieves</button></th>
+                <th><button class="sort-btn" type="button" data-sort-key="mountCount">Mounts</button></th>
+                <th><button class="sort-btn" type="button" data-sort-key="petCount">Pets</button></th>
+                <th><button class="sort-btn" type="button" data-sort-key="toyCount">Toys</button></th>
                 <th>Raider.IO</th>
               </tr>
             </thead>
@@ -253,17 +195,21 @@ const spotlights = [
                     <tr
                       data-name={member.name.toLowerCase()}
                       data-class={member.className}
-                      data-race={member.raceName}
-                      data-realm={member.realm}
                       data-level={String(member.level)}
                       data-rank={String(member.rank)}
+                      data-achievement-points={String(member.achievementPoints)}
+                      data-mount-count={String(member.mountCount)}
+                      data-pet-count={String(member.petCount)}
+                      data-toy-count={String(member.toyCount)}
                     >
                       <td><span class="name-pill" style={`--class-color: ${classColor}`}>{member.name}</span></td>
                       <td>{member.className}</td>
-                      <td>{member.raceName}</td>
-                      <td>{member.realm}</td>
                       <td>{member.level}</td>
                       <td>{member.rank}</td>
+                      <td>{member.achievementPoints > 0 ? member.achievementPoints.toLocaleString() : '—'}</td>
+                      <td>{member.mountCount > 0 ? member.mountCount : '—'}</td>
+                      <td>{member.petCount > 0 ? member.petCount : '—'}</td>
+                      <td>{member.toyCount > 0 ? member.toyCount : '—'}</td>
                       <td>
                         {member.name && member.realm ? (
                           <a
@@ -340,7 +286,13 @@ const spotlights = [
       const toAttr = (key: string) => key.replace(/[A-Z]/g, (c) => `-${c.toLowerCase()}`);
       const valueA = rowA.dataset[toAttr(sortKey)] ?? rowA.dataset[sortKey] ?? '';
       const valueB = rowB.dataset[toAttr(sortKey)] ?? rowB.dataset[sortKey] ?? '';
-      const isNumericSort = sortKey === 'level' || sortKey === 'rank';
+    const isNumericSort =
+      sortKey === 'level' ||
+      sortKey === 'rank' ||
+      sortKey === 'achievementPoints' ||
+      sortKey === 'mountCount' ||
+      sortKey === 'petCount' ||
+      sortKey === 'toyCount';
 
       let order = 0;
       if (isNumericSort) {
@@ -440,6 +392,10 @@ const spotlights = [
       rgba(11, 21, 32, 0.78);
     padding: 1rem;
     box-shadow: 0 14px 28px rgba(0, 0, 0, 0.22);
+  }
+
+  .cache-panel {
+    padding-block: 0.85rem;
   }
 
   h2 {
