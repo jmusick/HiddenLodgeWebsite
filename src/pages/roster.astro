@@ -28,10 +28,6 @@ interface EnrichedMember {
   raceName: string;
   level: number;
   rank: number;
-  achievementPoints: number;
-  mountCount: number;
-  petCount: number;
-  toyCount: number;
 }
 
 const CLASS_COLORS: Record<string, string> = {
@@ -59,51 +55,6 @@ function formatRealmFromSlug(slug: string): string {
 }
 
 const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
-
-async function fetchJsonWithRetry(url: string, accessToken: string, attempts = 3) {
-  for (let attempt = 1; attempt <= attempts; attempt += 1) {
-    const response = await fetch(url, {
-      headers: { Authorization: `Bearer ${accessToken}` },
-    });
-
-    if (response.ok) {
-      return await response.json();
-    }
-
-    const retryable = response.status === 429 || response.status >= 500;
-    if (!retryable || attempt === attempts) {
-      return null;
-    }
-
-    const retryAfterHeader = response.headers.get('retry-after');
-    const retryAfterSeconds = retryAfterHeader ? Number(retryAfterHeader) : 0;
-    const backoff = retryAfterSeconds > 0 ? retryAfterSeconds * 1000 : attempt * 350;
-    await delay(backoff);
-  }
-
-  return null;
-}
-
-async function mapWithConcurrency<T, R>(
-  items: T[],
-  concurrency: number,
-  mapper: (item: T, index: number) => Promise<R>
-): Promise<R[]> {
-  const output: R[] = new Array(items.length);
-  let nextIndex = 0;
-
-  async function worker() {
-    while (nextIndex < items.length) {
-      const currentIndex = nextIndex;
-      nextIndex += 1;
-      output[currentIndex] = await mapper(items[currentIndex], currentIndex);
-    }
-  }
-
-  const workerCount = Math.max(1, Math.min(concurrency, items.length));
-  await Promise.all(Array.from({ length: workerCount }, () => worker()));
-  return output;
-}
 
 let members: EnrichedMember[] = [];
 let errorMessage = '';
@@ -159,40 +110,14 @@ if (!clientId || !clientSecret) {
     const data = await rosterRes.json();
     const rosterMembers: GuildRosterMember[] = Array.isArray(data.members) ? data.members : [];
 
-    members = await mapWithConcurrency(rosterMembers, 4, async (member) => {
-        const fallbackRealm = member.character.realm.name ?? formatRealmFromSlug(member.character.realm.slug);
-        const characterName = member.character.name;
-        const encodedName = encodeURIComponent(characterName.toLowerCase());
-        const realmSlug = member.character.realm.slug;
-        const fallbackClass = member.character.playable_class?.name ?? 'Unknown';
-        const fallbackRace = member.character.playable_race?.name ?? 'Unknown';
-        const fallbackLevel = Number(member.character.level ?? 0);
-
-        const collectionBase = `https://${REGION}.api.blizzard.com/profile/wow/character/${realmSlug}/${encodedName}/collections`;
-
-        const [profile, mounts, pets, toys] = await Promise.all([
-          fetchJsonWithRetry(
-            `https://${REGION}.api.blizzard.com/profile/wow/character/${realmSlug}/${encodedName}?namespace=profile-${REGION}&locale=en_US`,
-            access_token
-          ),
-          fetchJsonWithRetry(`${collectionBase}/mounts?namespace=profile-${REGION}&locale=en_US`, access_token),
-          fetchJsonWithRetry(`${collectionBase}/pets?namespace=profile-${REGION}&locale=en_US`, access_token),
-          fetchJsonWithRetry(`${collectionBase}/toys?namespace=profile-${REGION}&locale=en_US`, access_token),
-        ]);
-
-        return {
-          name: characterName,
-          realm: profile?.realm?.name ?? fallbackRealm,
-          className: profile?.character_class?.name ?? profile?.playable_class?.name ?? fallbackClass,
-          raceName: profile?.race?.name ?? profile?.playable_race?.name ?? fallbackRace,
-          level: Number(profile?.level ?? fallbackLevel),
-          rank: member.rank,
-          achievementPoints: Number(profile?.achievement_points ?? 0),
-          mountCount: Array.isArray(mounts?.mounts) ? mounts.mounts.length : 0,
-          petCount: Array.isArray(pets?.pets) ? pets.pets.length : 0,
-          toyCount: Array.isArray(toys?.toys) ? toys.toys.length : 0,
-        };
-      });
+    members = rosterMembers.map((member) => ({
+      name: member.character.name,
+      realm: member.character.realm.name ?? formatRealmFromSlug(member.character.realm.slug),
+      className: member.character.playable_class?.name ?? 'Unknown',
+      raceName: member.character.playable_race?.name ?? 'Unknown',
+      level: Number(member.character.level ?? 0),
+      rank: member.rank,
+    }));
   } catch (err) {
     errorMessage = err instanceof Error ? err.message : 'Unable to load roster from Blizzard API.';
   }
@@ -209,36 +134,30 @@ const classOptions = [...new Set(sortedMembers.map((member) => member.className)
 
 const rankOptions = [...new Set(sortedMembers.map((member) => member.rank))].sort((a, b) => a - b);
 
-function topBy(field: keyof Pick<EnrichedMember, 'achievementPoints' | 'mountCount' | 'petCount' | 'toyCount'>) {
-  return sortedMembers.reduce(
-    (best, m) => (m[field] > (best?.value ?? -1) ? { name: m.name, className: m.className, value: m[field] } : best),
-    null as { name: string; className: string; value: number } | null
-  );
-}
+const maxLevelMembers = sortedMembers.filter((member) => member.level === 90).length;
+const officerCount = sortedMembers.filter((member) => member.rank <= 1).length;
+const uniqueRealmCount = new Set(sortedMembers.map((member) => member.realm)).size;
+const uniqueRaceCount = new Set(sortedMembers.map((member) => member.raceName)).size;
 
 const spotlights = [
-  { label: 'Achievements', icon: 'lucide:trophy', field: 'achievementPoints' as const, format: (n: number) => n.toLocaleString() },
-  { label: 'Mounts',       icon: 'lucide:dog',    field: 'mountCount'        as const, format: (n: number) => String(n) },
-  { label: 'Pets',         icon: 'lucide:paw-print', field: 'petCount'       as const, format: (n: number) => String(n) },
-  { label: 'Toys',         icon: 'lucide:puzzle',    field: 'toyCount'       as const, format: (n: number) => String(n) },
-].map(({ label, icon, field, format }) => {
-  const top = topBy(field);
-  return { label, icon, field, name: top?.name ?? '—', className: top?.className ?? '', value: top ? format(top.value) : '—' };
-});
+  { label: 'Max Level', icon: 'lucide:swords', value: String(maxLevelMembers), detail: 'Level 90 characters' },
+  { label: 'Officers', icon: 'lucide:shield', value: String(officerCount), detail: 'Guild ranks 0-1' },
+  { label: 'Realms', icon: 'lucide:map', value: String(uniqueRealmCount), detail: 'Represented on the roster' },
+  { label: 'Races', icon: 'lucide:footprints', value: String(uniqueRaceCount), detail: 'Different allied faces' },
+];
 ---
 
 <Layout title="The Hidden Lodge | Roster" description="Full guild roster sourced live from the Blizzard API.">
   <section>
     <h1 class="title-row"><Icon name="lucide:users-round" class="title-icon" aria-hidden="true" />Roster</h1>
     <p>
-      Live roster sourced directly from the Blizzard API. This page updates whenever the site is rebuilt.
+      Live roster sourced directly from the Blizzard API with lightweight guild data to stay within Cloudflare Worker limits.
     </p>
   </section>
 
   {!errorMessage && (
     <section class="spotlights" aria-label="Top players">
-      {spotlights.map(({ label, icon, name, className, value }) => {
-        const classColor = CLASS_COLORS[className] ?? '#d8e2e8';
+      {spotlights.map(({ label, icon, detail, value }) => {
         return (
           <article class="spotlight-card">
             <header class="spotlight-header">
@@ -246,7 +165,7 @@ const spotlights = [
               <span class="spotlight-label">{label}</span>
             </header>
             <p class="spotlight-value">{value}</p>
-            <p class="spotlight-name" style={`color: ${classColor}`}>{name}</p>
+            <p class="spotlight-name">{detail}</p>
           </article>
         );
       })}
@@ -319,14 +238,11 @@ const spotlights = [
               <tr>
                 <th><button class="sort-btn" type="button" data-sort-key="name">Name</button></th>
                 <th><button class="sort-btn" type="button" data-sort-key="class">Class</button></th>
+                <th><button class="sort-btn" type="button" data-sort-key="race">Race</button></th>
+                <th><button class="sort-btn" type="button" data-sort-key="realm">Realm</button></th>
                 <th><button class="sort-btn" type="button" data-sort-key="level">Level</button></th>
                 <th><button class="sort-btn" type="button" data-sort-key="rank">Rank</button></th>
-                
-                <th><button class="sort-btn" type="button" data-sort-key="achievementPoints">Achieves</button></th>
-                <th><button class="sort-btn" type="button" data-sort-key="mountCount">Mounts</button></th>
-                <th><button class="sort-btn" type="button" data-sort-key="petCount">Pets</button></th>
-                <th><button class="sort-btn" type="button" data-sort-key="toyCount">Toys</button></th>
-                  <th>Raider.IO</th>
+                <th>Raider.IO</th>
               </tr>
             </thead>
             <tbody>
@@ -337,33 +253,27 @@ const spotlights = [
                     <tr
                       data-name={member.name.toLowerCase()}
                       data-class={member.className}
+                      data-race={member.raceName}
+                      data-realm={member.realm}
                       data-level={String(member.level)}
                       data-rank={String(member.rank)}
-                      
-                      data-achievement-points={String(member.achievementPoints)}
-                      data-mount-count={String(member.mountCount)}
-                      data-pet-count={String(member.petCount)}
-                      data-toy-count={String(member.toyCount)}
                     >
                       <td><span class="name-pill" style={`--class-color: ${classColor}`}>{member.name}</span></td>
                       <td>{member.className}</td>
+                      <td>{member.raceName}</td>
+                      <td>{member.realm}</td>
                       <td>{member.level}</td>
                       <td>{member.rank}</td>
-                      
-                      <td>{member.achievementPoints > 0 ? member.achievementPoints.toLocaleString() : '—'}</td>
-                      <td>{member.mountCount > 0 ? member.mountCount : '—'}</td>
-                      <td>{member.petCount > 0 ? member.petCount : '—'}</td>
-                      <td>{member.toyCount > 0 ? member.toyCount : '—'}</td>
-                        <td>
-                          {member.name && member.realm ? (
-                            <a
-                              href={`https://raider.io/characters/us/${encodeURIComponent(member.realm.replace(/[' ]/g, '') )}/${encodeURIComponent(member.name)}`}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              class="rio-link"
-                            >View</a>
-                          ) : '—'}
-                        </td>
+                      <td>
+                        {member.name && member.realm ? (
+                          <a
+                            href={`https://raider.io/characters/us/${encodeURIComponent(member.realm.replace(/[' ]/g, '') )}/${encodeURIComponent(member.name)}`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            class="rio-link"
+                          >View</a>
+                        ) : '—'}
+                      </td>
                     </tr>
                   );
                 })
@@ -430,7 +340,7 @@ const spotlights = [
       const toAttr = (key: string) => key.replace(/[A-Z]/g, (c) => `-${c.toLowerCase()}`);
       const valueA = rowA.dataset[toAttr(sortKey)] ?? rowA.dataset[sortKey] ?? '';
       const valueB = rowB.dataset[toAttr(sortKey)] ?? rowB.dataset[sortKey] ?? '';
-      const isNumericSort = sortKey === 'level' || sortKey === 'rank' || sortKey === 'achievementPoints' || sortKey === 'mountCount' || sortKey === 'petCount' || sortKey === 'toyCount';
+      const isNumericSort = sortKey === 'level' || sortKey === 'rank';
 
       let order = 0;
       if (isNumericSort) {
