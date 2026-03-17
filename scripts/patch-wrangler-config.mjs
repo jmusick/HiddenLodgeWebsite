@@ -1,7 +1,18 @@
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
-const wranglerConfigPath = resolve('dist/server/wrangler.json');
+const deployConfigPath = resolve('.wrangler/deploy/config.json');
+
+if (!existsSync(deployConfigPath)) {
+  process.exit(0);
+}
+
+const deployConfig = JSON.parse(readFileSync(deployConfigPath, 'utf8'));
+if (!deployConfig.configPath || typeof deployConfig.configPath !== 'string') {
+  process.exit(0);
+}
+
+const wranglerConfigPath = resolve('.wrangler/deploy', deployConfig.configPath);
 
 if (!existsSync(wranglerConfigPath)) {
   process.exit(0);
