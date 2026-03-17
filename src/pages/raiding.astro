@@ -88,6 +88,24 @@ import { Icon } from 'astro-icon/components';
       </li>
     </ul>
   </section>
+
+  <section class="panel" id="recruitment">
+    <h2 class="title-row"><Icon name="lucide:users" class="title-icon" aria-hidden="true" />Recruitment</h2>
+    <p class="panel-text">
+      We recruit players who value consistency, preparation, and a positive progression mindset.
+      Exceptional applicants are always welcome.
+    </p>
+  </section>
+
+  <section class="panel">
+    <h2 class="title-row"><Icon name="lucide:target" class="title-icon" aria-hidden="true" />Current Needs</h2>
+    <p class="panel-text">We are not actively recruiting for any specific class or role at this time. However, we are always open to exceptional players who bring skill, dedication, and a great attitude.</p>
+  </section>
+
+  <section class="panel">
+    <h2 class="title-row"><Icon name="lucide:scroll-text" class="title-icon" aria-hidden="true" />How to Apply</h2>
+    <p class="panel-text">Head to our <a href="https://raider.io/guilds/us/illidan/Hidden%20Lodge/" target="_blank" rel="noopener noreferrer">Raider.IO guild page</a> and submit an application through there.</p>
+  </section>
 </Layout>
 
 <style>
@@ -146,6 +164,25 @@ import { Icon } from 'astro-icon/components';
 
   .addon-links a:hover,
   .addon-links a:focus-visible {
+    color: #ffe6b5;
+  }
+
+  .panel-text {
+    margin: 0.6rem 0 0;
+    font-size: 1rem;
+    line-height: 1.6;
+    color: #d8e2e8;
+  }
+
+  .panel-text a {
+    color: #f0d39d;
+    text-decoration: underline;
+    text-decoration-color: rgba(240, 211, 157, 0.55);
+    text-underline-offset: 0.14em;
+  }
+
+  .panel-text a:hover,
+  .panel-text a:focus-visible {
     color: #ffe6b5;
   }
 </style>
