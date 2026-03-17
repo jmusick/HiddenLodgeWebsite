@@ -1,0 +1,590 @@
+---
+export const prerender = false;
+
+import AdminLayout from '../../layouts/AdminLayout.astro';
+import { env } from 'cloudflare:workers';
+import { classColor } from '../../lib/wow';
+
+// Middleware already guards /admin/* — belt-and-suspenders
+if (!Astro.locals.isAdmin) {
+	return Astro.redirect('/');
+}
+
+const RANK_NAMES: Record<number, string> = {
+	0: 'Guild Master',
+	1: 'Guild Admin',
+	2: 'Guild Officer',
+	3: 'Officer Alt',
+	4: 'Raider',
+};
+function rankLabel(rank: number): string {
+	return RANK_NAMES[rank] ?? `Rank ${rank}`;
+}
+
+// --- Row types ---
+interface GuildUserRow {
+	user_id: number;
+	battle_tag: string;
+	nickname: string | null;
+}
+
+interface CharRow {
+	user_id: number;
+	blizzard_char_id: number;
+	name: string;
+	realm: string;
+	class_name: string;
+	level: number;
+	is_main: number;
+	guild_rank: number | null;
+}
+
+interface UnauthedRosterRow {
+	blizzard_char_id: number;
+	name: string;
+	realm: string;
+	class_name: string;
+	rank: number;
+}
+
+const [usersResult, charsResult, unauthedResult] = await env.DB.batch([
+	env.DB.prepare(`
+		SELECT DISTINCT u.id AS user_id, u.battle_tag, u.nickname
+		FROM users u
+		JOIN characters c ON c.user_id = u.id
+		JOIN roster_members_cache rmc ON rmc.blizzard_char_id = c.blizzard_char_id
+		ORDER BY u.nickname, u.battle_tag
+	`),
+	env.DB.prepare(`
+		SELECT c.user_id, c.blizzard_char_id, c.name, c.realm, c.class_name, c.level, c.is_main,
+		       rmc.rank AS guild_rank
+		FROM characters c
+		JOIN (
+		  SELECT DISTINCT ci.user_id FROM characters ci
+		  JOIN roster_members_cache r ON r.blizzard_char_id = ci.blizzard_char_id
+		) guild_users ON guild_users.user_id = c.user_id
+		LEFT JOIN roster_members_cache rmc ON rmc.blizzard_char_id = c.blizzard_char_id
+		ORDER BY c.user_id, c.is_main DESC, rmc.rank ASC, c.level DESC, c.name ASC
+	`),
+	env.DB.prepare(`
+		SELECT rmc.blizzard_char_id, rmc.name, rmc.realm, rmc.class_name, rmc.rank
+		FROM roster_members_cache rmc
+		WHERE NOT EXISTS (
+		  SELECT 1 FROM characters c WHERE c.blizzard_char_id = rmc.blizzard_char_id
+		)
+		ORDER BY rmc.rank ASC, rmc.name ASC
+	`),
+]);
+
+const guildUsers = (usersResult.results ?? []) as GuildUserRow[];
+const allChars = (charsResult.results ?? []) as CharRow[];
+const unauthed = (unauthedResult.results ?? []) as UnauthedRosterRow[];
+
+const charsByUser = new Map<number, CharRow[]>();
+for (const char of allChars) {
+	const arr = charsByUser.get(char.user_id) ?? [];
+	arr.push(char);
+	charsByUser.set(char.user_id, arr);
+}
+
+const statusParam = new URL(Astro.request.url).searchParams.get('status');
+---
+
+<AdminLayout title="Mains & Alts | Admin | The Hidden Lodge">
+	<div class="mains-page">
+		<div class="page-header">
+			<div>
+				<h1>Mains &amp; Alts</h1>
+				<p class="page-desc">
+					Members set their own main via their profile after logging in with Battle.net.
+					You can assign a nickname that displays alongside their characters.
+				</p>
+			</div>
+			<div class="page-stats">
+				<span class="stat"><strong>{guildUsers.length}</strong> authenticated</span>
+				<span class="stat"><strong>{unauthed.length}</strong> not yet logged in</span>
+			</div>
+		</div>
+
+		{statusParam === 'ok' && (
+			<div class="flash flash-ok" role="alert">Nickname saved.</div>
+		)}
+		{statusParam === 'error' && (
+			<div class="flash flash-error" role="alert">Something went wrong. Please try again.</div>
+		)}
+
+		<!-- ── Authenticated Guild Members ──────────────────────────────────── -->
+		<section class="admin-section">
+			<h2>
+				Authenticated Members
+				<span class="count-badge">{guildUsers.length}</span>
+			</h2>
+
+			{guildUsers.length === 0 ? (
+				<p class="empty-state">No guild members have logged in yet.</p>
+			) : (
+				<div class="profiles-grid">
+					{guildUsers.map((guildUser) => {
+						const chars = charsByUser.get(guildUser.user_id) ?? [];
+						const mainChar = chars.find((c) => c.is_main === 1 && c.guild_rank !== null) ?? null;
+						const guildChars = chars.filter((c) => c.guild_rank !== null);
+						const otherChars = chars.filter((c) => c.guild_rank === null);
+						const displayName = guildUser.nickname ?? guildUser.battle_tag;
+
+						return (
+							<div class="profile-card">
+								<div class="card-header">
+									<div class="card-identity">
+										<span class="card-display-name">{displayName}</span>
+										{guildUser.nickname && (
+											<span class="card-battletag">{guildUser.battle_tag}</span>
+										)}
+									</div>
+									{mainChar ? (
+										<span class="main-pill" style={`color: ${classColor(mainChar.class_name)}`}>
+											{mainChar.name}
+										</span>
+									) : (
+										<span class="no-main-pill">No main set</span>
+									)}
+								</div>
+
+								{guildChars.length > 0 && (
+									<div class="chars-section">
+										<span class="section-label">Guild Characters</span>
+										<ul class="char-list">
+											{guildChars.map((char) => (
+												<li class:list={['char-row', { 'is-main': char.is_main === 1 }]}>
+													<span class="char-name" style={`color: ${classColor(char.class_name)}`}>
+														{char.name}
+														{char.is_main === 1 && <span class="main-badge">MAIN</span>}
+													</span>
+													<span class="char-meta">
+														{char.class_name} &middot; {char.realm}
+													</span>
+													<span class="char-rank">{rankLabel(char.guild_rank!)}</span>
+												</li>
+											))}
+										</ul>
+									</div>
+								)}
+
+								{otherChars.length > 0 && (
+									<details class="other-chars">
+										<summary class="other-toggle">
+											{otherChars.length} other character{otherChars.length !== 1 ? 's' : ''} (not in guild)
+										</summary>
+										<ul class="char-list char-list-dim">
+											{otherChars.map((char) => (
+												<li class="char-row">
+													<span class="char-name" style={`color: ${classColor(char.class_name)}; opacity: 0.6`}>
+														{char.name}
+													</span>
+													<span class="char-meta">{char.class_name} &middot; {char.realm}</span>
+												</li>
+											))}
+										</ul>
+									</details>
+								)}
+
+								<details class="edit-panel">
+									<summary class="edit-toggle">Set Nickname</summary>
+									<form method="POST" action="/api/admin/update-nickname" class="edit-inner">
+										<input type="hidden" name="user_id" value={guildUser.user_id} />
+										<input
+											type="text"
+											name="nickname"
+											value={guildUser.nickname ?? ''}
+											placeholder={guildUser.battle_tag}
+											class="input-sm"
+											maxlength="48"
+										/>
+										<button type="submit" class="btn btn-primary">Save</button>
+									</form>
+								</details>
+							</div>
+						);
+					})}
+				</div>
+			)}
+		</section>
+
+		<!-- ── Unauthenticated Roster Members ───────────────────────────────── -->
+		{unauthed.length > 0 && (
+			<section class="admin-section">
+				<h2>
+					Not Yet Logged In
+					<span class="count-badge">{unauthed.length}</span>
+				</h2>
+				<p class="section-desc">
+					These roster members haven't authenticated with Battle.net yet. Their mains and alts will
+					appear automatically once they log in and set their main via their profile.
+				</p>
+				<div class="table-wrap">
+					<table class="data-table">
+						<thead>
+							<tr>
+								<th>Character</th>
+								<th>Class</th>
+								<th>Realm</th>
+								<th>Guild Rank</th>
+							</tr>
+						</thead>
+						<tbody>
+							{unauthed.map((char) => (
+								<tr>
+									<td>
+										<span class="char-name" style={`color: ${classColor(char.class_name)}`}>
+											{char.name}
+										</span>
+									</td>
+									<td class="text-muted">{char.class_name}</td>
+									<td class="text-muted">{char.realm}</td>
+									<td class="text-muted">{rankLabel(char.rank)}</td>
+								</tr>
+							))}
+						</tbody>
+					</table>
+				</div>
+			</section>
+		)}
+	</div>
+</AdminLayout>
+
+<style>
+	.mains-page {
+		display: flex;
+		flex-direction: column;
+		gap: 2rem;
+	}
+
+	.page-header {
+		display: flex;
+		align-items: flex-start;
+		justify-content: space-between;
+		gap: 1rem;
+		flex-wrap: wrap;
+	}
+
+	.page-header h1 {
+		margin: 0 0 0.35rem;
+		font-size: 1.75rem;
+		color: var(--gold-bright);
+	}
+
+	.page-desc {
+		margin: 0;
+		color: var(--muted);
+		font-size: 0.95rem;
+		max-width: 60ch;
+	}
+
+	.page-stats {
+		display: flex;
+		gap: 1rem;
+		align-items: center;
+		flex-shrink: 0;
+	}
+
+	.stat { font-size: 0.9rem; color: var(--muted); }
+	.stat strong { color: var(--gold); }
+
+	.flash {
+		padding: 0.6rem 1rem;
+		border-radius: 0.4rem;
+		font-size: 0.95rem;
+		font-weight: 600;
+	}
+	.flash-ok {
+		background: rgba(0, 180, 80, 0.12);
+		border: 1px solid rgba(0, 180, 80, 0.4);
+		color: #6fdb91;
+	}
+	.flash-error {
+		background: rgba(180, 30, 30, 0.12);
+		border: 1px solid rgba(180, 30, 30, 0.4);
+		color: #f47e7e;
+	}
+
+	.admin-section {
+		display: flex;
+		flex-direction: column;
+		gap: 1rem;
+	}
+
+	.admin-section h2 {
+		display: flex;
+		align-items: center;
+		gap: 0.6rem;
+		margin: 0;
+		font-size: 1.2rem;
+		color: var(--gold);
+	}
+
+	.count-badge {
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		min-width: 1.5rem;
+		height: 1.5rem;
+		padding-inline: 0.4rem;
+		border-radius: 999px;
+		background: rgba(214, 176, 106, 0.15);
+		border: 1px solid rgba(214, 176, 106, 0.35);
+		color: var(--gold);
+		font-size: 0.78rem;
+		font-family: var(--font-body);
+		font-weight: 700;
+	}
+
+	.section-desc, .empty-state {
+		margin: 0;
+		color: var(--muted);
+		font-size: 0.9rem;
+	}
+	.empty-state { font-style: italic; }
+
+	/* ── Profile cards ──────────────────────────────────────────────── */
+	.profiles-grid {
+		display: grid;
+		grid-template-columns: repeat(auto-fill, minmax(22rem, 1fr));
+		gap: 1rem;
+	}
+
+	.profile-card {
+		background: var(--bg-panel);
+		border: 1px solid rgba(214, 176, 106, 0.22);
+		border-radius: 0.55rem;
+		overflow: hidden;
+		display: flex;
+		flex-direction: column;
+	}
+
+	.card-header {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 0.75rem;
+		padding: 0.75rem 1rem 0.6rem;
+		border-bottom: 1px solid rgba(214, 176, 106, 0.15);
+		background: rgba(214, 176, 106, 0.05);
+	}
+
+	.card-identity {
+		display: flex;
+		flex-direction: column;
+		gap: 0.1rem;
+		min-width: 0;
+	}
+
+	.card-display-name {
+		font-family: var(--font-display);
+		font-size: 1rem;
+		font-weight: 700;
+		letter-spacing: 0.04em;
+		color: var(--gold-bright);
+		white-space: nowrap;
+		overflow: hidden;
+		text-overflow: ellipsis;
+	}
+
+	.card-battletag {
+		font-size: 0.75rem;
+		color: var(--muted);
+	}
+
+	.main-pill {
+		font-weight: 700;
+		font-size: 0.88rem;
+		white-space: nowrap;
+		flex-shrink: 0;
+	}
+
+	.no-main-pill {
+		font-size: 0.8rem;
+		color: var(--muted);
+		font-style: italic;
+		flex-shrink: 0;
+	}
+
+	/* ── Character lists ────────────────────────────────────────────── */
+	.chars-section {
+		padding: 0.65rem 1rem 0.4rem;
+		display: flex;
+		flex-direction: column;
+		gap: 0.4rem;
+	}
+
+	.section-label {
+		font-size: 0.72rem;
+		font-weight: 700;
+		text-transform: uppercase;
+		letter-spacing: 0.07em;
+		color: var(--muted);
+	}
+
+	.char-list {
+		list-style: none;
+		margin: 0;
+		padding: 0;
+		display: flex;
+		flex-direction: column;
+		gap: 0.25rem;
+	}
+
+	.char-list-dim { opacity: 0.65; }
+
+	.char-row {
+		display: flex;
+		align-items: baseline;
+		gap: 0.5rem;
+		flex-wrap: wrap;
+		padding: 0.2rem 0;
+	}
+
+	.char-row.is-main {
+		background: rgba(214, 176, 106, 0.05);
+		border-radius: 0.3rem;
+		padding-inline: 0.35rem;
+		margin-inline: -0.35rem;
+	}
+
+	.char-name { font-weight: 600; font-size: 0.92rem; }
+	.char-meta { font-size: 0.8rem; color: var(--muted); }
+	.char-rank { margin-left: auto; font-size: 0.75rem; color: var(--muted); white-space: nowrap; }
+
+	.main-badge {
+		display: inline-block;
+		font-size: 0.65rem;
+		font-weight: 800;
+		letter-spacing: 0.07em;
+		text-transform: uppercase;
+		padding: 0.1rem 0.4rem;
+		border-radius: 999px;
+		background: rgba(214, 176, 106, 0.18);
+		border: 1px solid rgba(214, 176, 106, 0.45);
+		color: var(--gold);
+		vertical-align: middle;
+		margin-left: 0.3rem;
+	}
+
+	/* ── Non-guild chars disclosure ─────────────────────────────────── */
+	.other-chars { border-top: 1px solid rgba(214, 176, 106, 0.08); }
+
+	.other-toggle {
+		padding: 0.4rem 1rem;
+		font-size: 0.78rem;
+		color: var(--muted);
+		cursor: pointer;
+		list-style: none;
+		user-select: none;
+	}
+	.other-toggle:hover { color: var(--text); }
+	.other-chars .char-list { padding: 0 1rem 0.6rem; }
+
+	/* ── Nickname edit ──────────────────────────────────────────────── */
+	.edit-panel {
+		border-top: 1px solid rgba(214, 176, 106, 0.12);
+		margin-top: auto;
+	}
+
+	.edit-toggle {
+		padding: 0.45rem 1rem;
+		font-size: 0.82rem;
+		font-weight: 600;
+		color: var(--muted);
+		cursor: pointer;
+		list-style: none;
+		display: flex;
+		align-items: center;
+		gap: 0.35rem;
+		user-select: none;
+		transition: color 140ms ease;
+	}
+	.edit-toggle:hover { color: var(--text); }
+	.edit-toggle::before { content: '▸'; font-size: 0.68rem; transition: transform 140ms ease; }
+	details[open] .edit-toggle::before { transform: rotate(90deg); }
+
+	.edit-inner {
+		display: flex;
+		align-items: center;
+		gap: 0.5rem;
+		padding: 0.5rem 1rem 0.75rem;
+		border-top: 1px solid rgba(214, 176, 106, 0.08);
+		flex-wrap: wrap;
+	}
+
+	.input-sm {
+		flex: 1;
+		min-width: 8rem;
+		background: rgba(7, 17, 26, 0.7);
+		border: 1px solid rgba(214, 176, 106, 0.3);
+		border-radius: 0.35rem;
+		color: var(--text);
+		font-family: var(--font-body);
+		font-size: 0.88rem;
+		padding: 0.3rem 0.55rem;
+		outline: none;
+		transition: border-color 140ms ease;
+	}
+	.input-sm:focus { border-color: rgba(214, 176, 106, 0.65); }
+
+	.btn {
+		display: inline-flex;
+		align-items: center;
+		padding: 0.3rem 0.7rem;
+		border-radius: 0.4rem;
+		border: 1px solid transparent;
+		font-size: 0.85rem;
+		font-weight: 600;
+		font-family: var(--font-body);
+		cursor: pointer;
+		white-space: nowrap;
+		transition: background 140ms ease, border-color 140ms ease;
+	}
+	.btn-primary {
+		background: rgba(214, 176, 106, 0.18);
+		border-color: rgba(214, 176, 106, 0.5);
+		color: var(--gold-bright);
+	}
+	.btn-primary:hover { background: rgba(214, 176, 106, 0.28); }
+
+	/* ── Table ──────────────────────────────────────────────────────── */
+	.table-wrap {
+		overflow-x: auto;
+		border-radius: 0.5rem;
+		border: 1px solid rgba(214, 176, 106, 0.2);
+	}
+
+	.data-table {
+		width: 100%;
+		border-collapse: collapse;
+		font-size: 0.92rem;
+	}
+
+	.data-table th {
+		background: rgba(214, 176, 106, 0.07);
+		padding: 0.6rem 0.75rem;
+		text-align: left;
+		font-weight: 700;
+		color: var(--gold);
+		font-family: var(--font-display);
+		letter-spacing: 0.04em;
+		font-size: 0.78rem;
+		text-transform: uppercase;
+		white-space: nowrap;
+	}
+
+	.data-table td {
+		padding: 0.55rem 0.75rem;
+		border-top: 1px solid rgba(214, 176, 106, 0.1);
+		vertical-align: middle;
+	}
+
+	.data-table tr:hover td { background: rgba(214, 176, 106, 0.04); }
+	.text-muted { color: var(--muted); }
+
+	@media (max-width: 640px) {
+		.profiles-grid { grid-template-columns: 1fr; }
+	}
+</style>

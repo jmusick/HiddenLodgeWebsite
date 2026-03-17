@@ -13,13 +13,15 @@ const {
 } = Astro.props;
 
 const user = Astro.locals.user;
+const isAdmin = Astro.locals.isAdmin;
 
 const navItems = [
 	{ href: '/', label: 'Home' },
 	{ href: '/raiding', label: 'Raiding' },
 	{ href: '/leadership', label: 'Leadership' },
 	{ href: '/roster', label: 'Roster' },
-	{ href: '/links', label: 'Links' }
+	{ href: '/links', label: 'Links' },
+	...(isAdmin ? [{ href: '/admin', label: 'Admin' }] : []),
 ];
 
 const headerLinkLabels: Record<string, string> = {

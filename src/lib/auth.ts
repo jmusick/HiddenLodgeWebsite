@@ -34,6 +34,21 @@ export async function getSessionUser(db: D1Database, request: Request): Promise<
 	return { id: row.id, battleTag: row.battle_tag, blizzardId: row.blizzard_id };
 }
 
+/** Returns true if the user has any guild character with rank 0–2 in the roster cache. */
+export async function isGuildAdmin(db: D1Database, userId: number): Promise<boolean> {
+	const row = await db
+		.prepare(
+			`SELECT 1
+			FROM characters c
+			JOIN roster_members_cache rmc ON rmc.blizzard_char_id = c.blizzard_char_id
+			WHERE c.user_id = ? AND rmc.rank <= 2
+			LIMIT 1`
+		)
+		.bind(userId)
+		.first();
+	return row !== null;
+}
+
 export async function createSession(db: D1Database, userId: number): Promise<string> {
 	const sessionId = crypto.randomUUID();
 	const expiresAt = Math.floor(Date.now() / 1000) + SESSION_TTL_SECONDS;

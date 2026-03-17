@@ -12,9 +12,10 @@ export default defineConfig({
 		client: './',
 		server: './_worker.js',
 	},
-	adapter: cloudflare({
+	adapter: cloudflare(/** @type {any} */({
 		imageService: 'compile',
-	}),
+		platformProxy: { enabled: true },
+	})),
 	session: {
 		driver: sessionDrivers.lruCache(),
 	},

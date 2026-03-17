@@ -1,0 +1,141 @@
+---
+interface Props {
+	title?: string;
+}
+
+import Layout from './Layout.astro';
+import { Icon } from 'astro-icon/components';
+
+const { title } = Astro.props;
+
+const currentPath = new URL(Astro.request.url).pathname;
+
+const adminModules = [
+	{ href: '/admin/mains', label: 'Mains & Alts', icon: 'lucide:users' },
+];
+---
+
+<Layout title={title}>
+	<div class="admin-wrapper">
+		<div class="admin-header">
+			<div class="admin-header-inner">
+				<div class="admin-title-group">
+					<Icon name="lucide:shield" class="admin-icon" aria-hidden="true" />
+					<span class="admin-title">Guild Administration</span>
+				</div>
+				<nav class="admin-subnav" aria-label="Admin modules">
+					<ul>
+						{adminModules.map((m) => (
+							<li>
+								<a
+									href={m.href}
+									class:list={['admin-tab', { active: currentPath.startsWith(m.href) }]}
+								>
+									<Icon name={m.icon} aria-hidden="true" />
+									{m.label}
+								</a>
+							</li>
+						))}
+					</ul>
+				</nav>
+			</div>
+		</div>
+
+		<div class="admin-content">
+			<slot />
+		</div>
+	</div>
+</Layout>
+
+<style>
+	.admin-wrapper {
+		display: flex;
+		flex-direction: column;
+		gap: 0;
+	}
+
+	.admin-header {
+		background: linear-gradient(180deg, rgba(30, 14, 4, 0.6), rgba(20, 10, 2, 0.4));
+		border: 1px solid rgba(214, 176, 106, 0.3);
+		border-radius: 0.6rem;
+		margin-bottom: 1.5rem;
+	}
+
+	.admin-header-inner {
+		display: flex;
+		align-items: center;
+		gap: 1.5rem;
+		padding: 0.75rem 1rem;
+		flex-wrap: wrap;
+	}
+
+	.admin-title-group {
+		display: flex;
+		align-items: center;
+		gap: 0.5rem;
+		color: var(--gold);
+		font-family: var(--font-display);
+		font-size: 0.95rem;
+		font-weight: 700;
+		letter-spacing: 0.06em;
+		text-transform: uppercase;
+		white-space: nowrap;
+	}
+
+	.admin-icon {
+		width: 1.1rem;
+		height: 1.1rem;
+	}
+
+	.admin-subnav ul {
+		display: flex;
+		align-items: center;
+		gap: 0.25rem;
+		list-style: none;
+		padding: 0;
+		margin: 0;
+	}
+
+	.admin-tab {
+		display: inline-flex;
+		align-items: center;
+		gap: 0.4rem;
+		padding: 0.4rem 0.75rem;
+		border-radius: 0.4rem;
+		border: 1px solid transparent;
+		font-size: 0.9rem;
+		font-weight: 600;
+		color: var(--muted);
+		transition: border-color 160ms ease, color 160ms ease, background 160ms ease;
+	}
+
+	.admin-tab [data-icon] {
+		width: 0.95rem;
+		height: 0.95rem;
+		flex-shrink: 0;
+	}
+
+	.admin-tab:hover,
+	.admin-tab:focus-visible {
+		border-color: rgba(214, 176, 106, 0.45);
+		background: rgba(214, 176, 106, 0.09);
+		color: var(--text);
+	}
+
+	.admin-tab.active {
+		border-color: rgba(214, 176, 106, 0.5);
+		background: rgba(214, 176, 106, 0.12);
+		color: var(--gold-bright);
+	}
+
+	.admin-content {
+		flex: 1;
+	}
+
+	@media (max-width: 600px) {
+		.admin-header-inner {
+			flex-direction: column;
+			align-items: flex-start;
+		}
+	}
+</style>
