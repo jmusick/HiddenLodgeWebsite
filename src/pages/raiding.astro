@@ -12,100 +12,106 @@ import { Icon } from 'astro-icon/components';
     </p>
   </section>
 
-  <section class="panel">
-    <h2 class="title-row"><Icon name="lucide:calendar-days" class="title-icon" aria-hidden="true" />Schedule</h2>
-    <ul>
-      <li><strong>Thursday:</strong> 9:00 PM – 12:00 AM Eastern</li>
-      <li><strong>Friday:</strong> 9:00 PM – 12:00 AM Eastern</li>
-      <li>Alt raid nights are common and are a solid way to gear up or mess around on alts, but they are never mandatory.</li>
-    </ul>
-  </section>
+  <div class="raiding-grid">
+    <div class="raiding-column">
+      <section class="panel">
+        <h2 class="title-row"><Icon name="lucide:calendar-days" class="title-icon" aria-hidden="true" />Schedule</h2>
+        <ul>
+          <li><strong>Thursday:</strong> 9:00 PM – 12:00 AM Eastern</li>
+          <li><strong>Friday:</strong> 9:00 PM – 12:00 AM Eastern</li>
+          <li>Alt raid nights are common and are a solid way to gear up or mess around on alts, but they are never mandatory.</li>
+        </ul>
+      </section>
 
-  <section class="panel">
-    <h2 class="title-row"><Icon name="lucide:clipboard-check" class="title-icon" aria-hidden="true" />Raid Expectations</h2>
-    <ul>
-      <li>
-        <strong>Come prepared.</strong> Show up on time, fully enchanted, gemmed, and stocked with your own
-        consumables. The guild provides feasts. We pull at 9:00 PM sharp — not 9:05.
-      </li>
-      <li>
-        <strong>Keep comms clean.</strong> During progression, voice chat is reserved for the raid lead,
-        tanks, and officers. The only exception is fights that specifically require call-outs from other
-        roles — you'll be told when that applies.
-      </li>
-      <li>
-        <strong>BoE guild tax is 20%.</strong> All BoE drops carry a 20% guild tax. These funds go directly
-        into the guild bank and are returned to raiders in the form of cauldrons, feasts, Vantus runes, and
-        other raid consumables.
-      </li>
-      <li>
-        <strong>Benching happens — don't take it personally.</strong> There will be nights where someone sits
-        out due to performance needs or tuning requirements. This is a roster decision, not a personal one.
-        Stay positive and be ready to step back in.
-      </li>
-      <li>
-        <strong>Loot is distributed via Loot Council (RC LootCouncil addon required).</strong> Priority goes
-        to raiders who show up on time, fill their Great Vault, and perform. Consistent effort is rewarded.
-        If you fall short on any of those fronts, loot priority reflects that.
-      </li>
-      <li>
-        <strong>Sign up for raid.</strong> If you can't make it, post in the attendance channel ahead of
-        time. No-shows with no notice are not acceptable.
-      </li>
-      <li>
-        <strong>No alts on progression.</strong> The only exception is if your alt is at a comparable item
-        level to your main AND fills a role the team genuinely needs. This requires officer approval.
-      </li>
-      <li>
-        <strong>Want to swap classes?</strong> Reach out to an officer first. If approved, we'll do our
-        best to help you gear it up to a competitive level before bringing it to progression.
-      </li>
-    </ul>
-  </section>
+      <section class="panel">
+        <h2 class="title-row"><Icon name="lucide:clipboard-check" class="title-icon" aria-hidden="true" />Raid Expectations</h2>
+        <ul>
+          <li>
+            <strong>Come prepared.</strong> Show up on time, fully enchanted, gemmed, and stocked with your own
+            consumables. The guild provides feasts. We pull at 9:00 PM sharp — not 9:05.
+          </li>
+          <li>
+            <strong>Keep comms clean.</strong> During progression, voice chat is reserved for the raid lead,
+            tanks, and officers. The only exception is fights that specifically require call-outs from other
+            roles — you'll be told when that applies.
+          </li>
+          <li>
+            <strong>BoE guild tax is 20%.</strong> All BoE drops carry a 20% guild tax. These funds go directly
+            into the guild bank and are returned to raiders in the form of cauldrons, feasts, Vantus runes, and
+            other raid consumables.
+          </li>
+          <li>
+            <strong>Benching happens — don't take it personally.</strong> There will be nights where someone sits
+            out due to performance needs or tuning requirements. This is a roster decision, not a personal one.
+            Stay positive and be ready to step back in.
+          </li>
+          <li>
+            <strong>Loot is distributed via Loot Council (RC LootCouncil addon required).</strong> Priority goes
+            to raiders who show up on time, fill their Great Vault, and perform. Consistent effort is rewarded.
+            If you fall short on any of those fronts, loot priority reflects that.
+          </li>
+          <li>
+            <strong>Sign up for raid.</strong> If you can't make it, post in the attendance channel ahead of
+            time. No-shows with no notice are not acceptable.
+          </li>
+          <li>
+            <strong>No alts on progression.</strong> The only exception is if your alt is at a comparable item
+            level to your main AND fills a role the team genuinely needs. This requires officer approval.
+          </li>
+          <li>
+            <strong>Want to swap classes?</strong> Reach out to an officer first. If approved, we'll do our
+            best to help you gear it up to a competitive level before bringing it to progression.
+          </li>
+        </ul>
+      </section>
 
-  <section class="panel">
-    <h2 class="title-row"><Icon name="lucide:puzzle" class="title-icon" aria-hidden="true" />Required Addons</h2>
-    <ul class="addon-links">
-      <li>
-        <a href="https://www.curseforge.com/wow/addons/deadly-boss-mods" target="_blank" rel="noopener noreferrer">
-          Deadly Boss Mods
-        </a>
-      </li>
-      <li>
-        <a href="https://www.curseforge.com/wow/addons/method-raid-tools" target="_blank" rel="noopener noreferrer">
-          Method Raid Tools
-        </a>
-      </li>
-      <li>
-        <a href="https://www.curseforge.com/wow/addons/northern-sky-raid-tools" target="_blank" rel="noopener noreferrer">
-          Northern Sky Raid Tools
-        </a>
-      </li>
-      <li>
-        <a href="https://www.curseforge.com/wow/addons/rclootcouncil" target="_blank" rel="noopener noreferrer">
-          RCLootCouncil
-        </a>
-      </li>
-    </ul>
-  </section>
+      <section class="panel">
+        <h2 class="title-row"><Icon name="lucide:puzzle" class="title-icon" aria-hidden="true" />Required Addons</h2>
+        <ul class="addon-links">
+          <li>
+            <a href="https://www.curseforge.com/wow/addons/deadly-boss-mods" target="_blank" rel="noopener noreferrer">
+              Deadly Boss Mods
+            </a>
+          </li>
+          <li>
+            <a href="https://www.curseforge.com/wow/addons/method-raid-tools" target="_blank" rel="noopener noreferrer">
+              Method Raid Tools
+            </a>
+          </li>
+          <li>
+            <a href="https://www.curseforge.com/wow/addons/northern-sky-raid-tools" target="_blank" rel="noopener noreferrer">
+              Northern Sky Raid Tools
+            </a>
+          </li>
+          <li>
+            <a href="https://www.curseforge.com/wow/addons/rclootcouncil" target="_blank" rel="noopener noreferrer">
+              RCLootCouncil
+            </a>
+          </li>
+        </ul>
+      </section>
+    </div>
 
-  <section class="panel" id="recruitment">
-    <h2 class="title-row"><Icon name="lucide:users" class="title-icon" aria-hidden="true" />Recruitment</h2>
-    <p class="panel-text">
-      We recruit players who value consistency, preparation, and a positive progression mindset.
-      Exceptional applicants are always welcome.
-    </p>
-  </section>
+    <div class="raiding-column">
+      <section class="panel" id="recruitment">
+        <h2 class="title-row"><Icon name="lucide:users" class="title-icon" aria-hidden="true" />Recruitment</h2>
+        <p class="panel-text">
+          We recruit players who value consistency, preparation, and a positive progression mindset.
+          Exceptional applicants are always welcome.
+        </p>
+      </section>
 
-  <section class="panel">
-    <h2 class="title-row"><Icon name="lucide:target" class="title-icon" aria-hidden="true" />Current Needs</h2>
-    <p class="panel-text">We are not actively recruiting for any specific class or role at this time. However, we are always open to exceptional players who bring skill, dedication, and a great attitude.</p>
-  </section>
+      <section class="panel">
+        <h2 class="title-row"><Icon name="lucide:target" class="title-icon" aria-hidden="true" />Current Needs</h2>
+        <p class="panel-text">We are not actively recruiting for any specific class or role at this time. However, we are always open to exceptional players who bring skill, dedication, and a great attitude.</p>
+      </section>
 
-  <section class="panel">
-    <h2 class="title-row"><Icon name="lucide:scroll-text" class="title-icon" aria-hidden="true" />How to Apply</h2>
-    <p class="panel-text">Head to our <a href="https://raider.io/guilds/us/illidan/Hidden%20Lodge/" target="_blank" rel="noopener noreferrer">Raider.IO guild page</a> and submit an application through there.</p>
-  </section>
+      <section class="panel">
+        <h2 class="title-row"><Icon name="lucide:scroll-text" class="title-icon" aria-hidden="true" />How to Apply</h2>
+        <p class="panel-text">Head to our <a href="https://raider.io/guilds/us/illidan/Hidden%20Lodge/" target="_blank" rel="noopener noreferrer">Raider.IO guild page</a> and submit an application through there.</p>
+      </section>
+    </div>
+  </div>
 </Layout>
 
 <style>
@@ -121,7 +127,6 @@ import { Icon } from 'astro-icon/components';
   }
 
   .panel {
-    margin-top: 1rem;
     border: 1px solid rgba(214, 176, 106, 0.38);
     border-radius: 0.75rem;
     background:
@@ -129,6 +134,26 @@ import { Icon } from 'astro-icon/components';
       rgba(11, 21, 32, 0.78);
     padding: 1rem;
     box-shadow: 0 14px 28px rgba(0, 0, 0, 0.22);
+  }
+
+  .raiding-grid {
+    margin-top: 1rem;
+    display: grid;
+    gap: 1rem;
+  }
+
+  .raiding-column {
+    display: grid;
+    gap: 1rem;
+    align-content: start;
+  }
+
+  @media (min-width: 960px) {
+    .raiding-grid {
+      grid-template-columns: minmax(0, 1.55fr) minmax(0, 1fr);
+      gap: 1.25rem;
+      align-items: start;
+    }
   }
 
   h2 {
