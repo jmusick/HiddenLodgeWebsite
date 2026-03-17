@@ -27,6 +27,11 @@ function assertValidUri(value: string, key: string): void {
 	}
 }
 
+function isLocalOrigin(origin: string): boolean {
+	const hostname = new URL(origin).hostname;
+	return hostname === 'localhost' || hostname === '127.0.0.1';
+}
+
 export function getBlizzardAuthConfig(): BlizzardAuthConfig {
 	const clientId = readEnv('BLIZZARD_CLIENT_ID');
 	const clientSecret = readEnv('BLIZZARD_CLIENT_SECRET');
@@ -41,13 +46,19 @@ export function getBlizzardAuthConfig(): BlizzardAuthConfig {
 }
 
 export function getBlizzardRedirectUri(requestUrl: string): string {
+	const fallback = new URL('/auth/callback', requestUrl).toString();
+	assertValidUri(fallback, 'Computed redirect URI');
+
 	const configured = readEnv('BLIZZARD_REDIRECT_URI');
 	if (configured) {
 		assertValidUri(configured, 'BLIZZARD_REDIRECT_URI');
-		return configured;
+
+		const configuredOrigin = new URL(configured).origin;
+		const fallbackOrigin = new URL(fallback).origin;
+		if (configuredOrigin === fallbackOrigin || isLocalOrigin(fallbackOrigin)) {
+			return configured;
+		}
 	}
 
-	const fallback = new URL('/auth/callback', requestUrl).toString();
-	assertValidUri(fallback, 'Computed redirect URI');
 	return fallback;
 }
