@@ -2,69 +2,236 @@
 import Layout from '../layouts/Layout.astro';
 import { Icon } from 'astro-icon/components';
 
-interface Character {
-  id: number;
-  name: string;
-  realm: string;
-  class: string;
-  role: string;
-  rank: string;
-  status: string;
-  note: string | null;
-  tracking_since: string | null;
+const GUILD_REALM_SLUG = 'illidan';
+const GUILD_NAME_SLUG = 'hidden-lodge';
+const REGION = 'us';
+
+const clientId = import.meta.env.BLIZZARD_CLIENT_ID;
+const clientSecret = import.meta.env.BLIZZARD_CLIENT_SECRET;
+
+interface GuildRosterMember {
+  character: {
+    name: string;
+    id: number;
+    realm: { slug: string; name?: string };
+    level?: number;
+    playable_class?: { name?: string };
+    playable_race?: { name?: string };
+  };
+  rank: number;
 }
 
-const apiKey = import.meta.env.WOWAUDIT_API_KEY;
-const apiBase = (import.meta.env.WOWAUDIT_API_BASE ?? 'https://wowaudit.com').replace(/\/$/, '');
+interface EnrichedMember {
+  name: string;
+  realm: string;
+  className: string;
+  raceName: string;
+  level: number;
+  rank: number;
+  achievementPoints: number;
+  mountCount: number;
+  petCount: number;
+  toyCount: number;
+}
 
-let characters: Character[] = [];
-let errorMessage = '';
+const CLASS_COLORS: Record<string, string> = {
+  'Death Knight': '#C41E3A',
+  'Demon Hunter': '#A330C9',
+  'Druid': '#FF7C0A',
+  'Evoker': '#33937F',
+  'Hunter': '#AAD372',
+  'Mage': '#3FC7EB',
+  'Monk': '#00FF98',
+  'Paladin': '#F48CBA',
+  'Priest': '#FFFFFF',
+  'Rogue': '#FFF468',
+  'Shaman': '#0070DD',
+  'Warlock': '#8788EE',
+  'Warrior': '#C69B3A',
+};
 
-if (!apiKey) {
-  errorMessage = 'Roster API key is not configured. Set WOWAUDIT_API_KEY in your environment.';
-} else {
-  try {
-    const response = await fetch(`${apiBase}/v1/characters`, {
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        Accept: 'application/json'
-      }
+function formatRealmFromSlug(slug: string): string {
+  return slug
+    .split('-')
+    .filter(Boolean)
+    .map((part) => part[0]?.toUpperCase() + part.slice(1))
+    .join(' ');
+}
+
+const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+async function fetchJsonWithRetry(url: string, accessToken: string, attempts = 3) {
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    const response = await fetch(url, {
+      headers: { Authorization: `Bearer ${accessToken}` },
     });
 
-    if (!response.ok) {
-      throw new Error(`WoWAudit API request failed with status ${response.status}`);
+    if (response.ok) {
+      return await response.json();
     }
 
-    const payload = await response.json();
-    characters = Array.isArray(payload) ? payload : [];
-  } catch (error) {
-    errorMessage = error instanceof Error
-      ? error.message
-      : 'Unable to load roster data from WoWAudit.';
+    const retryable = response.status === 429 || response.status >= 500;
+    if (!retryable || attempt === attempts) {
+      return null;
+    }
+
+    const retryAfterHeader = response.headers.get('retry-after');
+    const retryAfterSeconds = retryAfterHeader ? Number(retryAfterHeader) : 0;
+    const backoff = retryAfterSeconds > 0 ? retryAfterSeconds * 1000 : attempt * 350;
+    await delay(backoff);
+  }
+
+  return null;
+}
+
+async function mapWithConcurrency<T, R>(
+  items: T[],
+  concurrency: number,
+  mapper: (item: T, index: number) => Promise<R>
+): Promise<R[]> {
+  const output: R[] = new Array(items.length);
+  let nextIndex = 0;
+
+  async function worker() {
+    while (nextIndex < items.length) {
+      const currentIndex = nextIndex;
+      nextIndex += 1;
+      output[currentIndex] = await mapper(items[currentIndex], currentIndex);
+    }
+  }
+
+  const workerCount = Math.max(1, Math.min(concurrency, items.length));
+  await Promise.all(Array.from({ length: workerCount }, () => worker()));
+  return output;
+}
+
+let members: EnrichedMember[] = [];
+let errorMessage = '';
+
+if (!clientId || !clientSecret) {
+  errorMessage = 'Blizzard API credentials are not configured. Set BLIZZARD_CLIENT_ID and BLIZZARD_CLIENT_SECRET in your environment.';
+} else {
+  try {
+    const credentials = btoa(`${clientId}:${clientSecret}`);
+    const tokenRes = await fetch('https://oauth.battle.net/token', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        Authorization: `Basic ${credentials}`,
+      },
+      body: 'grant_type=client_credentials',
+    });
+    if (!tokenRes.ok) {
+      throw new Error(`Failed to obtain Blizzard access token (HTTP ${tokenRes.status})`);
+    }
+
+    const { access_token } = await tokenRes.json();
+
+    const rosterRes = await fetch(
+      `https://${REGION}.api.blizzard.com/data/wow/guild/${GUILD_REALM_SLUG}/${GUILD_NAME_SLUG}/roster?namespace=profile-${REGION}&locale=en_US`,
+      { headers: { Authorization: `Bearer ${access_token}` } }
+    );
+
+    if (!rosterRes.ok) {
+      throw new Error(`Blizzard guild roster request failed (HTTP ${rosterRes.status})`);
+    }
+
+    const data = await rosterRes.json();
+    const rosterMembers: GuildRosterMember[] = Array.isArray(data.members) ? data.members : [];
+
+    members = await mapWithConcurrency(rosterMembers, 8, async (member) => {
+        const fallbackRealm = member.character.realm.name ?? formatRealmFromSlug(member.character.realm.slug);
+        const characterName = member.character.name;
+        const encodedName = encodeURIComponent(characterName.toLowerCase());
+        const realmSlug = member.character.realm.slug;
+        const fallbackClass = member.character.playable_class?.name ?? 'Unknown';
+        const fallbackRace = member.character.playable_race?.name ?? 'Unknown';
+        const fallbackLevel = Number(member.character.level ?? 0);
+
+        const collectionBase = `https://${REGION}.api.blizzard.com/profile/wow/character/${realmSlug}/${encodedName}/collections`;
+
+        const [profile, mounts, pets, toys] = await Promise.all([
+          fetchJsonWithRetry(
+            `https://${REGION}.api.blizzard.com/profile/wow/character/${realmSlug}/${encodedName}?namespace=profile-${REGION}&locale=en_US`,
+            access_token
+          ),
+          fetchJsonWithRetry(`${collectionBase}/mounts?namespace=profile-${REGION}&locale=en_US`, access_token),
+          fetchJsonWithRetry(`${collectionBase}/pets?namespace=profile-${REGION}&locale=en_US`, access_token),
+          fetchJsonWithRetry(`${collectionBase}/toys?namespace=profile-${REGION}&locale=en_US`, access_token),
+        ]);
+
+        return {
+          name: characterName,
+          realm: profile?.realm?.name ?? fallbackRealm,
+          className: profile?.character_class?.name ?? profile?.playable_class?.name ?? fallbackClass,
+          raceName: profile?.race?.name ?? profile?.playable_race?.name ?? fallbackRace,
+          level: Number(profile?.level ?? fallbackLevel),
+          rank: member.rank,
+          achievementPoints: Number(profile?.achievement_points ?? 0),
+          mountCount: Array.isArray(mounts?.mounts) ? mounts.mounts.length : 0,
+          petCount: Array.isArray(pets?.pets) ? pets.pets.length : 0,
+          toyCount: Array.isArray(toys?.toys) ? toys.toys.length : 0,
+        };
+      });
+  } catch (err) {
+    errorMessage = err instanceof Error ? err.message : 'Unable to load roster from Blizzard API.';
   }
 }
 
-const roleOrder = ['Tank', 'Healer', 'Ranged', 'Melee'];
-
-const sortedCharacters = [...characters].sort((a, b) => {
-  const rankCompare = a.rank.localeCompare(b.rank);
-  if (rankCompare !== 0) return rankCompare;
-
-  const roleA = roleOrder.indexOf(a.role);
-  const roleB = roleOrder.indexOf(b.role);
-  if (roleA !== roleB) return (roleA === -1 ? 99 : roleA) - (roleB === -1 ? 99 : roleB);
-
+const sortedMembers = [...members].sort((a, b) => {
+  if (a.rank !== b.rank) return a.rank - b.rank;
   return a.name.localeCompare(b.name);
+});
+
+const classOptions = [...new Set(sortedMembers.map((member) => member.className))].sort((a, b) =>
+  a.localeCompare(b)
+);
+
+const rankOptions = [...new Set(sortedMembers.map((member) => member.rank))].sort((a, b) => a - b);
+
+function topBy(field: keyof Pick<EnrichedMember, 'achievementPoints' | 'mountCount' | 'petCount' | 'toyCount'>) {
+  return sortedMembers.reduce(
+    (best, m) => (m[field] > (best?.value ?? -1) ? { name: m.name, className: m.className, value: m[field] } : best),
+    null as { name: string; className: string; value: number } | null
+  );
+}
+
+const spotlights = [
+  { label: 'Achievements', icon: 'lucide:trophy', field: 'achievementPoints' as const, format: (n: number) => n.toLocaleString() },
+  { label: 'Mounts',       icon: 'lucide:dog',    field: 'mountCount'        as const, format: (n: number) => String(n) },
+  { label: 'Pets',         icon: 'lucide:paw-print', field: 'petCount'       as const, format: (n: number) => String(n) },
+  { label: 'Toys',         icon: 'lucide:puzzle',    field: 'toyCount'       as const, format: (n: number) => String(n) },
+].map(({ label, icon, field, format }) => {
+  const top = topBy(field);
+  return { label, icon, field, name: top?.name ?? '—', className: top?.className ?? '', value: top ? format(top.value) : '—' };
 });
 ---
 
-<Layout title="The Hidden Lodge | Roster" description="Live guild roster pulled from WoWAudit.">
+<Layout title="The Hidden Lodge | Roster" description="Full guild roster sourced live from the Blizzard API.">
   <section>
     <h1 class="title-row"><Icon name="lucide:users-round" class="title-icon" aria-hidden="true" />Roster</h1>
     <p>
-      Live roster data synced from WoWAudit. This page updates whenever the site is rebuilt.
+      Live roster sourced directly from the Blizzard API. This page updates whenever the site is rebuilt.
     </p>
   </section>
+
+  {!errorMessage && (
+    <section class="spotlights" aria-label="Top players">
+      {spotlights.map(({ label, icon, name, className, value }) => {
+        const classColor = CLASS_COLORS[className] ?? '#d8e2e8';
+        return (
+          <article class="spotlight-card">
+            <header class="spotlight-header">
+              <Icon name={icon} class="spotlight-icon" aria-hidden="true" />
+              <span class="spotlight-label">{label}</span>
+            </header>
+            <p class="spotlight-value">{value}</p>
+            <p class="spotlight-name" style={`color: ${classColor}`}>{name}</p>
+          </article>
+        );
+      })}
+    </section>
+  )}
 
   {
     errorMessage ? (
@@ -74,48 +241,241 @@ const sortedCharacters = [...characters].sort((a, b) => {
       </section>
     ) : (
       <section class="panel">
-        <h2 class="title-row"><Icon name="lucide:list" class="title-icon" aria-hidden="true" />Tracked Characters ({sortedCharacters.length})</h2>
-        <div class="roster-grid">
-          {
-            sortedCharacters.map((character) => (
-              <article class="character-card">
-                <header>
-                  <h3>{character.name}</h3>
-                  <p>{character.realm}</p>
-                </header>
+        <h2 class="title-row"><Icon name="lucide:list" class="title-icon" aria-hidden="true" />Guild Members ({sortedMembers.length})</h2>
+        <div class="controls" aria-label="Roster controls">
+          <label>
+            Search
+            <input id="roster-search" type="search" placeholder="Character name..." autocomplete="off" />
+          </label>
+          <label>
+            Class
+            <select id="roster-class-filter">
+              <option value="all">All Classes</option>
+              {
+                classOptions.map((className) => (
+                  <option value={className}>{className}</option>
+                ))
+              }
+            </select>
+          </label>
+          <label>
+            Rank
+            <select id="roster-rank-filter">
+              <option value="all">All Ranks</option>
+              {
+                rankOptions.map((rank) => (
+                  <option value={String(rank)}>{rank}</option>
+                ))
+              }
+            </select>
+          </label>
+        </div>
 
-                <dl>
-                  <div>
-                    <dt>Class</dt>
-                    <dd>{character.class}</dd>
-                  </div>
-                  <div>
-                    <dt>Role</dt>
-                    <dd>{character.role}</dd>
-                  </div>
-                  <div>
-                    <dt>Rank</dt>
-                    <dd>{character.rank}</dd>
-                  </div>
-                  <div>
-                    <dt>Status</dt>
-                    <dd>{character.status}</dd>
-                  </div>
-                </dl>
-
-                {
-                  character.note ? (
-                    <p class="note">{character.note}</p>
-                  ) : null
-                }
-              </article>
-            ))
-          }
+        <div class="table-wrap">
+          <div class="pagination-controls">
+            <label>
+              Per page
+              <select id="roster-page-size">
+                <option value="25" selected>25</option>
+                <option value="50">50</option>
+                <option value="100">100</option>
+                <option value="200">200</option>
+              </select>
+            </label>
+            <button id="roster-prev-page" type="button">Prev</button>
+            <span id="roster-page-info">Page 1</span>
+            <button id="roster-next-page" type="button">Next</button>
+            <p id="roster-count" class="results-count" aria-live="polite">Showing {sortedMembers.length} members</p>
+          </div>
+          <table class="roster-table" id="roster-table">
+            <thead>
+              <tr>
+                <th><button class="sort-btn" type="button" data-sort-key="name">Name</button></th>
+                <th><button class="sort-btn" type="button" data-sort-key="class">Class</button></th>
+                <th><button class="sort-btn" type="button" data-sort-key="level">Level</button></th>
+                <th><button class="sort-btn" type="button" data-sort-key="rank">Rank</button></th>
+                
+                <th><button class="sort-btn" type="button" data-sort-key="achievementPoints">Achieves</button></th>
+                <th><button class="sort-btn" type="button" data-sort-key="mountCount">Mounts</button></th>
+                <th><button class="sort-btn" type="button" data-sort-key="petCount">Pets</button></th>
+                <th><button class="sort-btn" type="button" data-sort-key="toyCount">Toys</button></th>
+                  <th>Raider.IO</th>
+              </tr>
+            </thead>
+            <tbody>
+              {
+                sortedMembers.map((member) => {
+                  const classColor = CLASS_COLORS[member.className] ?? '#d8e2e8';
+                  return (
+                    <tr
+                      data-name={member.name.toLowerCase()}
+                      data-class={member.className}
+                      data-level={String(member.level)}
+                      data-rank={String(member.rank)}
+                      
+                      data-achievement-points={String(member.achievementPoints)}
+                      data-mount-count={String(member.mountCount)}
+                      data-pet-count={String(member.petCount)}
+                      data-toy-count={String(member.toyCount)}
+                    >
+                      <td><span class="name-pill" style={`--class-color: ${classColor}`}>{member.name}</span></td>
+                      <td>{member.className}</td>
+                      <td>{member.level}</td>
+                      <td>{member.rank}</td>
+                      
+                      <td>{member.achievementPoints > 0 ? member.achievementPoints.toLocaleString() : '—'}</td>
+                      <td>{member.mountCount > 0 ? member.mountCount : '—'}</td>
+                      <td>{member.petCount > 0 ? member.petCount : '—'}</td>
+                      <td>{member.toyCount > 0 ? member.toyCount : '—'}</td>
+                        <td>
+                          {member.name && member.realm ? (
+                            <a
+                              href={`https://raider.io/characters/us/${encodeURIComponent(member.realm.replace(/[' ]/g, '') )}/${encodeURIComponent(member.name)}`}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              class="rio-link"
+                            >View</a>
+                          ) : '—'}
+                        </td>
+                    </tr>
+                  );
+                })
+              }
+            </tbody>
+          </table>
         </div>
       </section>
     )
   }
 </Layout>
+
+<script>
+  const pageSizeSelect = document.querySelector('#roster-page-size');
+  const prevPageBtn = document.querySelector('#roster-prev-page');
+  const nextPageBtn = document.querySelector('#roster-next-page');
+  const pageInfo = document.querySelector('#roster-page-info');
+
+  let currentPage = 1;
+  let pageSize = 25;
+
+  const searchInput = document.querySelector('#roster-search');
+  const classFilter = document.querySelector('#roster-class-filter');
+  const rankFilter = document.querySelector('#roster-rank-filter');
+  const countLabel = document.querySelector('#roster-count');
+  const table = document.querySelector('#roster-table');
+  const tableBody = table?.querySelector('tbody');
+  const sortButtons = [...document.querySelectorAll('.sort-btn')];
+
+  let sortKey = 'rank';
+  let sortDirection = 'asc';
+
+  const compareText = (a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' });
+
+  function applyFiltersAndSort() {
+    if (!tableBody) return;
+
+    const query = searchInput?.value.trim().toLowerCase() ?? '';
+    const selectedClass = classFilter?.value ?? 'all';
+    const selectedRank = rankFilter?.value ?? 'all';
+
+    const rows = [...tableBody.querySelectorAll('tr')];
+    const visibleRows = rows.filter((row) => {
+      const rowName = row.dataset.name ?? '';
+      const rowClass = row.dataset.class ?? '';
+      const rowRank = row.dataset.rank ?? '';
+
+      const matchesSearch = query.length === 0 || rowName.includes(query);
+      const matchesClass = selectedClass === 'all' || rowClass === selectedClass;
+      const matchesRank = selectedRank === 'all' || rowRank === selectedRank;
+
+      return matchesSearch && matchesClass && matchesRank;
+    });
+
+    rows.forEach((row) => {
+      row.hidden = !visibleRows.includes(row);
+    });
+
+  visibleRows.sort((rowA, rowB) => {
+      const toAttr = (key: string) => key.replace(/[A-Z]/g, (c) => `-${c.toLowerCase()}`);
+      const valueA = rowA.dataset[toAttr(sortKey)] ?? rowA.dataset[sortKey] ?? '';
+      const valueB = rowB.dataset[toAttr(sortKey)] ?? rowB.dataset[sortKey] ?? '';
+      const isNumericSort = sortKey === 'level' || sortKey === 'rank' || sortKey === 'achievementPoints' || sortKey === 'mountCount' || sortKey === 'petCount' || sortKey === 'toyCount';
+
+      let order = 0;
+      if (isNumericSort) {
+        order = Number(valueA) - Number(valueB);
+      } else {
+        order = compareText(valueA, valueB);
+      }
+
+      return sortDirection === 'asc' ? order : order * -1;
+    });
+
+      const totalPages = Math.max(1, Math.ceil(visibleRows.length / pageSize));
+      if (currentPage > totalPages) currentPage = totalPages;
+      const startIdx = (currentPage - 1) * pageSize;
+      const endIdx = startIdx + pageSize;
+      const pageRows = visibleRows.slice(startIdx, endIdx);
+
+      rows.forEach((row) => {
+        row.hidden = !pageRows.includes(row);
+      });
+
+      if (pageInfo) pageInfo.textContent = `Page ${currentPage} of ${totalPages}`;
+      prevPageBtn.disabled = currentPage <= 1;
+      nextPageBtn.disabled = currentPage >= totalPages;
+
+    visibleRows.forEach((row) => tableBody.appendChild(row));
+    if (countLabel) {
+        countLabel.textContent = `Showing ${visibleRows.length} member${visibleRows.length === 1 ? '' : 's'} (page ${currentPage})`;
+    }
+
+    sortButtons.forEach((button) => {
+      const isActive = button.dataset.sortKey === sortKey;
+      button.setAttribute('aria-sort', isActive ? sortDirection : 'none');
+    });
+  }
+
+    pageSizeSelect?.addEventListener('change', () => {
+      pageSize = Number(pageSizeSelect.value) || 25;
+      currentPage = 1;
+      applyFiltersAndSort();
+    });
+
+    prevPageBtn?.addEventListener('click', () => {
+      if (currentPage > 1) {
+        currentPage -= 1;
+        applyFiltersAndSort();
+      }
+    });
+
+    nextPageBtn?.addEventListener('click', () => {
+      currentPage += 1;
+      applyFiltersAndSort();
+    });
+
+  searchInput?.addEventListener('input', applyFiltersAndSort);
+  classFilter?.addEventListener('change', applyFiltersAndSort);
+  rankFilter?.addEventListener('change', applyFiltersAndSort);
+
+  sortButtons.forEach((button) => {
+    button.addEventListener('click', () => {
+      const nextKey = button.dataset.sortKey;
+      if (!nextKey) return;
+
+      if (nextKey === sortKey) {
+        sortDirection = sortDirection === 'asc' ? 'desc' : 'asc';
+      } else {
+        sortKey = nextKey;
+        sortDirection = 'asc';
+      }
+
+      applyFiltersAndSort();
+    });
+  });
+
+  applyFiltersAndSort();
+</script>
 
 <style>
   h1 {
@@ -161,6 +521,41 @@ const sortedCharacters = [...characters].sort((a, b) => {
     margin: 0.75rem 0 0;
   }
 
+  .controls {
+    margin-top: 1rem;
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 0.65rem;
+    align-items: end;
+  }
+
+  .controls label {
+    display: grid;
+    gap: 0.4rem;
+    color: #e7d9bc;
+    font-size: 0.86rem;
+    letter-spacing: 0.03em;
+    text-transform: uppercase;
+  }
+
+  .controls input,
+  .controls select {
+    border: 1px solid rgba(214, 176, 106, 0.4);
+    border-radius: 0.45rem;
+    background: rgba(7, 14, 22, 0.85);
+    color: #d8e2e8;
+    padding: 0.5rem 0.6rem;
+    font-size: 0.94rem;
+  }
+
+  .results-count {
+    margin: 0 0 0 auto;
+    text-align: right;
+    font-size: 0.95rem;
+    color: #d8e2e8;
+    white-space: nowrap;
+  }
+
   .error-panel {
     border-color: rgba(191, 86, 68, 0.6);
     background:
@@ -168,73 +563,197 @@ const sortedCharacters = [...characters].sort((a, b) => {
       rgba(25, 16, 18, 0.78);
   }
 
-  .roster-grid {
-    margin-top: 0.85rem;
+  .spotlights {
     display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-columns: repeat(4, minmax(0, 1fr));
     gap: 0.75rem;
+    margin-top: 1rem;
   }
 
-  .character-card {
-    border: 1px solid rgba(214, 176, 106, 0.24);
-    border-radius: 0.65rem;
-    background: rgba(5, 10, 16, 0.55);
-    padding: 0.75rem;
-  }
-
-  .character-card header {
-    margin-bottom: 0.55rem;
-  }
-
-  .character-card h3 {
-    margin: 0;
-    font-size: 1.08rem;
-    color: #f5e4be;
-  }
-
-  .character-card header p {
-    margin: 0.1rem 0 0;
-    color: #afc1cd;
-    font-size: 0.95rem;
-  }
-
-  .character-card dl {
-    margin: 0;
+  .spotlight-card {
+    border: 1px solid rgba(214, 176, 106, 0.32);
+    border-radius: 0.75rem;
+    background:
+      linear-gradient(155deg, rgba(214, 176, 106, 0.07), transparent 50%),
+      rgba(11, 21, 32, 0.78);
+    padding: 1rem 1.1rem;
     display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 0.45rem 0.7rem;
+    gap: 0.25rem;
   }
 
-  .character-card dt {
-    color: #afc1cd;
-    font-size: 0.86rem;
+  .spotlight-header {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    color: #b0c4d0;
+    font-size: 0.82rem;
+    letter-spacing: 0.05em;
     text-transform: uppercase;
-    letter-spacing: 0.04em;
   }
 
-  .character-card dd {
-    margin: 0.05rem 0 0;
-    color: #d8e2e8;
-    font-size: 0.98rem;
+  .spotlight-icon {
+    width: 0.95rem;
+    height: 0.95rem;
+    flex-shrink: 0;
   }
 
-  .note {
-    margin: 0.62rem 0 0;
-    padding-top: 0.5rem;
-    border-top: 1px solid rgba(214, 176, 106, 0.2);
-    color: #d8e2e8;
-    font-size: 0.95rem;
-    line-height: 1.45;
+  .spotlight-value {
+    margin: 0.35rem 0 0;
+    font-family: 'Cinzel', serif;
+    font-size: clamp(1.4rem, 2.5vw, 1.9rem);
+    font-weight: 700;
+    color: #f1d9a9;
+    line-height: 1;
   }
 
-  @media (max-width: 1000px) {
-    .roster-grid {
+  .spotlight-name {
+    margin: 0.3rem 0 0;
+    font-size: 0.97rem;
+    font-weight: 600;
+  }
+
+  @media (max-width: 860px) {
+    .spotlights {
       grid-template-columns: repeat(2, minmax(0, 1fr));
     }
   }
 
+  @media (max-width: 480px) {
+    .spotlights {
+      grid-template-columns: 1fr;
+    }
+  }
+
+  .table-wrap {
+    margin-top: 0.85rem;
+    overflow-x: auto;
+    border: 1px solid rgba(214, 176, 106, 0.24);
+    border-radius: 0.65rem;
+    background: rgba(5, 10, 16, 0.55);
+  }
+
+  .pagination-controls {
+    display: flex;
+    align-items: center;
+    gap: 0.7rem;
+    padding: 0.9rem 1rem;
+    border-bottom: 1px solid rgba(214, 176, 106, 0.18);
+    background: rgba(15, 28, 43, 0.55);
+  }
+
+  .pagination-controls label {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin-right: 0.35rem;
+    color: #e7d9bc;
+    font-size: 0.82rem;
+    letter-spacing: 0.03em;
+    text-transform: uppercase;
+  }
+
+  .pagination-controls select,
+  .pagination-controls button {
+    border: 1px solid rgba(214, 176, 106, 0.42);
+    border-radius: 0.45rem;
+    background: rgba(7, 14, 22, 0.85);
+    color: #d8e2e8;
+    height: 2rem;
+    padding: 0 0.6rem;
+    font-size: 0.9rem;
+  }
+
+  .pagination-controls button {
+    cursor: pointer;
+  }
+
+  .pagination-controls button:disabled {
+    opacity: 0.45;
+    cursor: default;
+  }
+
+  #roster-page-info {
+    min-width: 7.8rem;
+    text-align: center;
+    color: #d8e2e8;
+    font-size: 0.9rem;
+  }
+
+  .roster-table {
+    width: 100%;
+    border-collapse: collapse;
+    min-width: 980px;
+  }
+
+  .roster-table th,
+  .roster-table td {
+    border-bottom: 1px solid rgba(214, 176, 106, 0.18);
+    padding: 0.58rem 0.65rem;
+    text-align: left;
+    color: #d8e2e8;
+    font-size: 0.95rem;
+  }
+
+  .roster-table thead th {
+    background: rgba(15, 28, 43, 0.88);
+    position: sticky;
+    top: 0;
+    z-index: 1;
+  }
+
+  .roster-table tbody tr:hover {
+    background: rgba(214, 176, 106, 0.08);
+  }
+
+  .sort-btn {
+    width: 100%;
+    border: 0;
+    background: transparent;
+    color: #e4c27a;
+    font-weight: 700;
+    letter-spacing: 0.03em;
+    text-transform: uppercase;
+    font-size: 0.78rem;
+    text-align: left;
+    cursor: pointer;
+    padding: 0;
+  }
+
+  .sort-btn[aria-sort='asc']::after {
+    content: ' ▲';
+    font-size: 0.7rem;
+  }
+
+  .sort-btn[aria-sort='desc']::after {
+    content: ' ▼';
+    font-size: 0.7rem;
+  }
+
+  .name-pill {
+    color: var(--class-color, #d8e2e8);
+    font-weight: 700;
+  }
+
+
+  @media (max-width: 1000px) {
+    .controls {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .results-count {
+      margin-left: 0;
+      text-align: left;
+      width: 100%;
+    }
+
+    .pagination-controls {
+      flex-wrap: wrap;
+      row-gap: 0.55rem;
+    }
+  }
+
   @media (max-width: 640px) {
-    .roster-grid {
+    .controls {
       grid-template-columns: 1fr;
     }
   }
