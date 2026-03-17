@@ -127,19 +127,39 @@ if (!clientId || !clientSecret) {
 
     const { access_token } = await tokenRes.json();
 
-    const rosterRes = await fetch(
-      `https://${REGION}.api.blizzard.com/data/wow/guild/${GUILD_REALM_SLUG}/${GUILD_NAME_SLUG}/roster?namespace=profile-${REGION}&locale=en_US`,
-      { headers: { Authorization: `Bearer ${access_token}` } }
-    );
+    let rosterRes: Response | null = null;
+    for (let attempt = 1; attempt <= 5; attempt += 1) {
+      rosterRes = await fetch(
+        `https://${REGION}.api.blizzard.com/data/wow/guild/${GUILD_REALM_SLUG}/${GUILD_NAME_SLUG}/roster?namespace=profile-${REGION}&locale=en_US`,
+        { headers: { Authorization: `Bearer ${access_token}` } }
+      );
 
-    if (!rosterRes.ok) {
-      throw new Error(`Blizzard guild roster request failed (HTTP ${rosterRes.status})`);
+      if (rosterRes.ok) {
+        break;
+      }
+
+      const retryable = rosterRes.status === 429 || rosterRes.status >= 500;
+      if (!retryable || attempt === 5) {
+        break;
+      }
+
+      const retryAfterHeader = rosterRes.headers.get('retry-after');
+      const retryAfterSeconds = retryAfterHeader ? Number(retryAfterHeader) : 0;
+      const backoff = retryAfterSeconds > 0 ? retryAfterSeconds * 1000 : attempt * 1500;
+      await delay(backoff);
+    }
+
+    if (!rosterRes?.ok) {
+      if (rosterRes?.status === 429) {
+        throw new Error('Blizzard API rate limit reached (HTTP 429). Please wait a minute and refresh.');
+      }
+      throw new Error(`Blizzard guild roster request failed (HTTP ${rosterRes?.status ?? 'unknown'})`);
     }
 
     const data = await rosterRes.json();
     const rosterMembers: GuildRosterMember[] = Array.isArray(data.members) ? data.members : [];
 
-    members = await mapWithConcurrency(rosterMembers, 8, async (member) => {
+    members = await mapWithConcurrency(rosterMembers, 4, async (member) => {
         const fallbackRealm = member.character.realm.name ?? formatRealmFromSlug(member.character.realm.slug);
         const characterName = member.character.name;
         const encodedName = encodeURIComponent(characterName.toLowerCase());
@@ -269,6 +289,13 @@ const spotlights = [
               }
             </select>
           </label>
+          <label>
+            Level
+            <select id="roster-level-filter">
+              <option value="90" selected>Level 90</option>
+              <option value="all">All Levels</option>
+            </select>
+          </label>
         </div>
 
         <div class="table-wrap">
@@ -361,6 +388,7 @@ const spotlights = [
   const searchInput = document.querySelector<HTMLInputElement>('#roster-search');
   const classFilter = document.querySelector<HTMLSelectElement>('#roster-class-filter');
   const rankFilter = document.querySelector<HTMLSelectElement>('#roster-rank-filter');
+  const levelFilter = document.querySelector<HTMLSelectElement>('#roster-level-filter');
   const countLabel = document.querySelector<HTMLParagraphElement>('#roster-count');
   const table = document.querySelector<HTMLTableElement>('#roster-table');
   const tableBody = table?.querySelector('tbody');
@@ -377,18 +405,21 @@ const spotlights = [
     const query = searchInput?.value.trim().toLowerCase() ?? '';
     const selectedClass = classFilter?.value ?? 'all';
     const selectedRank = rankFilter?.value ?? 'all';
+    const selectedLevel = levelFilter?.value ?? '90';
 
     const rows = [...tableBody.querySelectorAll('tr')];
     const visibleRows = rows.filter((row) => {
       const rowName = row.dataset.name ?? '';
       const rowClass = row.dataset.class ?? '';
       const rowRank = row.dataset.rank ?? '';
+      const rowLevel = row.dataset.level ?? '';
 
       const matchesSearch = query.length === 0 || rowName.includes(query);
       const matchesClass = selectedClass === 'all' || rowClass === selectedClass;
       const matchesRank = selectedRank === 'all' || rowRank === selectedRank;
+      const matchesLevel = selectedLevel === 'all' || rowLevel === selectedLevel;
 
-      return matchesSearch && matchesClass && matchesRank;
+      return matchesSearch && matchesClass && matchesRank && matchesLevel;
     });
 
     rows.forEach((row) => {
@@ -457,6 +488,7 @@ const spotlights = [
   searchInput?.addEventListener('input', applyFiltersAndSort);
   classFilter?.addEventListener('change', applyFiltersAndSort);
   rankFilter?.addEventListener('change', applyFiltersAndSort);
+  levelFilter?.addEventListener('change', applyFiltersAndSort);
 
   sortButtons.forEach((button) => {
     button.addEventListener('click', () => {
