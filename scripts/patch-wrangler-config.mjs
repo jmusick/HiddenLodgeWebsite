@@ -16,4 +16,20 @@ if (existsSync(generatedWorkerConfigPath)) {
 }
 
 mkdirSync(workerEntryDir, { recursive: true });
-writeFileSync(workerIndexPath, "export { default } from './entry.mjs';\n", 'utf8');
+
+const indexContent = `\
+import astroHandler from './entry.mjs';
+export default astroHandler;
+
+export const scheduled = async (event, env, ctx) => {
+  const fetchFn = typeof astroHandler === 'function'
+    ? astroHandler
+    : astroHandler.fetch.bind(astroHandler);
+  const req = new Request('https://placeholder/api/cron/refresh-roster', {
+    method: 'POST',
+    headers: { 'X-Cron-Secret': env.CRON_SECRET ?? '' },
+  });
+  await fetchFn(req, env, ctx);
+};
+`;
+writeFileSync(workerIndexPath, indexContent, 'utf8');
