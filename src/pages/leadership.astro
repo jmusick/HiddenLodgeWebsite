@@ -1,5 +1,6 @@
 ---
 import Layout from '../layouts/Layout.astro';
+import { dadJokes } from '../data/dadJokes';
 
 const leaders = [
   {
@@ -21,9 +22,9 @@ const leaders = [
     bio: 'Our logistical mastermind and certified M+ goblin. If a key exists, Nic has timed it, rerolled for it, and theorycrafted it.'
   },
   {
-    name: 'Sunsource',
+    name: 'Sunsourse',
     title: 'Guild Strategist',
-    portrait: '/images/leadership/sunsource.png',
+    portrait: '/images/leadership/sunsourse.png',
     bio: 'The prodigal son returns bearing spreadsheets, diagrams, and exactly one sentence that instantly fixes the wipe count.'
   },
   {
@@ -87,17 +88,30 @@ const getInitials = (name: string) =>
           <p class="kicker">{leader.title}</p>
           <h2>{leader.name}</h2>
           <p>{leader.bio}</p>
+          {
+            leader.name === 'Xing' && (
+              <p class="dad-joke" data-xing-joke>
+                Loading...
+              </p>
+            )
+          }
         </article>
       ))
     }
   </section>
 
-  <script>
-    const lightbox = document.getElementById('lightbox') as HTMLElement;
-    const lightboxImg = document.getElementById('lightbox-img') as HTMLImageElement;
-    const closeBtn = document.getElementById('lightbox-close') as HTMLButtonElement;
+  <script define:vars={{ dadJokes }}>
+    const lightbox = document.getElementById('lightbox');
+    const lightboxImg = document.getElementById('lightbox-img');
+    const closeBtn = document.getElementById('lightbox-close');
+    const xingJoke = document.querySelector('[data-xing-joke]');
 
-    function openLightbox(src: string, name: string) {
+    if (xingJoke && Array.isArray(dadJokes) && dadJokes.length > 0) {
+      const randomIndex = Math.floor(Math.random() * dadJokes.length);
+      xingJoke.textContent = dadJokes[randomIndex];
+    }
+
+    function openLightbox(src, name) {
       lightboxImg.src = src;
       lightboxImg.alt = name;
       lightbox.hidden = false;
@@ -111,15 +125,15 @@ const getInitials = (name: string) =>
       document.body.style.overflow = '';
     }
 
-    document.querySelectorAll<HTMLButtonElement>('.portrait-btn').forEach((btn) => {
+    document.querySelectorAll('.portrait-btn').forEach((btn) => {
       btn.addEventListener('click', () => {
-        openLightbox(btn.dataset.src!, btn.dataset.name!);
+        openLightbox(btn.dataset.src, btn.dataset.name);
       });
     });
 
-    closeBtn.addEventListener('click', closeLightbox);
+    if (closeBtn) closeBtn.addEventListener('click', closeLightbox);
 
-    lightbox.addEventListener('click', (e) => {
+    if (lightbox) lightbox.addEventListener('click', (e) => {
       if (e.target === lightbox) closeLightbox();
     });
 
@@ -154,6 +168,7 @@ const getInitials = (name: string) =>
     grid-template-columns: auto 1fr;
     column-gap: 0.9rem;
     align-items: start;
+    align-content: start;
     border: 1px solid rgba(214, 176, 106, 0.38);
     border-radius: 0.75rem;
     background:
@@ -264,6 +279,16 @@ const getInitials = (name: string) =>
     line-height: 1.55;
     grid-column: 2;
     margin-top: 0.15rem;
+  }
+
+  .dad-joke {
+    margin-top: 0.55rem;
+    padding: 0.55rem 0.65rem;
+    border: 1px dashed rgba(214, 176, 106, 0.4);
+    border-radius: 0.5rem;
+    background: rgba(214, 176, 106, 0.08);
+    color: #f0d39d;
+    font-size: 0.96rem;
   }
 
   .portrait + .kicker {
