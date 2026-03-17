@@ -7,4 +7,4 @@ pages_build_output_dir = "dist"
 binding = "DB"
 database_name = "hidden-lodge-db"
 # Replace this with the ID from: npx wrangler d1 create hidden-lodge-db
-database_id = "placeholder-replace-with-your-database-id"
+database_id = "f51db21f-954c-4845-a829-a6900f5be5c3"
