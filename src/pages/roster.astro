@@ -350,26 +350,26 @@ const spotlights = [
 </Layout>
 
 <script>
-  const pageSizeSelect = document.querySelector('#roster-page-size');
-  const prevPageBtn = document.querySelector('#roster-prev-page');
-  const nextPageBtn = document.querySelector('#roster-next-page');
-  const pageInfo = document.querySelector('#roster-page-info');
+  const pageSizeSelect = document.querySelector<HTMLSelectElement>('#roster-page-size');
+  const prevPageBtn = document.querySelector<HTMLButtonElement>('#roster-prev-page');
+  const nextPageBtn = document.querySelector<HTMLButtonElement>('#roster-next-page');
+  const pageInfo = document.querySelector<HTMLSpanElement>('#roster-page-info');
 
   let currentPage = 1;
   let pageSize = 25;
 
-  const searchInput = document.querySelector('#roster-search');
-  const classFilter = document.querySelector('#roster-class-filter');
-  const rankFilter = document.querySelector('#roster-rank-filter');
-  const countLabel = document.querySelector('#roster-count');
-  const table = document.querySelector('#roster-table');
+  const searchInput = document.querySelector<HTMLInputElement>('#roster-search');
+  const classFilter = document.querySelector<HTMLSelectElement>('#roster-class-filter');
+  const rankFilter = document.querySelector<HTMLSelectElement>('#roster-rank-filter');
+  const countLabel = document.querySelector<HTMLParagraphElement>('#roster-count');
+  const table = document.querySelector<HTMLTableElement>('#roster-table');
   const tableBody = table?.querySelector('tbody');
-  const sortButtons = [...document.querySelectorAll('.sort-btn')];
+  const sortButtons = [...document.querySelectorAll<HTMLButtonElement>('.sort-btn')];
 
   let sortKey = 'rank';
   let sortDirection = 'asc';
 
-  const compareText = (a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' });
+  const compareText = (a: string, b: string) => a.localeCompare(b, undefined, { sensitivity: 'base' });
 
   function applyFiltersAndSort() {
     if (!tableBody) return;
@@ -422,8 +422,8 @@ const spotlights = [
       });
 
       if (pageInfo) pageInfo.textContent = `Page ${currentPage} of ${totalPages}`;
-      prevPageBtn.disabled = currentPage <= 1;
-      nextPageBtn.disabled = currentPage >= totalPages;
+      if (prevPageBtn) prevPageBtn.disabled = currentPage <= 1;
+      if (nextPageBtn) nextPageBtn.disabled = currentPage >= totalPages;
 
     visibleRows.forEach((row) => tableBody.appendChild(row));
     if (countLabel) {
