@@ -48,6 +48,18 @@ const classOptions = [...new Set(sortedMembers.map((member) => member.className)
 
 const rankOptions = [...new Set(sortedMembers.map((member) => member.rank))].sort((a, b) => a - b);
 
+const RANK_NAMES: Record<number, string> = {
+  0: 'Guild Master',
+  1: 'Guild Admin',
+  2: 'Guild Officer',
+  3: 'Officer Alt',
+  4: 'Raider',
+};
+
+function rankLabel(rank: number): string {
+  return RANK_NAMES[rank] ?? String(rank);
+}
+
 function topBy(field: keyof Pick<EnrichedMember, 'achievementPoints' | 'mountCount' | 'petCount' | 'toyCount'>) {
   return sortedMembers.reduce(
     (best, member) =>
@@ -143,7 +155,7 @@ const cacheNote =
               <option value="all">All Ranks</option>
               {
                 rankOptions.map((rank) => (
-                  <option value={String(rank)}>{rank}</option>
+                  <option value={String(rank)}>{rankLabel(rank)}</option>
                 ))
               }
             </select>
@@ -205,7 +217,7 @@ const cacheNote =
                       <td><span class="name-pill" style={`--class-color: ${classColor}`}>{member.name}</span></td>
                       <td>{member.className}</td>
                       <td>{member.level}</td>
-                      <td>{member.rank}</td>
+                      <td>{rankLabel(member.rank)}</td>
                       <td>{member.achievementPoints > 0 ? member.achievementPoints.toLocaleString() : '—'}</td>
                       <td>{member.mountCount > 0 ? member.mountCount : '—'}</td>
                       <td>{member.petCount > 0 ? member.petCount : '—'}</td>
