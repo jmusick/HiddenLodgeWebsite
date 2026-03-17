@@ -1,0 +1,12 @@
+# Copy this file to .dev.vars and fill in real values for local development.
+# .dev.vars is gitignored and is only used by Wrangler's local dev server.
+# For production, set these as secrets in the Cloudflare Pages dashboard.
+
+# From https://develop.battle.net/access/clients
+BLIZZARD_CLIENT_ID=your_client_id_here
+BLIZZARD_CLIENT_SECRET=your_client_secret_here
+
+# The OAuth redirect URI registered in your Blizzard app.
+# For local dev use: http://localhost:4321/auth/callback
+# For production use your Pages domain: https://yourdomain.pages.dev/auth/callback
+BLIZZARD_REDIRECT_URI=http://localhost:4321/auth/callback

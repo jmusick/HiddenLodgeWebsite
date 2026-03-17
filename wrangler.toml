@@ -1,0 +1,10 @@
+name = "hiddenlodgewebsite"
+compatibility_date = "2025-01-01"
+compatibility_flags = ["nodejs_compat"]
+pages_build_output_dir = "dist"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "hidden-lodge-db"
+# Replace this with the ID from: npx wrangler d1 create hidden-lodge-db
+database_id = "placeholder-replace-with-your-database-id"

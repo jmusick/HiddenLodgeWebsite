@@ -1,0 +1,325 @@
+---
+export const prerender = false;
+
+import Layout from '../layouts/Layout.astro';
+import { classColor, factionColor } from '../lib/wow';
+import { env } from 'cloudflare:workers';
+
+const user = Astro.locals.user;
+if (!user) {
+	return Astro.redirect('/auth/login');
+}
+
+interface CharacterRow {
+	id: number;
+	name: string;
+	realm: string;
+	class_name: string;
+	race_name: string;
+	faction: string;
+	level: number;
+	is_main: number;
+}
+
+const result = await env.DB.prepare(
+	'SELECT id, name, realm, class_name, race_name, faction, level, is_main FROM characters WHERE user_id = ? ORDER BY level DESC, name ASC'
+)
+	.bind(user.id)
+	.all<CharacterRow>();
+
+const characters: CharacterRow[] = (result.results ?? []) as CharacterRow[];
+const mainChar = characters.find((c) => c.is_main === 1) ?? null;
+---
+
+<Layout title="My Profile | The Hidden Lodge">
+	<div class="profile-page">
+		<header class="profile-header">
+			<div class="profile-avatar" aria-hidden="true">
+				{user.battleTag.charAt(0).toUpperCase()}
+			</div>
+			<div class="profile-identity">
+				<h1 class="battle-tag">{user.battleTag}</h1>
+				{
+					mainChar && (
+						<p class="main-summary">
+							Main:{' '}
+							<span style={`color: ${classColor(mainChar.class_name)}`}>
+								{mainChar.name}
+							</span>
+							&nbsp;&mdash;&nbsp;{mainChar.class_name} &middot; {mainChar.realm}
+						</p>
+					)
+				}
+			</div>
+			<a href="/auth/logout" class="logout-btn">Log Out</a>
+		</header>
+
+		<section class="characters-section" aria-labelledby="chars-heading">
+			<div class="section-title-row">
+				<h2 id="chars-heading">Your Characters</h2>
+				<span class="char-count">{characters.length} character{characters.length !== 1 ? 's' : ''}</span>
+			</div>
+
+			{
+				characters.length === 0 ? (
+					<p class="empty-state">
+						No characters found. Make sure your Battle.net account has WoW characters and try logging
+						out and back in to refresh.
+					</p>
+				) : (
+					<ul class="char-list">
+						{characters.map((char) => (
+							<li
+								class:list={['char-card', { 'is-main': char.is_main === 1 }]}
+								style={`--faction-bg: ${factionColor(char.faction)}`}
+							>
+								<div class="char-info">
+									<span
+										class="char-name"
+										style={`color: ${classColor(char.class_name)}`}
+									>
+										{char.name}
+										{char.is_main === 1 && <span class="main-badge">MAIN</span>}
+									</span>
+									<span class="char-meta">
+										{char.race_name} {char.class_name} &middot; Level {char.level} &middot;{' '}
+										{char.realm}
+									</span>
+									<span
+										class:list={[
+											'faction-tag',
+											char.faction === 'Alliance' ? 'alliance' : 'horde',
+										]}
+									>
+										{char.faction}
+									</span>
+								</div>
+								{char.is_main !== 1 && (
+									<form method="POST" action="/api/set-main" class="set-main-form">
+										<input type="hidden" name="character_id" value={char.id} />
+										<button type="submit" class="set-main-btn">Set as Main</button>
+									</form>
+								)}
+							</li>
+						))}
+					</ul>
+				)
+			}
+		</section>
+	</div>
+</Layout>
+
+<style>
+	.profile-page {
+		padding-block: 2rem;
+		display: flex;
+		flex-direction: column;
+		gap: 2.5rem;
+	}
+
+	/* ── Header ───────────────────────────────────────────────── */
+	.profile-header {
+		display: flex;
+		align-items: center;
+		gap: 1.25rem;
+		padding: 1.5rem;
+		background: var(--bg-panel);
+		border: 1px solid var(--border);
+		border-radius: 0.5rem;
+	}
+
+	.profile-avatar {
+		width: 3.5rem;
+		height: 3.5rem;
+		border-radius: 50%;
+		background: linear-gradient(135deg, var(--gold), var(--steel));
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		font-family: var(--font-display);
+		font-size: 1.5rem;
+		color: var(--bg);
+		font-weight: 700;
+		flex-shrink: 0;
+	}
+
+	.profile-identity {
+		flex: 1;
+	}
+
+	.battle-tag {
+		font-family: var(--font-display);
+		font-size: 1.4rem;
+		color: var(--gold-bright);
+		margin: 0 0 0.25rem;
+	}
+
+	.main-summary {
+		margin: 0;
+		color: var(--muted);
+		font-size: 0.95rem;
+	}
+
+	.logout-btn {
+		font-family: var(--font-body);
+		font-size: 0.85rem;
+		letter-spacing: 0.06em;
+		text-transform: uppercase;
+		padding: 0.45rem 1rem;
+		border: 1px solid var(--border);
+		border-radius: 0.25rem;
+		color: var(--muted);
+		transition: color 0.15s, border-color 0.15s;
+	}
+
+	.logout-btn:hover {
+		color: var(--text);
+		border-color: var(--gold);
+	}
+
+	/* ── Characters section ────────────────────────────────────── */
+	.section-title-row {
+		display: flex;
+		align-items: baseline;
+		gap: 1rem;
+		margin-bottom: 1rem;
+	}
+
+	.section-title-row h2 {
+		font-family: var(--font-display);
+		font-size: 1.1rem;
+		letter-spacing: 0.08em;
+		text-transform: uppercase;
+		color: var(--gold);
+		margin: 0;
+	}
+
+	.char-count {
+		font-size: 0.8rem;
+		color: var(--muted);
+	}
+
+	.empty-state {
+		color: var(--muted);
+		font-style: italic;
+	}
+
+	.char-list {
+		list-style: none;
+		margin: 0;
+		padding: 0;
+		display: flex;
+		flex-direction: column;
+		gap: 0.5rem;
+	}
+
+	/* ── Character card ────────────────────────────────────────── */
+	.char-card {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 1rem;
+		padding: 0.75rem 1rem;
+		background: var(--bg-panel);
+		border: 1px solid var(--border);
+		border-left: 3px solid var(--faction-bg, transparent);
+		border-radius: 0.375rem;
+		transition: border-color 0.15s;
+	}
+
+	.char-card.is-main {
+		border-color: var(--gold);
+		border-left-color: var(--gold);
+		background: rgba(214, 176, 106, 0.06);
+	}
+
+	.char-info {
+		display: flex;
+		flex-direction: column;
+		gap: 0.2rem;
+	}
+
+	.char-name {
+		font-family: var(--font-display);
+		font-size: 1rem;
+		font-weight: 700;
+		display: flex;
+		align-items: center;
+		gap: 0.5rem;
+	}
+
+	.main-badge {
+		font-size: 0.6rem;
+		font-family: var(--font-body);
+		letter-spacing: 0.1em;
+		background: var(--gold);
+		color: var(--bg);
+		padding: 0.15em 0.5em;
+		border-radius: 0.2rem;
+		font-weight: 700;
+		vertical-align: middle;
+	}
+
+	.char-meta {
+		font-size: 0.85rem;
+		color: var(--muted);
+	}
+
+	.faction-tag {
+		font-size: 0.7rem;
+		letter-spacing: 0.08em;
+		text-transform: uppercase;
+		padding: 0.1em 0.45em;
+		border-radius: 0.2rem;
+		font-weight: 600;
+		width: fit-content;
+	}
+
+	.faction-tag.alliance {
+		background: rgba(26, 74, 138, 0.45);
+		color: #90b8e8;
+		border: 1px solid rgba(26, 74, 138, 0.6);
+	}
+
+	.faction-tag.horde {
+		background: rgba(122, 26, 26, 0.45);
+		color: #e89090;
+		border: 1px solid rgba(122, 26, 26, 0.6);
+	}
+
+	/* ── Set Main button ───────────────────────────────────────── */
+	.set-main-form {
+		flex-shrink: 0;
+	}
+
+	.set-main-btn {
+		font-family: var(--font-body);
+		font-size: 0.8rem;
+		letter-spacing: 0.06em;
+		text-transform: uppercase;
+		padding: 0.4rem 0.9rem;
+		background: transparent;
+		border: 1px solid var(--border);
+		border-radius: 0.25rem;
+		color: var(--muted);
+		cursor: pointer;
+		transition: color 0.15s, border-color 0.15s, background 0.15s;
+	}
+
+	.set-main-btn:hover {
+		color: var(--bg);
+		background: var(--gold);
+		border-color: var(--gold);
+	}
+
+	@media (max-width: 520px) {
+		.profile-header {
+			flex-wrap: wrap;
+		}
+
+		.char-card {
+			flex-direction: column;
+			align-items: flex-start;
+		}
+	}
+</style>

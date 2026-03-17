@@ -9,11 +9,20 @@
     "dev": "astro dev",
     "build": "astro build",
     "preview": "astro preview",
-    "astro": "astro"
+    "astro": "astro",
+    "db:setup": "wrangler d1 execute hidden-lodge-db --local --file=migrations/0001_initial.sql",
+    "db:setup:prod": "wrangler d1 execute hidden-lodge-db --file=migrations/0001_initial.sql"
   },
   "dependencies": {
+    "@astrojs/cloudflare": "^13.1.2",
     "@iconify-json/lucide": "^1.2.98",
     "astro": "^6.0.4",
     "astro-icon": "^1.1.5"
+  },
+  "devDependencies": {
+    "@astrojs/check": "^0.9.8",
+    "@cloudflare/workers-types": "^4.20260317.1",
+    "typescript": "^5.9.3",
+    "wrangler": "^4.74.0"
   }
 }

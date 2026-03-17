@@ -5,11 +5,14 @@ interface Props {
 }
 
 import { externalLinks } from '../data/externalLinks';
+import { Icon } from 'astro-icon/components';
 
 const {
 	title = 'The Hidden Lodge | WoW Guild',
 	description = 'Semi hardcore raiding guild focused on AOTC and Mythic progression.'
 } = Astro.props;
+
+const user = Astro.locals.user;
 
 const navItems = [
 	{ href: '/', label: 'Home' },
@@ -69,6 +72,19 @@ const headerLinkLabels: Record<string, string> = {
 							))
 						}
 					</ul>
+					<div class="user-nav">
+						{user ? (
+							<a href="/profile" class="user-btn" title="My Profile">
+								<Icon name="lucide:user" aria-hidden="true" />
+								<span>{user.battleTag}</span>
+							</a>
+						) : (
+							<a href="/auth/login" class="user-btn login-btn">
+								<Icon name="lucide:log-in" aria-hidden="true" />
+								<span>Login</span>
+							</a>
+						)}
+					</div>
 				</nav>
 			</div>
 		</header>
@@ -223,6 +239,46 @@ const headerLinkLabels: Record<string, string> = {
 		width: 0.95rem;
 		height: 0.95rem;
 		border-radius: 2px;
+	}
+
+	.user-nav {
+		display: flex;
+		align-items: center;
+		padding-left: 0.8rem;
+		border-left: 1px solid rgba(214, 176, 106, 0.3);
+	}
+
+	.user-btn {
+		display: inline-flex;
+		align-items: center;
+		gap: 0.4rem;
+		padding: 0.42rem 0.7rem;
+		border-radius: 0.42rem;
+		border: 1px solid transparent;
+		font-size: 0.9rem;
+		color: var(--muted);
+		transition: border-color 160ms ease, color 160ms ease, background 160ms ease;
+		white-space: nowrap;
+		max-width: 12rem;
+		overflow: hidden;
+		text-overflow: ellipsis;
+	}
+
+	.user-btn [data-icon] {
+		width: 1rem;
+		height: 1rem;
+		flex-shrink: 0;
+	}
+
+	.user-btn:hover,
+	.user-btn:focus-visible {
+		border-color: rgba(214, 176, 106, 0.45);
+		background: rgba(214, 176, 106, 0.09);
+		color: var(--text);
+	}
+
+	.login-btn {
+		color: var(--gold);
 	}
 
 	nav a {
