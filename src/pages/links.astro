@@ -1,82 +1,45 @@
 ---
+export const prerender = false;
+
 import Layout from '../layouts/Layout.astro';
 import { Icon } from 'astro-icon/components';
+import { env } from 'cloudflare:workers';
 
-const linkGroups = [
-  {
-    title: 'General Guides',
-    icon: 'lucide:book-open-text',
-    links: [
-      { name: 'Icy Veins', href: 'https://www.icy-veins.com/wow/class-guides' },
-      { name: 'Wowhead', href: 'https://www.wowhead.com/guides/classes' },
-      { name: 'Class Discords', href: 'https://www.wowhead.com/discord-servers' }
-    ]
-  },
-  {
-    title: 'Simming/Gearing',
-    icon: 'lucide:anvil',
-    links: [
-      { name: 'Raidbots', href: 'https://www.raidbots.com/' },
-      { name: 'QE Live (Healer Sims)', href: 'https://questionablyepic.com/live/' },
-      { name: 'Bloodmallet', href: 'https://bloodmallet.com/' }
-    ]
-  },
-  {
-    title: 'Talent Specs/Meta (Log data driven)',
-    icon: 'lucide:line-chart',
-    links: [
-      { name: 'Archon.gg', href: 'https://www.archon.gg/' },
-      { name: 'Murlok.io', href: 'https://murlok.io/' },
-      { name: 'U.gg', href: 'https://u.gg/wow' },
-      { name: 'Wowmeta.com', href: 'https://wowmeta.com/' }
-    ]
-  },
-  {
-    title: 'Raiding',
-    icon: 'lucide:swords',
-    links: [
-      { name: 'Mythic Trap (Boss Strats)', href: 'https://www.mythictrap.com/en' },
-      { name: 'Lorrgs (CD timing)', href: 'https://lorrgs.io/' },
-      { name: 'wowaudit', href: 'https://wowaudit.com/us/illidan/hidden-lodge' },
-      { name: 'Viserio CDs', href: 'https://wowutils.com/viserio-cooldowns' },
-      { name: 'Raidplan', href: 'https://raidplan.io/' }
-    ]
-  },
-  {
-    title: 'Mythic+',
-    icon: 'lucide:shield-plus',
-    links: [
-      { name: 'MythicStats (Meta and spec performance)', href: 'https://mythicstats.com/' },
-      { name: 'Raider.io', href: 'https://raider.io/' },
-      { name: 'Skyfury (Fun M+ stats and group finding)', href: 'https://skyfury.co/' }
-    ]
-  },
-  {
-    title: 'Logs and Analysis',
-    icon: 'lucide:scroll-text',
-    links: [
-      { name: 'WarcraftLogs', href: 'https://www.warcraftlogs.com/' },
-      { name: 'Wipefest.gg (Mechanics analysis)', href: 'https://www.wipefest.gg/' },
-      { name: 'WoWAnalyzer (Spec analysis)', href: 'https://wowanalyzer.com/' }
-    ]
-  },
-  {
-    title: 'UI',
-    icon: 'lucide:layout-dashboard',
-    links: [
-      { name: 'Wago.io', href: 'https://wago.io/' },
-      { name: 'Wago App (Keep WAs up to date)', href: 'https://addons.wago.io/app' }
-    ]
-  },
-  {
-    title: 'Misc Stuff',
-    icon: 'lucide:sparkles',
-    links: [
-      { name: 'Simple Armory (Good mount farming routing)', href: 'https://simplearmory.com/' },
-      { name: 'WowAlts.io', href: 'https://www.wowalts.io/' }
-    ]
-  }
-];
+interface CategoryRow {
+  id: number;
+  title: string;
+  icon: string;
+  sort_order: number;
+}
+
+interface LinkRow {
+  id: number;
+  category_id: number;
+  name: string;
+  href: string;
+  sort_order: number;
+}
+
+const [catsResult, linksResult] = await env.DB.batch([
+  env.DB.prepare(`SELECT id, title, icon, sort_order FROM link_categories ORDER BY sort_order ASC, title ASC`),
+  env.DB.prepare(`SELECT id, category_id, name, href, sort_order FROM links ORDER BY sort_order ASC, name ASC`),
+]);
+
+const rawCategories = (catsResult.results ?? []) as CategoryRow[];
+const rawLinks = (linksResult.results ?? []) as LinkRow[];
+
+const linksByCategory = new Map<number, LinkRow[]>();
+for (const link of rawLinks) {
+  const arr = linksByCategory.get(link.category_id) ?? [];
+  arr.push(link);
+  linksByCategory.set(link.category_id, arr);
+}
+
+const linkGroups = rawCategories.map((cat) => ({
+  title: cat.title,
+  icon: cat.icon,
+  links: linksByCategory.get(cat.id) ?? [],
+}));
 
 const getFavicon = (href: string) => `https://www.google.com/s2/favicons?sz=64&domain_url=${encodeURIComponent(href)}`;
 ---

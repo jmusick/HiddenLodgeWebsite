@@ -1,0 +1,771 @@
+---
+export const prerender = false;
+
+import AdminLayout from '../../layouts/AdminLayout.astro';
+import { Icon } from 'astro-icon/components';
+import { env } from 'cloudflare:workers';
+
+if (!Astro.locals.isAdmin) {
+	return Astro.redirect('/');
+}
+
+interface CategoryRow {
+	id: number;
+	title: string;
+	icon: string;
+	sort_order: number;
+}
+
+interface LinkRow {
+	id: number;
+	category_id: number;
+	name: string;
+	href: string;
+	sort_order: number;
+}
+
+const [catsResult, linksResult] = await env.DB.batch([
+	env.DB.prepare(`SELECT id, title, icon, sort_order FROM link_categories ORDER BY sort_order ASC, title ASC`),
+	env.DB.prepare(`SELECT id, category_id, name, href, sort_order FROM links ORDER BY sort_order ASC, name ASC`),
+]);
+
+const categories = (catsResult.results ?? []) as CategoryRow[];
+const allLinks = (linksResult.results ?? []) as LinkRow[];
+
+const linksByCategory = new Map<number, LinkRow[]>();
+for (const link of allLinks) {
+	const arr = linksByCategory.get(link.category_id) ?? [];
+	arr.push(link);
+	linksByCategory.set(link.category_id, arr);
+}
+
+const statusParam = new URL(Astro.request.url).searchParams.get('status');
+const statusMessages: Record<string, { type: 'ok' | 'error'; text: string }> = {
+	'cat-created':  { type: 'ok',    text: 'Category created.' },
+	'cat-updated':  { type: 'ok',    text: 'Category updated.' },
+	'cat-deleted':  { type: 'ok',    text: 'Category deleted.' },
+	'link-created': { type: 'ok',    text: 'Link added.' },
+	'link-updated': { type: 'ok',    text: 'Link updated.' },
+	'link-deleted': { type: 'ok',    text: 'Link deleted.' },
+	'error':        { type: 'error', text: 'Something went wrong. Please try again.' },
+};
+const flash = statusParam ? (statusMessages[statusParam] ?? null) : null;
+
+const ICON_PICKER = [
+	// Combat / gaming
+	'lucide:swords', 'lucide:shield', 'lucide:shield-plus', 'lucide:target',
+	'lucide:crosshair', 'lucide:zap', 'lucide:flame', 'lucide:trophy',
+	'lucide:crown', 'lucide:star', 'lucide:gem', 'lucide:gamepad-2',
+	// Reading / content
+	'lucide:book-open-text', 'lucide:book', 'lucide:scroll-text', 'lucide:file-text',
+	'lucide:newspaper', 'lucide:rss', 'lucide:quote', 'lucide:pencil',
+	// Data / analysis
+	'lucide:line-chart', 'lucide:bar-chart-2', 'lucide:trending-up',
+	'lucide:activity', 'lucide:gauge', 'lucide:pie-chart',
+	// Tools / crafting
+	'lucide:anvil', 'lucide:wrench', 'lucide:hammer', 'lucide:settings',
+	'lucide:cpu', 'lucide:lightbulb', 'lucide:flask-conical',
+	// Layout / UI
+	'lucide:layout-dashboard', 'lucide:monitor', 'lucide:layers', 'lucide:grid-2x2',
+	// Web / links
+	'lucide:link', 'lucide:external-link', 'lucide:globe', 'lucide:network',
+	// People
+	'lucide:users', 'lucide:user', 'lucide:user-check',
+	// Misc
+	'lucide:sparkles', 'lucide:rocket', 'lucide:compass', 'lucide:map',
+	'lucide:search', 'lucide:tag', 'lucide:folder', 'lucide:clock',
+];
+---
+
+<AdminLayout title="Links | Admin | The Hidden Lodge">
+	<div class="links-admin-page">
+
+		<div class="page-header">
+			<div>
+				<h1>Links Management</h1>
+				<p class="page-desc">
+					Manage the categories and links shown on the public <a href="/links" target="_blank">/links</a> page.
+					Lower sort order numbers appear first.
+				</p>
+			</div>
+		</div>
+
+		{flash && (
+			<div class:list={['flash', flash.type === 'ok' ? 'flash-ok' : 'flash-error']} role="alert">
+				{flash.text}
+			</div>
+		)}
+
+		<!-- ── Add New Category ─────────────────────────────────────────────── -->
+		<section class="add-section">
+			<details class="add-panel">
+				<summary class="add-toggle">+ Add New Category</summary>
+				<form method="POST" action="/api/admin/links/create-category" class="add-form icon-scope">
+					<div class="form-row">
+						<label class="field">
+							<span class="field-label">Title <span class="required">*</span></span>
+							<input type="text" name="title" class="input-field" required maxlength="200" placeholder="e.g. General Guides" />
+						</label>
+						<label class="field field-icon">
+							<span class="field-label">Icon</span>
+							<input type="text" name="icon" class="input-field" maxlength="100" placeholder="lucide:link" />
+						</label>
+						<label class="field field-order">
+							<span class="field-label">Sort Order</span>
+							<input type="number" name="sort_order" class="input-field" value="0" />
+						</label>
+					</div>
+					<details class="icon-picker-panel">
+						<summary class="icon-picker-toggle">Browse available icons</summary>
+						<div class="icon-grid">
+							{ICON_PICKER.map((name) => (
+								<button type="button" class="icon-btn" data-icon={name}
+									title={name.replace('lucide:', '')}>
+									<Icon name={name} class="icon-btn-svg" aria-hidden="true" />
+									<span>{name.replace('lucide:', '')}</span>
+								</button>
+							))}
+						</div>
+					</details>
+					<button type="submit" class="btn btn-primary">Create Category</button>
+				</form>
+			</details>
+		</section>
+
+		<!-- ── Category List ────────────────────────────────────────────────── -->
+		{categories.length === 0 && (
+			<p class="empty-state">No categories yet. Add one above.</p>
+		)}
+
+		{categories.map((cat) => {
+			const catLinks = linksByCategory.get(cat.id) ?? [];
+			return (
+				<section class="category-block">
+					<!-- Category header -->
+					<div class="cat-header">
+						<div class="cat-meta">
+							<span class="cat-title">{cat.title}</span>
+							<span class="cat-badge">icon: {cat.icon}</span>
+							<span class="cat-badge">order: {cat.sort_order}</span>
+						</div>
+						<form method="POST" action="/api/admin/links/delete-category" class="delete-form"
+							onsubmit={`return confirm('Delete category "${cat.title}" and all its links?')`}>
+							<input type="hidden" name="id" value={cat.id} />
+							<button type="submit" class="btn btn-danger">Delete</button>
+						</form>
+					</div>
+
+					<!-- Edit category -->
+					<details class="edit-panel">
+						<summary class="edit-toggle">Edit Category</summary>
+						<form method="POST" action="/api/admin/links/update-category" class="edit-form icon-scope">
+							<input type="hidden" name="id" value={cat.id} />
+							<div class="form-row">
+								<label class="field">
+									<span class="field-label">Title <span class="required">*</span></span>
+									<input type="text" name="title" class="input-field" required maxlength="200" value={cat.title} />
+								</label>
+								<label class="field field-icon">
+									<span class="field-label">Icon</span>
+									<input type="text" name="icon" class="input-field" maxlength="100" value={cat.icon} />
+								</label>
+								<label class="field field-order">
+									<span class="field-label">Sort Order</span>
+									<input type="number" name="sort_order" class="input-field" value={cat.sort_order} />
+								</label>
+							</div>
+							<details class="icon-picker-panel">
+								<summary class="icon-picker-toggle">Browse available icons</summary>
+								<div class="icon-grid">
+									{ICON_PICKER.map((name) => (
+										<button type="button" class="icon-btn" data-icon={name}
+											title={name.replace('lucide:', '')}>
+											<Icon name={name} class="icon-btn-svg" aria-hidden="true" />
+											<span>{name.replace('lucide:', '')}</span>
+										</button>
+									))}
+								</div>
+							</details>
+							<div class="form-actions">
+								<button type="submit" class="btn btn-primary">Save Category</button>
+								<button type="button" class="btn btn-cancel"
+									onclick="this.closest('details').removeAttribute('open')">Cancel</button>
+							</div>
+						</form>
+					</details>
+
+					<!-- Links in this category -->
+					<div class="links-list">
+						{catLinks.length === 0 && (
+							<p class="no-links-msg">No links in this category.</p>
+						)}
+						{catLinks.map((link) => (
+							<div class="link-row">
+								<div class="link-info">
+									<span class="link-name">{link.name}</span>
+									<a href={link.href} target="_blank" rel="noopener noreferrer" class="link-href">{link.href}</a>
+									<span class="link-order">order: {link.sort_order}</span>
+								</div>
+								<div class="link-actions">
+									<details class="link-edit-panel">
+										<summary class="link-edit-toggle">Edit</summary>
+										<form method="POST" action="/api/admin/links/update-link" class="link-edit-form">
+											<input type="hidden" name="id" value={link.id} />
+											<div class="form-row">
+												<label class="field">
+													<span class="field-label">Name <span class="required">*</span></span>
+													<input type="text" name="name" class="input-field" required maxlength="200" value={link.name} />
+												</label>
+												<label class="field field-href">
+													<span class="field-label">URL <span class="required">*</span></span>
+													<input type="url" name="href" class="input-field" required maxlength="2000" value={link.href} />
+												</label>
+												<label class="field field-order">
+													<span class="field-label">Sort Order</span>
+													<input type="number" name="sort_order" class="input-field" value={link.sort_order} />
+												</label>
+											</div>
+											<div class="form-actions">
+											<button type="submit" class="btn btn-primary">Save Link</button>
+											<button type="button" class="btn btn-cancel"
+												onclick="this.closest('details').removeAttribute('open')">Cancel</button>
+										</div>
+										</form>
+									</details>
+									<form method="POST" action="/api/admin/links/delete-link" class="delete-form"
+										onsubmit={`return confirm('Delete link "${link.name}"?')`}>
+										<input type="hidden" name="id" value={link.id} />
+										<button type="submit" class="btn btn-danger btn-sm">Delete</button>
+									</form>
+								</div>
+							</div>
+						))}
+					</div>
+
+					<!-- Add link to this category -->
+					<details class="add-link-panel">
+						<summary class="add-link-toggle">+ Add Link</summary>
+						<form method="POST" action="/api/admin/links/create-link" class="add-form add-form-link">
+							<input type="hidden" name="category_id" value={cat.id} />
+							<div class="form-row">
+								<label class="field">
+									<span class="field-label">Name <span class="required">*</span></span>
+									<input type="text" name="name" class="input-field" required maxlength="200" placeholder="e.g. Raidbots" />
+								</label>
+								<label class="field field-href">
+									<span class="field-label">URL <span class="required">*</span></span>
+									<input type="url" name="href" class="input-field" required maxlength="2000" placeholder="https://..." />
+								</label>
+								<label class="field field-order">
+									<span class="field-label">Sort Order</span>
+									<input type="number" name="sort_order" class="input-field" value={((catLinks.at(-1)?.sort_order ?? 0) + 10).toString()} />
+								</label>
+							</div>
+							<button type="submit" class="btn btn-primary">Add Link</button>
+						</form>
+					</details>
+				</section>
+			);
+		})}
+
+	</div>
+</AdminLayout>
+
+<style>
+	.links-admin-page {
+		display: flex;
+		flex-direction: column;
+		gap: 1.5rem;
+	}
+
+	/* ── Page header ─────────────────────────────────────────────────── */
+	.page-header h1 {
+		margin: 0 0 0.35rem;
+		font-size: 1.75rem;
+		color: var(--gold-bright);
+	}
+
+	.page-desc {
+		margin: 0;
+		color: var(--muted);
+		font-size: 0.95rem;
+	}
+
+	.page-desc a {
+		color: var(--gold);
+		text-decoration: underline;
+	}
+
+	/* ── Flash messages ──────────────────────────────────────────────── */
+	.flash {
+		padding: 0.6rem 1rem;
+		border-radius: 0.4rem;
+		font-size: 0.95rem;
+		font-weight: 600;
+	}
+	.flash-ok {
+		background: rgba(0, 180, 80, 0.12);
+		border: 1px solid rgba(0, 180, 80, 0.4);
+		color: #6fdb91;
+	}
+	.flash-error {
+		background: rgba(180, 30, 30, 0.12);
+		border: 1px solid rgba(180, 30, 30, 0.4);
+		color: #f47e7e;
+	}
+
+	/* ── Add category section ────────────────────────────────────────── */
+	.add-section {
+		margin-bottom: 0.5rem;
+	}
+
+	.add-panel {
+		border: 1px dashed rgba(214, 176, 106, 0.35);
+		border-radius: 0.55rem;
+		overflow: hidden;
+	}
+
+	.add-toggle {
+		display: block;
+		padding: 0.65rem 1rem;
+		font-size: 0.9rem;
+		font-weight: 700;
+		color: var(--gold);
+		cursor: pointer;
+		list-style: none;
+		user-select: none;
+		transition: background 140ms ease;
+	}
+	.add-toggle:hover { background: rgba(214, 176, 106, 0.06); }
+	.add-panel[open] .add-toggle { border-bottom: 1px solid rgba(214, 176, 106, 0.2); }
+
+	/* ── Category block ──────────────────────────────────────────────── */
+	.category-block {
+		background: var(--bg-panel);
+		border: 1px solid rgba(214, 176, 106, 0.22);
+		border-radius: 0.55rem;
+		position: relative;
+	}
+
+	.cat-header {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 1rem;
+		padding: 0.75rem 1rem;
+		background: rgba(214, 176, 106, 0.05);
+		border-bottom: 1px solid rgba(214, 176, 106, 0.15);
+		border-radius: 0.55rem 0.55rem 0 0;
+	}
+
+	.cat-meta {
+		display: flex;
+		align-items: center;
+		gap: 0.75rem;
+		flex-wrap: wrap;
+		min-width: 0;
+	}
+
+	.cat-title {
+		font-family: var(--font-display);
+		font-size: 1rem;
+		font-weight: 700;
+		color: var(--gold-bright);
+		letter-spacing: 0.04em;
+	}
+
+	.cat-badge {
+		font-size: 0.75rem;
+		color: var(--muted);
+		background: rgba(214, 176, 106, 0.08);
+		border: 1px solid rgba(214, 176, 106, 0.18);
+		border-radius: 0.3rem;
+		padding: 0.1rem 0.45rem;
+	}
+
+	/* ── Edit panels ─────────────────────────────────────────────────── */
+	.edit-panel {
+		border-bottom: 1px solid rgba(214, 176, 106, 0.1);
+	}
+
+	.edit-toggle {
+		padding: 0.4rem 1rem;
+		font-size: 0.82rem;
+		font-weight: 600;
+		color: var(--muted);
+		cursor: pointer;
+		list-style: none;
+		display: flex;
+		align-items: center;
+		gap: 0.35rem;
+		user-select: none;
+		transition: color 140ms ease;
+	}
+	.edit-toggle:hover { color: var(--text); }
+	.edit-toggle::before { content: '▸'; font-size: 0.68rem; transition: transform 140ms ease; }
+	details[open] > .edit-toggle::before { transform: rotate(90deg); }
+
+	.edit-form {
+		padding: 0.75rem 1rem 1rem;
+		border-top: 1px solid rgba(214, 176, 106, 0.08);
+		display: flex;
+		flex-direction: column;
+		gap: 0.75rem;
+	}
+
+	/* ── Form shared ─────────────────────────────────────────────────── */
+	.add-form {
+		padding: 0.75rem 1rem 1rem;
+		display: flex;
+		flex-direction: column;
+		gap: 0.75rem;
+	}
+
+	.form-row {
+		display: flex;
+		gap: 0.75rem;
+		flex-wrap: wrap;
+		align-items: flex-end;
+	}
+
+	.field {
+		display: flex;
+		flex-direction: column;
+		gap: 0.3rem;
+		flex: 1;
+		min-width: 10rem;
+	}
+
+	.field-icon { max-width: 16rem; }
+	.field-href { flex: 2; min-width: 16rem; }
+	.field-order { max-width: 8rem; min-width: 6rem; }
+
+	.field-label {
+		font-size: 0.75rem;
+		font-weight: 700;
+		text-transform: uppercase;
+		letter-spacing: 0.06em;
+		color: var(--muted);
+	}
+
+	.required { color: #f47e7e; }
+
+	.input-field {
+		background: rgba(7, 17, 26, 0.7);
+		border: 1px solid rgba(214, 176, 106, 0.3);
+		border-radius: 0.35rem;
+		color: var(--text);
+		font-family: var(--font-body);
+		font-size: 0.88rem;
+		padding: 0.35rem 0.55rem;
+		outline: none;
+		transition: border-color 140ms ease;
+		width: 100%;
+		box-sizing: border-box;
+	}
+	.input-field:focus { border-color: rgba(214, 176, 106, 0.65); }
+
+	/* ── Links list ──────────────────────────────────────────────────── */
+	.links-list {
+		display: flex;
+		flex-direction: column;
+	}
+
+	.no-links-msg {
+		margin: 0;
+		padding: 0.6rem 1rem;
+		font-size: 0.88rem;
+		color: var(--muted);
+		font-style: italic;
+	}
+
+	.link-row {
+		display: flex;
+		align-items: flex-start;
+		justify-content: space-between;
+		gap: 0.75rem;
+		padding: 0.55rem 1rem;
+		border-top: 1px solid rgba(214, 176, 106, 0.08);
+		flex-wrap: wrap;
+	}
+
+	.link-row:hover { background: rgba(214, 176, 106, 0.03); }
+
+	.link-info {
+		display: flex;
+		align-items: baseline;
+		gap: 0.75rem;
+		flex-wrap: wrap;
+		min-width: 0;
+		flex: 1;
+	}
+
+	.link-name {
+		font-size: 0.92rem;
+		font-weight: 600;
+		color: var(--text);
+		white-space: nowrap;
+	}
+
+	.link-href {
+		font-size: 0.8rem;
+		color: var(--muted);
+		text-decoration: none;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+		max-width: 32ch;
+	}
+	.link-href:hover { color: var(--gold); text-decoration: underline; }
+
+	.link-order {
+		font-size: 0.75rem;
+		color: var(--muted);
+		flex-shrink: 0;
+	}
+
+	.link-actions {
+		display: flex;
+		align-items: flex-start;
+		gap: 0.4rem;
+		flex-shrink: 0;
+	}
+
+	/* ── Link edit inline ─────────────────────────────────────────────── */
+	.link-edit-panel { position: relative; }
+
+	.link-edit-toggle {
+		list-style: none;
+		cursor: pointer;
+		font-size: 0.78rem;
+		font-weight: 600;
+		color: var(--muted);
+		padding: 0.25rem 0.5rem;
+		border: 1px solid rgba(214, 176, 106, 0.2);
+		border-radius: 0.3rem;
+		user-select: none;
+		transition: color 140ms ease, border-color 140ms ease;
+		white-space: nowrap;
+	}
+	.link-edit-toggle:hover {
+		color: var(--gold);
+		border-color: rgba(214, 176, 106, 0.45);
+	}
+
+	.link-edit-form {
+		position: absolute;
+		right: 0;
+		top: calc(100% + 0.3rem);
+		z-index: 10;
+		background: #0e1e2e;
+		border: 1px solid rgba(214, 176, 106, 0.35);
+		border-radius: 0.5rem;
+		padding: 0.75rem;
+		box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+		min-width: 28rem;
+		display: flex;
+		flex-direction: column;
+		gap: 0.65rem;
+	}
+
+	/* ── Icon picker ─────────────────────────────────────────────────── */
+	.icon-picker-panel {
+		border: 1px solid rgba(214, 176, 106, 0.18);
+		border-radius: 0.4rem;
+		overflow: hidden;
+	}
+
+	.icon-picker-toggle {
+		display: block;
+		padding: 0.4rem 0.75rem;
+		font-size: 0.78rem;
+		font-weight: 600;
+		color: var(--muted);
+		cursor: pointer;
+		list-style: none;
+		user-select: none;
+		transition: color 140ms ease, background 140ms ease;
+	}
+	.icon-picker-toggle:hover { color: var(--gold); background: rgba(214, 176, 106, 0.05); }
+	.icon-picker-panel[open] .icon-picker-toggle {
+		border-bottom: 1px solid rgba(214, 176, 106, 0.15);
+		color: var(--gold);
+	}
+
+	.icon-grid {
+		display: grid;
+		grid-template-columns: repeat(auto-fill, minmax(7rem, 1fr));
+		gap: 0.25rem;
+		padding: 0.5rem;
+		max-height: 18rem;
+		overflow-y: auto;
+	}
+
+	.icon-btn {
+		display: flex;
+		flex-direction: column;
+		align-items: center;
+		gap: 0.25rem;
+		padding: 0.45rem 0.25rem;
+		border-radius: 0.35rem;
+		border: 1px solid transparent;
+		background: transparent;
+		color: var(--muted);
+		font-family: var(--font-body);
+		font-size: 0.68rem;
+		cursor: pointer;
+		transition: background 120ms ease, border-color 120ms ease, color 120ms ease;
+		text-align: center;
+		word-break: break-all;
+	}
+	.icon-btn:hover {
+		background: rgba(214, 176, 106, 0.1);
+		border-color: rgba(214, 176, 106, 0.35);
+		color: var(--gold-bright);
+	}
+	.icon-btn.selected {
+		background: rgba(214, 176, 106, 0.18);
+		border-color: rgba(214, 176, 106, 0.55);
+		color: var(--gold-bright);
+	}
+
+	.icon-btn-svg {
+		width: 1.25rem;
+		height: 1.25rem;
+		flex-shrink: 0;
+	}
+
+	/* ── Add link disclosure ─────────────────────────────────────────── */
+	.add-link-panel {
+		border-top: 1px solid rgba(214, 176, 106, 0.1);
+	}
+
+	.add-link-toggle {
+		display: block;
+		padding: 0.4rem 1rem;
+		font-size: 0.82rem;
+		font-weight: 700;
+		color: var(--gold);
+		cursor: pointer;
+		list-style: none;
+		user-select: none;
+		transition: background 140ms ease;
+	}
+	.add-link-toggle:hover { background: rgba(214, 176, 106, 0.05); }
+	.add-link-panel[open] .add-link-toggle {
+		border-bottom: 1px solid rgba(214, 176, 106, 0.1);
+	}
+
+	.add-form-link {
+		background: rgba(214, 176, 106, 0.03);
+	}
+
+	/* ── Buttons ─────────────────────────────────────────────────────── */
+	.form-actions {
+		display: flex;
+		gap: 0.5rem;
+		align-items: center;
+	}
+
+	.btn {
+		display: inline-flex;
+		align-items: center;
+		padding: 0.32rem 0.75rem;
+		border-radius: 0.4rem;
+		border: 1px solid transparent;
+		font-size: 0.85rem;
+		font-weight: 600;
+		font-family: var(--font-body);
+		cursor: pointer;
+		white-space: nowrap;
+		transition: background 140ms ease, border-color 140ms ease;
+	}
+	.btn-primary {
+		background: rgba(214, 176, 106, 0.18);
+		border-color: rgba(214, 176, 106, 0.5);
+		color: var(--gold-bright);
+	}
+	.btn-primary:hover { background: rgba(214, 176, 106, 0.28); }
+
+	.btn-cancel {
+		background: transparent;
+		border-color: rgba(255, 255, 255, 0.12);
+		color: var(--muted);
+	}
+	.btn-cancel:hover {
+		background: rgba(255, 255, 255, 0.06);
+		color: var(--text);
+	}
+
+	.btn-danger {
+		background: rgba(180, 30, 30, 0.1);
+		border-color: rgba(200, 50, 50, 0.4);
+		color: #f47e7e;
+	}
+	.btn-danger:hover { background: rgba(180, 30, 30, 0.22); }
+
+	.btn-sm { font-size: 0.78rem; padding: 0.25rem 0.55rem; }
+
+	.delete-form { display: contents; }
+
+	.empty-state {
+		color: var(--muted);
+		font-style: italic;
+		font-size: 0.92rem;
+	}
+
+	@media (max-width: 640px) {
+		.link-edit-form {
+			position: static;
+			min-width: unset;
+			margin-top: 0.5rem;
+			border-radius: 0.4rem;
+		}
+		.icon-grid {
+			grid-template-columns: repeat(auto-fill, minmax(5.5rem, 1fr));
+		}
+	}
+</style>
+
+<script>
+	document.addEventListener('click', (e) => {
+		const btn = (e.target as Element).closest<HTMLButtonElement>('.icon-btn');
+		if (!btn) return;
+
+		const icon = btn.dataset.icon;
+		if (!icon) return;
+
+		const form = btn.closest<HTMLElement>('.icon-scope');
+		if (!form) return;
+
+		const input = form.querySelector<HTMLInputElement>('[name="icon"]');
+		if (!input) return;
+
+		input.value = icon;
+
+		// Update selected highlight within this picker grid only
+		const grid = btn.closest('.icon-grid');
+		if (grid) {
+			grid.querySelectorAll('.icon-btn').forEach((b) => b.classList.remove('selected'));
+		}
+		btn.classList.add('selected');
+
+		// Close the picker after selection
+		const picker = btn.closest('details');
+		if (picker) picker.removeAttribute('open');
+	});
+
+	// Highlight the current value when a picker is opened
+	document.addEventListener('toggle', (e) => {
+		const details = e.target as HTMLDetailsElement;
+		if (!details.open || !details.classList.contains('icon-picker-panel')) return;
+
+		const form = details.closest<HTMLElement>('.icon-scope');
+		if (!form) return;
+
+		const current = form.querySelector<HTMLInputElement>('[name="icon"]')?.value ?? '';
+		details.querySelectorAll<HTMLButtonElement>('.icon-btn').forEach((btn) => {
+			btn.classList.toggle('selected', btn.dataset.icon === current);
+		});
+	}, true);
+</script>
