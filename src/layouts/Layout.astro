@@ -6,6 +6,7 @@ interface Props {
 
 import { externalLinks } from '../data/externalLinks';
 import { Icon } from 'astro-icon/components';
+import packageJson from '../../package.json';
 
 const {
 	title = 'The Hidden Lodge | WoW Guild',
@@ -29,6 +30,8 @@ const headerLinkLabels: Record<string, string> = {
 	'Raider.IO': 'R.IO',
 	'Warcraft Logs': 'WCL'
 };
+
+const siteVersion = packageJson.version;
 ---
 
 <!doctype html>
@@ -98,6 +101,7 @@ const headerLinkLabels: Record<string, string> = {
 
 		<footer class="container site-footer">
 			<p>For Azeroth. For The Hidden Lodge.</p>
+			<p class="site-version">Site version v{siteVersion}</p>
 		</footer>
 	</body>
 </html>
@@ -333,6 +337,18 @@ const headerLinkLabels: Record<string, string> = {
 		font-size: 1rem;
 		text-align: center;
 		letter-spacing: 0.03em;
+	}
+
+	.site-footer p {
+		margin: 0;
+	}
+
+	.site-version {
+		margin-top: 0.7rem;
+		font-size: 0.72rem;
+		letter-spacing: 0.04em;
+		text-transform: none;
+		color: rgba(175, 193, 205, 0.52);
 	}
 
 	@keyframes fade-in {
