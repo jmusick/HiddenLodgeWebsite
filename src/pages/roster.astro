@@ -86,25 +86,12 @@ const spotlights = [
   };
 });
 
-const cacheNote =
-  status.pendingDetailCount > 0
-    ? `Roster cache is warming ${status.pendingDetailCount} more member${status.pendingDetailCount === 1 ? '' : 's'}. Missing collection stats will fill in automatically as the cache refreshes.`
-    : 'Roster details are served from the D1 cache and refreshed from Blizzard in safe batches.';
 ---
 
 <Layout title="The Hidden Lodge | Roster" description="Full guild roster sourced live from the Blizzard API.">
   <section>
     <h1 class="title-row"><Icon name="lucide:users-round" class="title-icon" aria-hidden="true" />Roster</h1>
-    <p>
-      Full guild roster sourced from Blizzard and cached in D1 so the Worker can return detailed stats without exceeding Cloudflare subrequest limits.
-    </p>
   </section>
-
-  {!errorMessage && (
-    <section class="panel cache-panel">
-      <p class="panel-text">{cacheNote}</p>
-    </section>
-  )}
 
   {!errorMessage && (
     <section class="spotlights" aria-label="Top players">
