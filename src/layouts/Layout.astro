@@ -15,7 +15,6 @@ const {
 
 const user = Astro.locals.user;
 const isAdmin = Astro.locals.isAdmin;
-
 const navItems = [
 	{ href: '/', label: 'Home' },
 	{ href: '/raiding', label: 'Raiding' },
@@ -28,7 +27,8 @@ const navItems = [
 
 const headerLinkLabels: Record<string, string> = {
 	'Raider.IO': 'R.IO',
-	'Warcraft Logs': 'WCL'
+	'Warcraft Logs': 'WCL',
+	WoWProgress: 'WP'
 };
 
 const siteVersion = packageJson.version;
@@ -162,6 +162,10 @@ const siteVersion = packageJson.version;
 		position: fixed;
 		inset: 0;
 		pointer-events: none;
+		z-index: -1;
+	}
+
+	.background-glow {
 		background:
 			repeating-linear-gradient(
 				125deg,
@@ -171,7 +175,6 @@ const siteVersion = packageJson.version;
 				transparent 17px
 			),
 			radial-gradient(circle at 50% 120%, rgba(214, 176, 106, 0.08), transparent 54%);
-		z-index: -1;
 	}
 
 	.site-header {
@@ -377,5 +380,6 @@ const siteVersion = packageJson.version;
 			padding-left: 0;
 			border-left: 0;
 		}
+
 	}
 </style>

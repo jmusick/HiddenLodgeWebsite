@@ -220,7 +220,7 @@ const statusParam = new URL(Astro.request.url).searchParams.get('status');
 					These roster members haven't authenticated with Battle.net yet. Their mains and alts will
 					appear automatically once they log in and set their main via their profile.
 				</p>
-				<div class="table-wrap">
+				<div class="table-wrap unauthed-wrap">
 					<table class="data-table">
 						<thead>
 							<tr>
@@ -554,6 +554,11 @@ const statusParam = new URL(Astro.request.url).searchParams.get('status');
 		overflow-x: auto;
 		border-radius: 0.5rem;
 		border: 1px solid rgba(214, 176, 106, 0.2);
+	}
+
+	.unauthed-wrap {
+		max-height: 480px;
+		overflow-y: auto;
 	}
 
 	.data-table {
