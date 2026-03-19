@@ -1,0 +1,216 @@
+---
+import Layout from '../layouts/Layout.astro';
+import { Icon } from 'astro-icon/components';
+
+const stories = [
+  {
+    title: 'Three Capybaras and a Very Bad Pull',
+    lead: 'A Midnight run turns from clean execution into glorious nonsense, and somehow forges a party that should not work but absolutely does.',
+    imageSrc: '/images/lore/three-capybaras-and-a-very-bad-pull.png',
+    imageAlt: 'Jethro and Doug cuddled beside a fireplace with spirit capybara Gortham glowing between them.',
+    characters: ['Doug', 'Jethro', 'Gortham'],
+    paragraphs: [
+      "Doug met Jethro the way most Mythic+ disasters begin - everything was going perfectly until it suddenly wasn't.",
+      'It was a Midnight dungeon, all violet shadows and suspiciously glowing objects. Doug was doing his job the right way: controlled pulls, steady footing, no nonsense. The kind of run that finishes clean, quiet, and uneventful.',
+      'Then Jethro happened.',
+      "He didn't ease into chaos - he committed to it. One moment the dungeon was under control, the next he had somehow collected half the room, a patrol, and something that probably wasn't even supposed to be active yet. The pull collapsed onto Doug like a tidal wave of bad decisions.",
+      'They wiped. Hard.',
+      'And then they did it again.',
+      'But somewhere between the second wipe and the third attempt, something strange started to work. Doug adapted, planting himself like an anchor while Jethro\'s unpredictable movement began funneling enemies back toward him. What should have been pure disaster turned into something... functional.',
+      'Messy. Loud. Completely ill-advised.',
+      'But functional.',
+      "By the end of the run, the group was exhausted, confused, and somehow victorious. Doug had no logical reason to tolerate Jethro's chaos - but he didn't leave. And Jethro, for all his recklessness, kept circling back like he belonged there.",
+      'They started running together after that.',
+      "Doug brought stability. Jethro brought momentum. Neither would admit it, but they balanced each other in a way that made no sense on paper and perfect sense in practice.",
+      'Gortham came later, during a run that felt wrong from the start.',
+      'The dungeon was too quiet. Pulls were missing. The air had that subtle, glitchy stillness that meant something in reality had slipped a little out of place. Naturally, this is when Jethro decided to investigate.',
+      'The moment he did, the world stuttered.',
+      'Light warped. Shadows bent. And in the middle of it all, something small appeared.',
+      'A tiny capybara shape, glowing in soft blues and purples, like it was not fully anchored to the same world as everything else.',
+      'Gortham.',
+      'He did not attack. Did not run. Just hovered there, uncertain, as if waiting to see what would happen next.',
+      'Jethro approached first, curious as ever. Doug followed more cautiously, watching, thinking. But when the little spirit drifted closer and settled between them - quiet, trusting - it stopped being a question.',
+      'They did not leave him behind.',
+      'The dungeon reset itself like nothing had happened. Enemies returned. The run continued.',
+      'But Gortham stayed.',
+      'He did not fight or pull or do anything useful in the traditional sense. He just... existed. A soft, glowing presence that followed them from room to room, occasionally bumping into Doug or drifting lazily around Jethro\'s endless movement.',
+      'And somehow, it felt right.',
+      'Since then, the three of them have been inseparable.',
+      'Doug still anchors every fight. Jethro still turns every pull into a questionable life choice. And Gortham floats between them, a small piece of something unexplainable that neither of them would ever give up.',
+      'It should not work.',
+      'But it does.'
+    ]
+  }
+];
+---
+
+<Layout title="The Hidden Lodge | Lore" description="Fictional stories from The Hidden Lodge featuring guild characters and dungeon chaos.">
+  <section class="hero" aria-labelledby="lore-title">
+    <p class="eyebrow">Guild Lore Archive</p>
+    <h1 id="lore-title">Stories from the Lodge</h1>
+    <p class="intro">
+      Fictional tales inspired by raid nights, Mythic+ disasters, and the strange chemistry that keeps this guild together.
+    </p>
+  </section>
+
+  <section class="stories" aria-label="Lore stories">
+    {
+      stories.map((story) => (
+        <article class="story-card">
+          <img class="story-image" src={story.imageSrc} alt={story.imageAlt} loading="lazy" />
+          <header class="story-head">
+            <h2>{story.title}</h2>
+            <p>{story.lead}</p>
+            <div class="chips" aria-label="Featured characters">
+              {
+                story.characters.map((name) => (
+                  <span class="chip">
+                    <Icon name="lucide:user-round" aria-hidden="true" />
+                    {name}
+                  </span>
+                ))
+              }
+            </div>
+          </header>
+
+          <div class="story-body">
+            {
+              story.paragraphs.map((paragraph) => (
+                <p>{paragraph}</p>
+              ))
+            }
+          </div>
+        </article>
+      ))
+    }
+  </section>
+</Layout>
+
+<style>
+  .hero {
+    border: 1px solid rgba(214, 176, 106, 0.35);
+    border-radius: 0.85rem;
+    padding: 1.15rem 1.15rem 1.2rem;
+    background:
+      linear-gradient(165deg, rgba(214, 176, 106, 0.1), transparent 52%),
+      rgba(10, 20, 30, 0.8);
+    box-shadow: 0 15px 28px rgba(0, 0, 0, 0.22);
+  }
+
+  .eyebrow {
+    margin: 0;
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+    color: #e8c88c;
+    font-size: 0.85rem;
+    font-weight: 700;
+  }
+
+  .hero h1 {
+    margin: 0.2rem 0 0;
+    font-size: clamp(2rem, 3.3vw, 3rem);
+    color: #f0d7a7;
+    text-shadow: 0 0 16px rgba(214, 176, 106, 0.2);
+  }
+
+  .intro {
+    margin: 0.7rem 0 0;
+    max-width: 75ch;
+    color: #d6e0e7;
+    font-size: 1.05rem;
+  }
+
+  .stories {
+    margin-top: 1.2rem;
+    display: grid;
+    gap: 1rem;
+  }
+
+  .story-card {
+    border: 1px solid rgba(214, 176, 106, 0.38);
+    border-radius: 0.85rem;
+    overflow: hidden;
+    background: rgba(9, 18, 28, 0.8);
+    box-shadow: 0 14px 28px rgba(0, 0, 0, 0.26);
+  }
+
+  .story-head {
+    padding: 1rem;
+    border-bottom: 1px solid rgba(214, 176, 106, 0.24);
+    background:
+      linear-gradient(160deg, rgba(214, 176, 106, 0.12), transparent 50%),
+      rgba(10, 20, 30, 0.86);
+  }
+
+  .story-head h2 {
+    margin: 0;
+    font-size: clamp(1.35rem, 2.4vw, 2rem);
+    color: #f1d9a9;
+  }
+
+  .story-head p {
+    margin: 0.6rem 0 0;
+    color: #dae4ea;
+    max-width: 72ch;
+    font-size: 1.03rem;
+  }
+
+  .story-image {
+    display: block;
+    width: 100%;
+    height: auto;
+    max-height: none;
+    object-fit: contain;
+    border-bottom: 1px solid rgba(214, 176, 106, 0.24);
+    background: rgba(8, 16, 24, 0.9);
+  }
+
+  .chips {
+    margin-top: 0.8rem;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.45rem;
+  }
+
+  .chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.38rem;
+    border: 1px solid rgba(214, 176, 106, 0.42);
+    border-radius: 999px;
+    padding: 0.3rem 0.62rem;
+    color: #f1ddb4;
+    font-size: 0.9rem;
+    background: rgba(214, 176, 106, 0.1);
+  }
+
+  .chip :global(svg) {
+    width: 0.82rem;
+    height: 0.82rem;
+  }
+
+  .story-body {
+    padding: 1rem;
+    display: grid;
+    gap: 0.75rem;
+  }
+
+  .story-body p {
+    margin: 0;
+    line-height: 1.65;
+    font-size: 1.02rem;
+    color: #d4dfe6;
+  }
+
+  @media (max-width: 700px) {
+    .hero,
+    .story-head,
+    .story-body {
+      padding: 0.9rem;
+    }
+
+    .story-body p {
+      line-height: 1.6;
+    }
+  }
+</style>
