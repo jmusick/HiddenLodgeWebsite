@@ -4,6 +4,7 @@ import { Icon } from 'astro-icon/components';
 
 const stories = [
   {
+    id: 'three-capybaras-and-a-very-bad-pull',
     title: 'Three Capybaras and a Very Bad Pull',
     lead: 'A Midnight run turns from clean execution into glorious nonsense, and somehow forges a party that should not work but absolutely does.',
     imageSrc: '/images/lore/three-capybaras-and-a-very-bad-pull.png',
@@ -40,8 +41,34 @@ const stories = [
       'It should not work.',
       'But it does.'
     ]
+  },
+  {
+    id: 'the-hidden-lodge-a-safe-space-away-from-the-floor',
+    title: 'The Hidden Lodge: A Safe Space Away From the Floor',
+    lead: 'Some guilds are forged in conquest. This one was forged in survival, shared disbelief, and one unforgettable horizontal shot-caller.',
+    imageSrc: '/images/lore/the-hidden-lodge-a-safe-space-away-from-the-floor.png',
+    imageAlt: 'An enraged raid leader points at camera while yelling about HR, with a wipe screen visible behind her.',
+    characters: ['The Survivors', 'HR (The Dog)', 'The Hidden Lodge'],
+    paragraphs: [
+      "Legends say The Hidden Lodge wasn't founded-it escaped into existence. Once upon a very unfortunate raid tier, a group of hopeful adventurers answered the call of a guild that promised glory, progression, and elite leadership.",
+      "What they got instead was a raid leader who treated the floor like a second home. She would charge confidently into battle, immediately perish, and then begin issuing commands with absolute authority from her now-horizontal command center. DEFENSIVES! she would scream, moments after everyone had already used them, as the raid collectively burned in ways both magical and emotional. Her parses hovered bravely in the single digits, which she described as misunderstood excellence, and she coached others relentlessly despite having the survivability of a decorative candle.",
+      "Between pulls, things only got stranger. Her ever-present, deeply concerned dog-introduced to the raid as HR-sat silently in the background of every call, carrying the haunted expression of a creature that had witnessed too many performance reviews. Meanwhile, she frequently paused raid to announce that various guild members had fallen in love with her, a conclusion she reached after aggressively flirting with anything capable of responding in Discord. The volume was always at maximum, the emotions were always dialed to eleven, and the rest of the raid slowly bonded-not over loot, not over success, but over shared confusion and secondhand embarrassment.",
+      "Eventually, one by one, then in groups, then in what could only be described as a mass exodus disguised as taking a break, the survivors slipped away. They found each other again later, drawn together by a strange, unspoken understanding-the kind only forged in the fires of chaotic raid nights and unsolicited life coaching from someone spectating their own mistakes. And there, in the quiet aftermath, they formed The Hidden Lodge: a guild built not on parses or perfection, but on camaraderie, mild PTSD, and the revolutionary idea that the raid leader should maybe, occasionally... still be alive."
+    ]
   }
 ];
+
+const featuredStoryId = 'the-hidden-lodge-a-safe-space-away-from-the-floor';
+const orderedStories = [...stories].sort((a, b) => {
+  if (a.id === featuredStoryId) return -1;
+  if (b.id === featuredStoryId) return 1;
+  return 0;
+});
+
+const selectedStoryId = Astro.url.searchParams.get('story');
+const selectedStory = stories.find((story) => story.id === selectedStoryId);
+const usesAsideStoryImage = selectedStory?.id === featuredStoryId;
+const usesTopStoryImage = Boolean(selectedStory) && !usesAsideStoryImage;
 ---
 
 <Layout title="The Hidden Lodge | Lore" description="Fictional stories from The Hidden Lodge featuring guild characters and dungeon chaos.">
@@ -53,17 +80,87 @@ const stories = [
     </p>
   </section>
 
-  <section class="stories" aria-label="Lore stories">
-    {
-      stories.map((story) => (
-        <article class="story-card">
-          <img class="story-image" src={story.imageSrc} alt={story.imageAlt} loading="lazy" />
+  <div id="lightbox" class="lightbox" role="dialog" aria-modal="true" aria-label="Story image full size" hidden>
+    <button class="lightbox-close" id="lightbox-close" aria-label="Close">&times;</button>
+    <img id="lightbox-img" src="" alt="" />
+  </div>
+
+  {
+    !selectedStory && (
+      <section class="story-picker" aria-labelledby="story-picker-title">
+        <div class="story-picker-head">
+          <h2 id="story-picker-title">Choose Your Story</h2>
+          <p>Pick a tale to open the full archive entry.</p>
+        </div>
+
+        <div class="story-grid" role="list">
+          {
+            orderedStories.map((story) => (
+              <article class="story-preview" role="listitem">
+                <a class="preview-image-link" href={`/lore?story=${story.id}`} aria-label={`Read story: ${story.title}`}>
+                  <img class="preview-image" src={story.imageSrc} alt={story.imageAlt} loading="lazy" />
+                </a>
+                <div class="preview-content">
+                  <h3>
+                    <a class="story-title-link" href={`/lore?story=${story.id}`}>{story.title}</a>
+                  </h3>
+                  <p>{story.lead}</p>
+                  <div class="chips" aria-label="Featured characters">
+                    {
+                      story.characters.map((name) => (
+                        <span class="chip">
+                          <Icon name="lucide:user-round" aria-hidden="true" />
+                          {name}
+                        </span>
+                      ))
+                    }
+                  </div>
+                  <a class="open-story" href={`/lore?story=${story.id}`}>
+                    <Icon name="lucide:book-open-text" aria-hidden="true" />
+                    Read Story
+                  </a>
+                </div>
+              </article>
+            ))
+          }
+        </div>
+      </section>
+    )
+  }
+
+  {
+    selectedStory && (
+      <section class="stories" aria-label="Selected lore story">
+        <div class="story-toolbar">
+          <a class="back-to-list" href="/lore">
+            <Icon name="lucide:arrow-left" aria-hidden="true" />
+            Back to story list
+          </a>
+
+          <form class="story-switcher" method="get" action="/lore">
+            <label for="story-select">Jump to story</label>
+            <select id="story-select" name="story" onchange="this.form.submit()">
+              {
+                orderedStories.map((story) => (
+                  <option value={story.id} selected={story.id === selectedStory.id}>
+                    {story.title}
+                  </option>
+                ))
+              }
+            </select>
+            <noscript>
+              <button type="submit">Go</button>
+            </noscript>
+          </form>
+        </div>
+
+        <article class:list={["story-card", usesAsideStoryImage && 'story-card--floating-image']} id={selectedStory.id}>
           <header class="story-head">
-            <h2>{story.title}</h2>
-            <p>{story.lead}</p>
+            <h2>{selectedStory.title}</h2>
+            <p>{selectedStory.lead}</p>
             <div class="chips" aria-label="Featured characters">
               {
-                story.characters.map((name) => (
+                selectedStory.characters.map((name) => (
                   <span class="chip">
                     <Icon name="lucide:user-round" aria-hidden="true" />
                     {name}
@@ -73,17 +170,92 @@ const stories = [
             </div>
           </header>
 
-          <div class="story-body">
+          <div class:list={["story-body", usesAsideStoryImage && 'story-body--with-aside-image']}>
             {
-              story.paragraphs.map((paragraph) => (
+              usesTopStoryImage && (
+                <button
+                  class="story-image-button"
+                  data-lightbox-src={selectedStory.imageSrc}
+                  data-lightbox-alt={selectedStory.imageAlt}
+                  aria-label={`View full image for ${selectedStory.title}`}
+                  type="button"
+                >
+                  <img class="story-image" src={selectedStory.imageSrc} alt={selectedStory.imageAlt} loading="lazy" />
+                </button>
+              )
+            }
+            {
+              usesAsideStoryImage && (
+                <button
+                  class="story-image-button story-image-button--aside"
+                  data-lightbox-src={selectedStory.imageSrc}
+                  data-lightbox-alt={selectedStory.imageAlt}
+                  aria-label={`View full image for ${selectedStory.title}`}
+                  type="button"
+                >
+                  <img
+                    class="story-image story-image--aside"
+                    src={selectedStory.imageSrc}
+                    alt={selectedStory.imageAlt}
+                    loading="lazy"
+                  />
+                </button>
+              )
+            }
+            {
+              selectedStory.paragraphs.map((paragraph) => (
                 <p>{paragraph}</p>
               ))
             }
           </div>
         </article>
-      ))
+      </section>
+    )
+  }
+
+  <script>
+    const lightbox = document.getElementById('lightbox');
+    const lightboxImg = document.getElementById('lightbox-img');
+    const closeBtn = document.getElementById('lightbox-close');
+
+    function openLightbox(src: string, alt: string) {
+      if (!(lightbox instanceof HTMLElement) || !(lightboxImg instanceof HTMLImageElement)) return;
+      lightboxImg.src = src;
+      lightboxImg.alt = alt;
+      lightbox.hidden = false;
+      lightbox.focus();
+      document.body.style.overflow = 'hidden';
     }
-  </section>
+
+    function closeLightbox() {
+      if (!(lightbox instanceof HTMLElement) || !(lightboxImg instanceof HTMLImageElement)) return;
+      lightbox.hidden = true;
+      lightboxImg.src = '';
+      lightboxImg.alt = '';
+      document.body.style.overflow = '';
+    }
+
+    document.querySelectorAll('[data-lightbox-src]').forEach((button) => {
+      button.addEventListener('click', () => {
+        if (!(button instanceof HTMLElement)) return;
+        openLightbox(button.dataset.lightboxSrc ?? '', button.dataset.lightboxAlt ?? '');
+      });
+    });
+
+    if (closeBtn) closeBtn.addEventListener('click', closeLightbox);
+
+    if (lightbox) {
+      lightbox.addEventListener('click', (event) => {
+        if (event.target === lightbox) closeLightbox();
+      });
+    }
+
+    document.addEventListener('keydown', (event) => {
+      if (event.key === 'Escape' && lightbox instanceof HTMLElement && !lightbox.hidden) {
+        closeLightbox();
+      }
+    });
+  </script>
 </Layout>
 
 <style>
@@ -120,10 +292,200 @@ const stories = [
     font-size: 1.05rem;
   }
 
-  .stories {
+  .story-picker {
     margin-top: 1.2rem;
+    border: 1px solid rgba(214, 176, 106, 0.32);
+    border-radius: 0.85rem;
+    padding: 0.9rem;
+    background:
+      linear-gradient(155deg, rgba(214, 176, 106, 0.08), transparent 55%),
+      rgba(8, 17, 27, 0.78);
+    box-shadow: 0 12px 22px rgba(0, 0, 0, 0.25);
+  }
+
+  .story-picker-head h2 {
+    margin: 0;
+    color: #f1d9a9;
+    font-size: clamp(1.2rem, 2vw, 1.7rem);
+  }
+
+  .story-picker-head p {
+    margin: 0.35rem 0 0;
+    color: #d8e2e8;
+    font-size: 1rem;
+  }
+
+  .story-grid {
+    margin-top: 0.8rem;
+    display: grid;
+    gap: 0.75rem;
+    grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  }
+
+  .story-preview {
+    display: grid;
+    grid-template-rows: auto 1fr;
+    border: 1px solid rgba(214, 176, 106, 0.28);
+    border-radius: 0.7rem;
+    overflow: hidden;
+    background: rgba(10, 20, 31, 0.82);
+  }
+
+  .preview-image {
+    display: block;
+    width: 100%;
+    aspect-ratio: 16 / 10;
+    object-fit: cover;
+    border-bottom: 1px solid rgba(214, 176, 106, 0.22);
+    background: rgba(8, 16, 24, 0.9);
+  }
+
+  .preview-image-link {
+    display: block;
+  }
+
+  .preview-image-link:hover .preview-image,
+  .preview-image-link:focus-visible .preview-image {
+    filter: brightness(1.06);
+  }
+
+  .preview-content {
+    padding: 0.75rem;
+    display: grid;
+    gap: 0.6rem;
+    align-content: stretch;
+    grid-template-rows: auto 1fr auto auto;
+  }
+
+  .preview-content h3 {
+    margin: 0;
+    font-size: 1.12rem;
+    color: #f1d9a9;
+  }
+
+  .story-title-link {
+    color: inherit;
+    text-decoration: none;
+  }
+
+  .story-title-link:hover,
+  .story-title-link:focus-visible {
+    color: #f6e4c2;
+    text-decoration: underline;
+    text-underline-offset: 0.18rem;
+  }
+
+  .preview-content p {
+    margin: 0;
+    color: #d6e0e7;
+    line-height: 1.45;
+    font-size: 0.98rem;
+  }
+
+  .open-story {
+    justify-self: start;
+    align-self: start;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.45rem;
+    border: 1px solid rgba(214, 176, 106, 0.4);
+    border-radius: 999px;
+    padding: 0.62rem 1.15rem;
+    color: #1b1408;
+    font-size: 1rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    background: linear-gradient(180deg, #f2d9aa, #dcb06a);
+    box-shadow: 0 8px 18px rgba(214, 176, 106, 0.34);
+    transition: transform 120ms ease, box-shadow 120ms ease, filter 120ms ease;
+  }
+
+  .open-story:hover,
+  .open-story:focus-visible {
+    filter: brightness(1.05);
+    transform: translateY(-1px);
+    box-shadow: 0 11px 20px rgba(214, 176, 106, 0.42);
+  }
+
+  .open-story :global(svg) {
+    width: 1.05rem;
+    height: 1.05rem;
+  }
+
+  .stories {
+    margin-top: 1rem;
     display: grid;
     gap: 1rem;
+  }
+
+  .story-toolbar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+    border: 1px solid rgba(214, 176, 106, 0.3);
+    border-radius: 0.75rem;
+    padding: 0.7rem 0.8rem;
+    background:
+      linear-gradient(150deg, rgba(214, 176, 106, 0.08), transparent 52%),
+      rgba(9, 18, 28, 0.75);
+  }
+
+  .back-to-list {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    font-size: 0.97rem;
+    font-weight: 700;
+    color: #f0d7a7;
+  }
+
+  .back-to-list:hover,
+  .back-to-list:focus-visible {
+    color: #f7e5c2;
+    text-decoration: underline;
+    text-underline-offset: 0.18rem;
+  }
+
+  .back-to-list :global(svg) {
+    width: 0.95rem;
+    height: 0.95rem;
+  }
+
+  .story-switcher {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+
+  .story-switcher label {
+    font-size: 0.88rem;
+    color: #d5e0e7;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    font-weight: 700;
+  }
+
+  .story-switcher select {
+    min-width: 15rem;
+    border: 1px solid rgba(214, 176, 106, 0.38);
+    border-radius: 0.5rem;
+    background: rgba(8, 16, 24, 0.92);
+    color: #f0e0bd;
+    font-size: 0.95rem;
+    padding: 0.38rem 0.5rem;
+  }
+
+  .story-switcher button {
+    border: 1px solid rgba(214, 176, 106, 0.45);
+    border-radius: 0.45rem;
+    background: rgba(214, 176, 106, 0.14);
+    color: #f3dfb6;
+    padding: 0.3rem 0.55rem;
+    font-size: 0.88rem;
+    font-weight: 700;
   }
 
   .story-card {
@@ -132,6 +494,7 @@ const stories = [
     overflow: hidden;
     background: rgba(9, 18, 28, 0.8);
     box-shadow: 0 14px 28px rgba(0, 0, 0, 0.26);
+    scroll-margin-top: 6.5rem;
   }
 
   .story-head {
@@ -165,6 +528,36 @@ const stories = [
     background: rgba(8, 16, 24, 0.9);
   }
 
+  .story-image-button {
+    all: unset;
+    display: block;
+    cursor: zoom-in;
+  }
+
+  .story-image-button:focus-visible {
+    outline: 2px solid #e4c27a;
+    outline-offset: 3px;
+  }
+
+  .story-image-button:hover .story-image,
+  .story-image-button:focus-visible .story-image {
+    filter: brightness(1.04);
+  }
+
+  .story-image-button--aside {
+    width: 100%;
+    max-width: 22rem;
+  }
+
+  .story-image--aside {
+    width: 100%;
+    max-width: 22rem;
+    margin: 0;
+    border: 1px solid rgba(214, 176, 106, 0.24);
+    border-radius: 0.7rem;
+    overflow: hidden;
+  }
+
   .chips {
     margin-top: 0.8rem;
     display: flex;
@@ -195,6 +588,30 @@ const stories = [
     gap: 0.75rem;
   }
 
+  .story-body--with-aside-image {
+    grid-template-columns: minmax(16rem, 22rem) minmax(0, 1fr);
+    align-items: start;
+    column-gap: 1rem;
+  }
+
+  .story-body--with-aside-image .story-image--aside {
+    grid-column: 1;
+    grid-row: 1 / span 4;
+    position: sticky;
+    top: 5.5rem;
+  }
+
+  .story-body--with-aside-image .story-image-button--aside {
+    grid-column: 1;
+    grid-row: 1 / span 4;
+    position: sticky;
+    top: 5.5rem;
+  }
+
+  .story-body--with-aside-image p {
+    grid-column: 2;
+  }
+
   .story-body p {
     margin: 0;
     line-height: 1.65;
@@ -202,8 +619,54 @@ const stories = [
     color: #d4dfe6;
   }
 
+  .lightbox {
+    position: fixed;
+    inset: 0;
+    z-index: 1000;
+    background: rgba(0, 0, 0, 0.88);
+    display: grid;
+    place-items: center;
+  }
+
+  .lightbox[hidden] {
+    display: none;
+  }
+
+  .lightbox img {
+    max-width: min(92vw, 1000px);
+    max-height: 92vh;
+    border-radius: 0.6rem;
+    border: 1px solid rgba(214, 176, 106, 0.5);
+    box-shadow: 0 24px 64px rgba(0, 0, 0, 0.7);
+    object-fit: contain;
+  }
+
+  .lightbox-close {
+    position: absolute;
+    top: 1.25rem;
+    right: 1.5rem;
+    background: transparent;
+    border: 1px solid rgba(214, 176, 106, 0.45);
+    border-radius: 50%;
+    color: #e4c27a;
+    font-size: 1.6rem;
+    line-height: 1;
+    width: 2.4rem;
+    height: 2.4rem;
+    display: grid;
+    place-items: center;
+    cursor: pointer;
+    transition: background 0.15s;
+  }
+
+  .lightbox-close:hover,
+  .lightbox-close:focus-visible {
+    background: rgba(214, 176, 106, 0.18);
+  }
+
   @media (max-width: 700px) {
     .hero,
+    .story-picker,
     .story-head,
     .story-body {
       padding: 0.9rem;
@@ -211,6 +674,48 @@ const stories = [
 
     .story-body p {
       line-height: 1.6;
+    }
+
+    .story-body--with-aside-image {
+      grid-template-columns: 1fr;
+    }
+
+    .story-body--with-aside-image .story-image--aside {
+      grid-column: 1;
+      grid-row: auto;
+      position: static;
+      max-width: none;
+    }
+
+    .story-body--with-aside-image .story-image-button--aside {
+      grid-column: 1;
+      grid-row: auto;
+      position: static;
+      max-width: none;
+    }
+
+    .story-body--with-aside-image p {
+      grid-column: 1;
+    }
+
+    .story-image--aside {
+      width: 100%;
+      margin: 0 0 0.85rem;
+    }
+
+    .story-toolbar {
+      align-items: stretch;
+    }
+
+    .story-switcher {
+      width: 100%;
+      flex-direction: column;
+      align-items: flex-start;
+    }
+
+    .story-switcher select {
+      width: 100%;
+      min-width: 0;
     }
   }
 </style>
