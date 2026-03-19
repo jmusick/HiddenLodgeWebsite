@@ -1,0 +1,1167 @@
+---
+export const prerender = false;
+
+import AdminLayout from '../../layouts/AdminLayout.astro';
+import { env } from 'cloudflare:workers';
+import { classColor } from '../../lib/wow';
+import {
+  ASSIGNED_ROLES,
+  allRaidBuffs,
+  computeTeamSummary,
+  modeLimit,
+  primaryRaidBuff,
+  raidBuffDescription,
+  tokenArmorType,
+  type AssignedRole,
+  type TeamMode,
+} from '../../lib/raid-teams';
+
+if (!Astro.locals.isAdmin) {
+  return Astro.redirect('/');
+}
+
+interface TeamRow {
+  id: number;
+  name: string;
+  raid_mode: TeamMode;
+  sort_order: number;
+}
+
+interface TeamMemberRow {
+  team_id: number;
+  blizzard_char_id: number;
+  assigned_role: AssignedRole;
+  name: string;
+  nickname: string | null;
+  main_character_name: string | null;
+  is_alt_of_main: number;
+  realm: string;
+  class_name: string;
+  rank: number;
+  is_authenticated: number;
+}
+
+interface AvailableMemberRow {
+  blizzard_char_id: number;
+  name: string;
+  nickname: string | null;
+  main_character_name: string | null;
+  is_alt_of_main: number;
+  realm: string;
+  class_name: string;
+  rank: number;
+  level: number;
+  is_authenticated: number;
+}
+
+const [teamsResult, membersResult, availableResult] = await env.DB.batch([
+  env.DB.prepare(
+    `SELECT id, name, raid_mode, sort_order
+     FROM raid_teams
+     WHERE is_archived = 0
+     ORDER BY sort_order ASC, name ASC`
+  ),
+  env.DB.prepare(
+    `SELECT
+       rtm.team_id,
+       rtm.blizzard_char_id,
+       rtm.assigned_role,
+       rmc.name,
+       (
+         SELECT u.nickname
+         FROM characters c
+         JOIN users u ON u.id = c.user_id
+         WHERE c.blizzard_char_id = rtm.blizzard_char_id
+           AND u.nickname IS NOT NULL
+         LIMIT 1
+       ) AS nickname,
+       (
+         SELECT c_main.name
+         FROM characters c_self
+         JOIN characters c_main ON c_main.user_id = c_self.user_id AND c_main.is_main = 1
+         WHERE c_self.blizzard_char_id = rtm.blizzard_char_id
+           AND c_main.blizzard_char_id != c_self.blizzard_char_id
+         LIMIT 1
+       ) AS main_character_name,
+       CASE
+         WHEN EXISTS (
+           SELECT 1
+           FROM characters c_self
+           JOIN characters c_main ON c_main.user_id = c_self.user_id AND c_main.is_main = 1
+           WHERE c_self.blizzard_char_id = rtm.blizzard_char_id
+             AND c_main.blizzard_char_id != c_self.blizzard_char_id
+         )
+         THEN 1 ELSE 0
+       END AS is_alt_of_main,
+       rmc.realm,
+       rmc.class_name,
+       rmc.rank,
+       CASE
+         WHEN EXISTS (SELECT 1 FROM characters c WHERE c.blizzard_char_id = rtm.blizzard_char_id)
+         THEN 1 ELSE 0
+       END AS is_authenticated
+     FROM raid_team_members rtm
+     JOIN roster_members_cache rmc ON rmc.blizzard_char_id = rtm.blizzard_char_id
+     ORDER BY
+       rtm.team_id,
+       CASE rtm.assigned_role
+         WHEN 'tank' THEN 1
+         WHEN 'healer' THEN 2
+         WHEN 'melee-dps' THEN 3
+         ELSE 4
+       END,
+       rmc.class_name ASC,
+       rmc.name ASC`
+  ),
+  env.DB.prepare(
+    `SELECT
+       rmc.blizzard_char_id,
+       rmc.name,
+       (
+         SELECT u.nickname
+         FROM characters c
+         JOIN users u ON u.id = c.user_id
+         WHERE c.blizzard_char_id = rmc.blizzard_char_id
+           AND u.nickname IS NOT NULL
+         LIMIT 1
+       ) AS nickname,
+       (
+         SELECT c_main.name
+         FROM characters c_self
+         JOIN characters c_main ON c_main.user_id = c_self.user_id AND c_main.is_main = 1
+         WHERE c_self.blizzard_char_id = rmc.blizzard_char_id
+           AND c_main.blizzard_char_id != c_self.blizzard_char_id
+         LIMIT 1
+       ) AS main_character_name,
+       CASE
+         WHEN EXISTS (
+           SELECT 1
+           FROM characters c_self
+           JOIN characters c_main ON c_main.user_id = c_self.user_id AND c_main.is_main = 1
+           WHERE c_self.blizzard_char_id = rmc.blizzard_char_id
+             AND c_main.blizzard_char_id != c_self.blizzard_char_id
+         )
+         THEN 1 ELSE 0
+       END AS is_alt_of_main,
+       rmc.realm,
+       rmc.class_name,
+       rmc.rank,
+       rmc.level,
+       CASE
+         WHEN EXISTS (SELECT 1 FROM characters c WHERE c.blizzard_char_id = rmc.blizzard_char_id)
+         THEN 1 ELSE 0
+       END AS is_authenticated
+     FROM roster_members_cache rmc
+     WHERE rmc.level = 90
+     ORDER BY rmc.class_name ASC, rmc.name ASC`
+  ),
+]);
+
+const teams = (teamsResult.results ?? []) as TeamRow[];
+const allTeamMembers = (membersResult.results ?? []) as TeamMemberRow[];
+const availableMembers = (availableResult.results ?? []) as AvailableMemberRow[];
+
+const teamMembersByTeam = new Map<number, TeamMemberRow[]>();
+for (const member of allTeamMembers) {
+  const arr = teamMembersByTeam.get(member.team_id) ?? [];
+  arr.push(member);
+  teamMembersByTeam.set(member.team_id, arr);
+}
+
+const memberIdsByTeam = new Map<number, Set<number>>();
+for (const team of teams) {
+  const ids = new Set<number>();
+  for (const member of teamMembersByTeam.get(team.id) ?? []) {
+    ids.add(member.blizzard_char_id);
+  }
+  memberIdsByTeam.set(team.id, ids);
+}
+
+const classOptions = [...new Set(availableMembers.map((m) => m.class_name))].sort((a, b) => a.localeCompare(b));
+const buffOptions = [...new Set(availableMembers.map((m) => primaryRaidBuff(m.class_name)))].sort((a, b) => a.localeCompare(b));
+
+const statusParam = new URL(Astro.request.url).searchParams.get('status');
+const statusMessages: Record<string, { type: 'ok' | 'error'; text: string }> = {
+  'team-created': { type: 'ok', text: 'Team created.' },
+  'team-updated': { type: 'ok', text: 'Team updated.' },
+  'team-deleted': { type: 'ok', text: 'Team deleted.' },
+  'member-added': { type: 'ok', text: 'Member added to team.' },
+  'member-removed': { type: 'ok', text: 'Member removed from team.' },
+  'member-updated': { type: 'ok', text: 'Member role updated.' },
+  'team-full': { type: 'error', text: 'Team is already at the mode player cap.' },
+  'must-be-90': { type: 'error', text: 'Only level 90 characters can be added.' },
+  'mode-too-small': { type: 'error', text: 'Cannot switch to that mode because the team is above the cap.' },
+  error: { type: 'error', text: 'Something went wrong. Please try again.' },
+};
+const flash = statusParam ? (statusMessages[statusParam] ?? null) : null;
+
+const RANK_NAMES: Record<number, string> = {
+  0: 'Guild Master',
+  1: 'Guild Admin',
+  2: 'Guild Officer',
+  3: 'Officer Alt',
+  4: 'Raider',
+};
+
+function rankLabel(rank: number): string {
+  return RANK_NAMES[rank] ?? `Rank ${rank}`;
+}
+
+function roleLabel(role: AssignedRole): string {
+  if (role === 'tank') return 'Tank';
+  if (role === 'healer') return 'Healer';
+  if (role === 'melee-dps') return 'Melee DPS';
+  return 'Ranged DPS';
+}
+---
+
+<AdminLayout title="Roster Teams | Admin | The Hidden Lodge">
+  <div class="roster-teams-page">
+    <div class="page-header">
+      <div>
+        <h1>Roster Teams</h1>
+        <p class="page-desc">
+          Build multiple raid rosters from level 90 guild members. Officers assign Tank, Healer, Melee DPS, or Ranged DPS when adding members.
+          Team mode controls cap: Flex up to 30, Mythic up to 20.
+        </p>
+      </div>
+      <div class="stats">
+        <span class="stat"><strong>{teams.length}</strong> active teams</span>
+        <span class="stat"><strong>{availableMembers.length}</strong> level 90 candidates</span>
+      </div>
+    </div>
+
+    {flash && (
+      <div class:list={['flash', flash.type === 'ok' ? 'flash-ok' : 'flash-error']} role="alert">
+        {flash.text}
+      </div>
+    )}
+
+    <section class="add-team-section">
+      <details class="panel" open={teams.length === 0}>
+        <summary class="panel-summary">+ Create Team</summary>
+        <form method="POST" action="/api/admin/roster-teams/create-team" class="team-form">
+          <label class="field">
+            <span>Team Name</span>
+            <input type="text" name="name" maxlength="80" required placeholder="e.g. Mythic Main Team" />
+          </label>
+          <label class="field mode-field">
+            <span>Mode</span>
+            <select name="raid_mode" required>
+              <option value="mythic" selected>Mythic (20 max)</option>
+              <option value="flex">Flex (30 max)</option>
+            </select>
+          </label>
+          <label class="field order-field">
+            <span>Sort Order</span>
+            <input type="number" name="sort_order" value="0" />
+          </label>
+          <button type="submit" class="btn btn-primary">Create Team</button>
+        </form>
+      </details>
+    </section>
+
+    {teams.length === 0 ? (
+      <p class="empty-state">No roster teams yet. Create your first team above.</p>
+    ) : (
+      <div class="team-list">
+        {teams.map((team) => {
+          const members = teamMembersByTeam.get(team.id) ?? [];
+          const summary = computeTeamSummary(
+            members.map((m) => ({ className: m.class_name, assignedRole: m.assigned_role }))
+          );
+          const currentCount = members.length;
+          const teamLimit = modeLimit(team.raid_mode);
+          const rosterOpenSpots = Math.max(0, teamLimit - currentCount);
+          const assignedIds = memberIdsByTeam.get(team.id) ?? new Set();
+
+          return (
+            <section class="team-card">
+              <header class="team-header">
+                <div>
+                  <h2>{team.name}</h2>
+                  <p class="team-subline">
+                    {team.raid_mode === 'mythic' ? 'Mythic' : 'Flex'} mode
+                    <span aria-hidden="true"> • </span>
+                    {currentCount} / {teamLimit}
+                    <span aria-hidden="true"> • </span>
+                    {rosterOpenSpots} spot{rosterOpenSpots === 1 ? '' : 's'} open
+                  </p>
+                </div>
+                <form
+                  method="POST"
+                  action="/api/admin/roster-teams/delete-team"
+                  onsubmit={`return confirm('Delete team "${team.name}"?')`}
+                >
+                  <input type="hidden" name="id" value={team.id} />
+                  <button type="submit" class="btn btn-danger">Delete Team</button>
+                </form>
+              </header>
+
+              <details class="team-details" open>
+                <summary class="team-details-summary">Team Details</summary>
+                <div class="team-details-content">
+
+              <details class="panel">
+                <summary class="panel-summary">Edit Team Settings</summary>
+                <form method="POST" action="/api/admin/roster-teams/update-team" class="team-form">
+                  <input type="hidden" name="id" value={team.id} />
+                  <label class="field">
+                    <span>Team Name</span>
+                    <input type="text" name="name" maxlength="80" required value={team.name} />
+                  </label>
+                  <label class="field mode-field">
+                    <span>Mode</span>
+                    <select name="raid_mode" required>
+                      <option value="mythic" selected={team.raid_mode === 'mythic'}>Mythic (20 max)</option>
+                      <option value="flex" selected={team.raid_mode === 'flex'}>Flex (30 max)</option>
+                    </select>
+                  </label>
+                  <label class="field order-field">
+                    <span>Sort Order</span>
+                    <input type="number" name="sort_order" value={team.sort_order} />
+                  </label>
+                  <button type="submit" class="btn btn-primary">Save Team</button>
+                </form>
+              </details>
+
+              <div class="summary-grid">
+                <article class="summary-card">
+                  <h3>Role Count</h3>
+                  <p>Tank: <strong>{summary.roleCounts.tank}</strong></p>
+                  <p>Healer: <strong>{summary.roleCounts.healer}</strong></p>
+                  <p>Melee DPS: <strong>{summary.roleCounts['melee-dps']}</strong></p>
+                  <p>Ranged DPS: <strong>{summary.roleCounts['ranged-dps']}</strong></p>
+                </article>
+
+                <article class="summary-card">
+                  <h3>Raid Buff Coverage</h3>
+                  {summary.raidBuffs.length === 0 && summary.missingRaidBuffs.length === 0 ? (
+                    <p class="muted">No tracked raid buffs yet.</p>
+                  ) : (
+                    <>
+                      <ul class="pill-list coverage-list">
+                        {summary.raidBuffCounts.map(({ buff, count }) => (
+                          <li class="pill-available buff-tooltip" data-tooltip={raidBuffDescription(buff)} tabindex="0">
+                            {buff}
+                            <span class="pill-count">{count}</span>
+                          </li>
+                        ))}
+                        {summary.missingRaidBuffs.map((buff) => (
+                          <li class="pill-missing buff-tooltip" data-tooltip={raidBuffDescription(buff)} tabindex="0">
+                            {buff}
+                            <span class="pill-count">0</span>
+                          </li>
+                        ))}
+                      </ul>
+                    </>
+                  )}
+                </article>
+
+                <article class="summary-card summary-wide">
+                  <h3>Class &amp; Token Distribution</h3>
+                  <div class="distribution-grid">
+                    <section>
+                      <h4 class="distribution-title">Token Split</h4>
+                      {summary.tokenDistribution.length === 0 ? (
+                        <p class="muted">No token data yet.</p>
+                      ) : (
+                        <ul class="pill-list">
+                          {summary.tokenDistribution.map((t) => (
+                            <li>{t.token} ({tokenArmorType(t.token)}): {t.count}</li>
+                          ))}
+                        </ul>
+                      )}
+                    </section>
+                    <section>
+                      <h4 class="distribution-title">Class Distribution</h4>
+                      {summary.classDistribution.length === 0 ? (
+                        <p class="muted">No members assigned yet.</p>
+                      ) : (
+                        <ul class="pill-list">
+                          {summary.classDistribution.map((cls) => (
+                            <li>{cls.className}: {cls.count}</li>
+                          ))}
+                        </ul>
+                      )}
+                    </section>
+                  </div>
+                </article>
+              </div>
+
+              <div class="table-wrap">
+                <h3 class="subheading">Assigned Members</h3>
+                {members.length === 0 ? (
+                  <p class="muted">No members assigned yet.</p>
+                ) : (
+                  <table class="data-table">
+                    <thead>
+                      <tr>
+                        <th>Name</th>
+                        <th>Class</th>
+                        <th>Realm</th>
+                        <th>Role</th>
+                        <th>Status</th>
+                        <th>Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {members.map((member) => (
+                        <tr>
+                          <td>
+                            <strong style={`color: ${classColor(member.class_name)}`}>{member.name}</strong>
+                            {member.is_authenticated === 1 && member.nickname && (
+                              <span class="nickname-pill">{member.nickname}</span>
+                            )}
+                            <div class="tiny-meta">{rankLabel(member.rank)}</div>
+                            {member.is_alt_of_main === 1 && member.main_character_name && (
+                              <div class="alt-note">Alt of {member.main_character_name}</div>
+                            )}
+                          </td>
+                          <td>{member.class_name}</td>
+                          <td>{member.realm}</td>
+                          <td>
+                            <form method="POST" action="/api/admin/roster-teams/update-member-role" class="inline-form">
+                              <input type="hidden" name="team_id" value={team.id} />
+                              <input type="hidden" name="blizzard_char_id" value={member.blizzard_char_id} />
+                              <select name="assigned_role" aria-label={`Role for ${member.name}`}>
+                                {ASSIGNED_ROLES.map((role) => (
+                                  <option value={role} selected={member.assigned_role === role}>{roleLabel(role)}</option>
+                                ))}
+                              </select>
+                              <button type="submit" class="btn btn-secondary btn-sm">Save</button>
+                            </form>
+                          </td>
+                          <td>
+                            <span class:list={['status-pill', member.is_authenticated ? 'ok' : 'warn']}>
+                              {member.is_authenticated ? 'Authenticated' : 'Not Logged In'}
+                            </span>
+                          </td>
+                          <td>
+                            <form method="POST" action="/api/admin/roster-teams/remove-member">
+                              <input type="hidden" name="team_id" value={team.id} />
+                              <input type="hidden" name="blizzard_char_id" value={member.blizzard_char_id} />
+                              <button type="submit" class="btn btn-danger btn-sm">Remove</button>
+                            </form>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+              </div>
+
+              <details class="panel member-picker" data-team-id={String(team.id)}>
+                <summary class="panel-summary">+ Add Level 90 Members</summary>
+
+                <div class="picker-controls">
+                  <label>
+                    Search
+                    <input type="search" class="picker-search" placeholder="Character name" autocomplete="off" />
+                  </label>
+                  <label>
+                    Class
+                    <select class="picker-class-filter">
+                      <option value="all">All Classes</option>
+                      {classOptions.map((className) => (
+                        <option value={className}>{className}</option>
+                      ))}
+                    </select>
+                  </label>
+                  <label>
+                    Raid Buff
+                    <select class="picker-buff-filter">
+                      <option value="all">All Buffs</option>
+                      {buffOptions.map((buff) => (
+                        <option value={buff}>{buff}</option>
+                      ))}
+                    </select>
+                  </label>
+                  <label>
+                    Sort By
+                    <select class="picker-sort">
+                      <option value="name" selected>Name</option>
+                      <option value="class">Class</option>
+                      <option value="buff">Raid Buff</option>
+                    </select>
+                  </label>
+                </div>
+
+                <div class="table-wrap picker-table-wrap">
+                  <table class="data-table picker-table">
+                    <thead>
+                      <tr>
+                        <th>Name</th>
+                        <th>Class</th>
+                        <th>Raid Buffs</th>
+                        <th>Status</th>
+                        <th>Add to Team</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {availableMembers.map((member) => {
+                        const buffs = allRaidBuffs(member.class_name);
+                        const primaryBuff = primaryRaidBuff(member.class_name);
+                        const isAssigned = assignedIds.has(member.blizzard_char_id);
+                        return (
+                          <tr
+                            class="member-row"
+                            data-name={member.name.toLowerCase()}
+                            data-class={member.class_name}
+                            data-buff={primaryBuff}
+                          >
+                            <td>
+                              <strong style={`color: ${classColor(member.class_name)}`}>{member.name}</strong>
+                              {member.is_authenticated === 1 && member.nickname && (
+                                <span class="nickname-pill">{member.nickname}</span>
+                              )}
+                              <div class="tiny-meta">{member.realm} · {rankLabel(member.rank)}</div>
+                              {member.is_alt_of_main === 1 && member.main_character_name && (
+                                <div class="alt-note">Alt of {member.main_character_name}</div>
+                              )}
+                            </td>
+                            <td>{member.class_name}</td>
+                            <td>{buffs.length > 0 ? buffs.join(', ') : 'None'}</td>
+                            <td>
+                              <span class:list={['status-pill', member.is_authenticated ? 'ok' : 'warn']}>
+                                {member.is_authenticated ? 'Authenticated' : 'Not Logged In'}
+                              </span>
+                            </td>
+                            <td>
+                              {isAssigned ? (
+                                <span class="already-pill">On Team</span>
+                              ) : (
+                                <form method="POST" action="/api/admin/roster-teams/add-member" class="inline-form">
+                                  <input type="hidden" name="team_id" value={team.id} />
+                                  <input type="hidden" name="blizzard_char_id" value={member.blizzard_char_id} />
+                                  <select name="assigned_role" aria-label={`Add role for ${member.name}`}>
+                                    <option value="tank">Tank</option>
+                                    <option value="healer">Healer</option>
+                                    <option value="melee-dps">Melee DPS</option>
+                                    <option value="ranged-dps" selected>Ranged DPS</option>
+                                  </select>
+                                  <button type="submit" class="btn btn-primary btn-sm">Add</button>
+                                </form>
+                              )}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </details>
+                </div>
+              </details>
+            </section>
+          );
+        })}
+      </div>
+    )}
+  </div>
+</AdminLayout>
+
+<script>
+  // @ts-nocheck
+  const pickers = [...document.querySelectorAll('.member-picker')];
+
+  for (const picker of pickers) {
+    const searchInput = picker.querySelector('.picker-search');
+    const classFilter = picker.querySelector('.picker-class-filter');
+    const buffFilter = picker.querySelector('.picker-buff-filter');
+    const sortSelect = picker.querySelector('.picker-sort');
+    const tableBody = picker.querySelector('tbody');
+
+    if (
+      !(searchInput instanceof HTMLInputElement) ||
+      !(classFilter instanceof HTMLSelectElement) ||
+      !(buffFilter instanceof HTMLSelectElement) ||
+      !(sortSelect instanceof HTMLSelectElement) ||
+      !(tableBody instanceof HTMLTableSectionElement)
+    ) {
+      continue;
+    }
+
+    const rows = [...tableBody.querySelectorAll('tr.member-row')];
+
+    /** @param {string} a @param {string} b */
+    const compareText = (a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' });
+
+    function applyFilterAndSort() {
+      const query = searchInput.value.trim().toLowerCase();
+      const classValue = classFilter.value;
+      const buffValue = buffFilter.value;
+      const sortKey = sortSelect.value;
+
+      const visibleRows = [];
+      const hiddenRows = [];
+
+      for (const row of rows) {
+        const rowName = row.getAttribute('data-name') || '';
+        const rowClass = row.getAttribute('data-class') || '';
+        const rowBuff = row.getAttribute('data-buff') || '';
+
+        const matchesQuery = query.length === 0 || rowName.includes(query);
+        const matchesClass = classValue === 'all' || rowClass === classValue;
+        const matchesBuff = buffValue === 'all' || rowBuff === buffValue;
+
+        if (matchesQuery && matchesClass && matchesBuff) {
+          visibleRows.push(row);
+        } else {
+          hiddenRows.push(row);
+        }
+      }
+
+      visibleRows.sort((a, b) => {
+        const nameA = a.getAttribute('data-name') || '';
+        const nameB = b.getAttribute('data-name') || '';
+        const classA = a.getAttribute('data-class') || '';
+        const classB = b.getAttribute('data-class') || '';
+        const buffA = a.getAttribute('data-buff') || '';
+        const buffB = b.getAttribute('data-buff') || '';
+
+        if (sortKey === 'class') {
+          return compareText(classA, classB) || compareText(nameA, nameB);
+        }
+        if (sortKey === 'buff') {
+          return compareText(buffA, buffB) || compareText(nameA, nameB);
+        }
+        return compareText(nameA, nameB);
+      });
+
+      for (const row of visibleRows) {
+        row.hidden = false;
+        tableBody.appendChild(row);
+      }
+      for (const row of hiddenRows) {
+        row.hidden = true;
+        tableBody.appendChild(row);
+      }
+    }
+
+    searchInput.addEventListener('input', applyFilterAndSort);
+    classFilter.addEventListener('change', applyFilterAndSort);
+    buffFilter.addEventListener('change', applyFilterAndSort);
+    sortSelect.addEventListener('change', applyFilterAndSort);
+    applyFilterAndSort();
+  }
+</script>
+
+<style>
+  .roster-teams-page {
+    display: flex;
+    flex-direction: column;
+    gap: 1.5rem;
+  }
+
+  .page-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 1rem;
+    flex-wrap: wrap;
+  }
+
+  .page-header h1 {
+    margin: 0 0 0.35rem;
+    font-size: 1.75rem;
+    color: var(--gold-bright);
+  }
+
+  .page-desc {
+    margin: 0;
+    color: var(--muted);
+    max-width: 70ch;
+  }
+
+  .stats {
+    display: flex;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+  }
+
+  .stat {
+    border: 1px solid rgba(214, 176, 106, 0.35);
+    border-radius: 999px;
+    padding: 0.2rem 0.7rem;
+    color: var(--muted);
+    font-size: 0.88rem;
+  }
+
+  .stat strong {
+    color: var(--gold-bright);
+  }
+
+  .flash {
+    padding: 0.6rem 1rem;
+    border-radius: 0.4rem;
+    font-size: 0.95rem;
+    font-weight: 600;
+  }
+
+  .flash-ok {
+    background: rgba(0, 180, 80, 0.12);
+    border: 1px solid rgba(0, 180, 80, 0.4);
+    color: #6fdb91;
+  }
+
+  .flash-error {
+    background: rgba(180, 30, 30, 0.12);
+    border: 1px solid rgba(180, 30, 30, 0.4);
+    color: #f47e7e;
+  }
+
+  .empty-state {
+    margin: 0;
+    color: var(--muted);
+  }
+
+  .team-list {
+    display: flex;
+    flex-direction: column;
+    gap: 1.25rem;
+  }
+
+  .team-card {
+    border: 1px solid rgba(214, 176, 106, 0.28);
+    border-radius: 0.6rem;
+    padding: 1rem;
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+    background: rgba(20, 14, 8, 0.4);
+  }
+
+  .team-header {
+    display: flex;
+    justify-content: space-between;
+    gap: 0.75rem;
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
+
+  .team-header h2 {
+    margin: 0;
+    font-size: 1.2rem;
+    color: var(--gold-bright);
+  }
+
+  .team-subline {
+    margin: 0.25rem 0 0;
+    color: var(--muted);
+    font-size: 0.9rem;
+  }
+
+  .team-details {
+    border: 1px solid rgba(214, 176, 106, 0.24);
+    border-radius: 0.55rem;
+    padding: 0.6rem 0.75rem;
+    background: rgba(10, 8, 6, 0.24);
+  }
+
+  .team-details-summary {
+    list-style: none;
+    cursor: pointer;
+    color: var(--gold-bright);
+    font-weight: 700;
+    font-size: 0.86rem;
+    padding: 0.5rem 0.7rem;
+    margin: 0;
+    border: 1px solid rgba(214, 176, 106, 0.35);
+    border-radius: 0.45rem;
+    background: rgba(214, 176, 106, 0.08);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    transition: background 140ms ease, border-color 140ms ease, color 140ms ease;
+  }
+
+  .team-details-summary:hover,
+  .team-details-summary:focus-visible {
+    background: rgba(214, 176, 106, 0.14);
+    border-color: rgba(214, 176, 106, 0.5);
+    color: #f3d9a0;
+  }
+
+  .team-details-summary::before {
+    content: '▼';
+    margin-right: 0.5rem;
+    font-size: 0.7rem;
+    color: var(--gold);
+    transition: transform 140ms ease;
+  }
+
+  .team-details:not([open]) .team-details-summary::before {
+    transform: rotate(-90deg);
+  }
+
+  .team-details-summary::after {
+    content: 'Collapse';
+    font-size: 0.75rem;
+    color: var(--muted);
+    font-weight: 600;
+    letter-spacing: 0.02em;
+  }
+
+  .team-details:not([open]) .team-details-summary::after {
+    content: 'Expand';
+  }
+
+  .team-details[open] .team-details-summary {
+    border-bottom-color: rgba(214, 176, 106, 0.5);
+    margin-bottom: 0.6rem;
+  }
+
+  .team-details-content {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+    padding: 0;
+  }
+
+  .team-details-content .table-wrap {
+    margin-top: 0.15rem;
+  }
+
+  .summary-grid {
+    display: grid;
+    grid-auto-flow: column;
+    grid-auto-columns: minmax(240px, 1fr);
+    gap: 0.75rem;
+    overflow-x: auto;
+    padding-bottom: 0.15rem;
+  }
+
+  .summary-card {
+    border: 1px solid rgba(214, 176, 106, 0.2);
+    border-radius: 0.55rem;
+    padding: 0.65rem;
+    background: rgba(14, 10, 6, 0.5);
+  }
+
+  .summary-wide {
+    grid-column: auto;
+  }
+
+  .summary-card h3,
+  .subheading {
+    margin: 0 0 0.45rem;
+    font-size: 0.92rem;
+    color: var(--gold);
+  }
+
+  .summary-card p {
+    margin: 0.2rem 0;
+    color: var(--text);
+    font-size: 0.9rem;
+  }
+
+  .distribution-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.65rem;
+  }
+
+  .distribution-title {
+    margin: 0 0 0.35rem;
+    font-size: 0.82rem;
+    color: var(--muted);
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+
+  .pill-list {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.35rem;
+  }
+
+  .pill-list li {
+    font-size: 0.8rem;
+    border: 1px solid rgba(214, 176, 106, 0.35);
+    color: var(--text);
+    border-radius: 999px;
+    padding: 0.2rem 0.5rem;
+  }
+
+  .coverage-list .pill-available {
+    border-color: rgba(0, 180, 80, 0.4);
+    background: rgba(0, 180, 80, 0.12);
+    color: #8ce3ad;
+  }
+
+  .coverage-list .pill-missing {
+    border-color: rgba(220, 80, 80, 0.42);
+    background: rgba(180, 30, 30, 0.12);
+    color: #ff9b9b;
+  }
+
+  .coverage-list .buff-tooltip {
+    position: relative;
+    cursor: help;
+    outline: none;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+  }
+
+  .coverage-list .pill-count {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 1.15rem;
+    height: 1.15rem;
+    padding: 0 0.2rem;
+    border-radius: 999px;
+    font-size: 0.68rem;
+    line-height: 1;
+    font-weight: 700;
+    background: rgba(255, 255, 255, 0.16);
+    color: #f6f0e2;
+  }
+
+  .coverage-list .buff-tooltip::after {
+    content: attr(data-tooltip);
+    position: absolute;
+    left: 50%;
+    top: calc(100% + 0.35rem);
+    transform: translateX(-50%);
+    min-width: 12rem;
+    max-width: 18rem;
+    width: max-content;
+    padding: 0.4rem 0.5rem;
+    border-radius: 0.4rem;
+    border: 1px solid rgba(214, 176, 106, 0.45);
+    background: rgba(7, 7, 7, 0.95);
+    color: #f1ece2;
+    font-size: 0.74rem;
+    line-height: 1.35;
+    text-align: left;
+    z-index: 25;
+    pointer-events: none;
+    opacity: 0;
+    visibility: hidden;
+    transition: opacity 120ms ease;
+    box-shadow: 0 8px 18px rgba(0, 0, 0, 0.35);
+    white-space: normal;
+  }
+
+  .coverage-list .buff-tooltip:hover::after,
+  .coverage-list .buff-tooltip:focus-visible::after {
+    opacity: 1;
+    visibility: visible;
+  }
+
+  .panel {
+    border: 1px solid rgba(214, 176, 106, 0.24);
+    border-radius: 0.55rem;
+  }
+
+  .panel-summary {
+    display: block;
+    list-style: none;
+    cursor: pointer;
+    color: var(--gold);
+    font-weight: 700;
+    font-size: 0.9rem;
+    padding: 0.6rem 0.9rem;
+  }
+
+  .panel[open] .panel-summary {
+    border-bottom: 1px solid rgba(214, 176, 106, 0.2);
+  }
+
+  .team-form {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: end;
+    gap: 0.75rem;
+    padding: 0.75rem 0.9rem;
+  }
+
+  .field {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+    min-width: 15rem;
+  }
+
+  .field span {
+    font-size: 0.8rem;
+    color: var(--muted);
+  }
+
+  .field input,
+  .field select,
+  .picker-controls input,
+  .picker-controls select,
+  .inline-form select {
+    background: rgba(10, 8, 6, 0.7);
+    border: 1px solid rgba(214, 176, 106, 0.35);
+    border-radius: 0.45rem;
+    color: var(--text);
+    padding: 0.4rem 0.55rem;
+    font: inherit;
+  }
+
+  .mode-field,
+  .order-field {
+    min-width: 9rem;
+  }
+
+  .btn {
+    border-radius: 0.45rem;
+    border: 1px solid transparent;
+    padding: 0.42rem 0.75rem;
+    font-size: 0.85rem;
+    font-weight: 700;
+    cursor: pointer;
+  }
+
+  .btn-sm {
+    padding: 0.3rem 0.55rem;
+    font-size: 0.78rem;
+  }
+
+  .btn-primary {
+    background: rgba(214, 176, 106, 0.18);
+    border-color: rgba(214, 176, 106, 0.5);
+    color: var(--gold-bright);
+  }
+
+  .btn-secondary {
+    background: rgba(160, 160, 160, 0.1);
+    border-color: rgba(200, 200, 200, 0.35);
+    color: var(--text);
+  }
+
+  .btn-danger {
+    background: rgba(180, 35, 35, 0.14);
+    border-color: rgba(220, 80, 80, 0.45);
+    color: #ff9b9b;
+  }
+
+  .table-wrap {
+    overflow-x: auto;
+  }
+
+  .data-table {
+    width: 100%;
+    border-collapse: collapse;
+    min-width: 760px;
+  }
+
+  .data-table th,
+  .data-table td {
+    text-align: left;
+    border-bottom: 1px solid rgba(214, 176, 106, 0.15);
+    padding: 0.45rem 0.4rem;
+    vertical-align: top;
+    font-size: 0.88rem;
+  }
+
+  .tiny-meta {
+    color: var(--muted);
+    font-size: 0.78rem;
+    margin-top: 0.18rem;
+  }
+
+  .alt-note {
+    color: #b9c9d4;
+    font-size: 0.74rem;
+    margin-top: 0.12rem;
+    font-style: italic;
+  }
+
+  .nickname-pill {
+    display: inline-block;
+    margin-left: 0.4rem;
+    padding: 0.06rem 0.4rem;
+    border-radius: 999px;
+    border: 1px solid rgba(214, 176, 106, 0.35);
+    background: rgba(214, 176, 106, 0.12);
+    color: var(--gold-bright);
+    font-size: 0.72rem;
+    vertical-align: middle;
+  }
+
+  .inline-form {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+  }
+
+  .status-pill,
+  .already-pill {
+    display: inline-flex;
+    align-items: center;
+    border-radius: 999px;
+    padding: 0.14rem 0.5rem;
+    font-size: 0.75rem;
+    font-weight: 700;
+  }
+
+  .status-pill.ok {
+    background: rgba(0, 180, 80, 0.15);
+    color: #89e3aa;
+  }
+
+  .status-pill.warn {
+    background: rgba(190, 120, 20, 0.2);
+    color: #f0ca7a;
+  }
+
+  .already-pill {
+    background: rgba(214, 176, 106, 0.2);
+    color: var(--gold);
+  }
+
+  .picker-controls {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 0.6rem;
+    padding: 0.8rem 0.9rem 0;
+  }
+
+  .picker-controls label {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+    color: var(--muted);
+    font-size: 0.8rem;
+  }
+
+  .picker-table-wrap {
+    padding: 0.75rem 0.9rem 0.9rem;
+  }
+
+  .muted {
+    margin: 0;
+    color: var(--muted);
+    font-size: 0.9rem;
+  }
+
+  @media (max-width: 1100px) {
+    .picker-controls {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .distribution-grid {
+      grid-template-columns: 1fr;
+    }
+  }
+
+  @media (max-width: 760px) {
+    .picker-controls {
+      grid-template-columns: 1fr;
+    }
+
+    .field {
+      min-width: 100%;
+    }
+  }
+</style>

@@ -1,7 +1,7 @@
 {
   "name": "hiddenlodgewebsite",
   "type": "module",
-  "version": "1.0.3",
+  "version": "1.1.0",
   "engines": {
     "node": ">=22.12.0"
   },
@@ -13,8 +13,8 @@
     "version:patch": "npm version patch",
     "version:minor": "npm version minor",
     "version:major": "npm version major",
-    "db:setup": "wrangler d1 execute hidden-lodge-db --local --file=migrations/0001_initial.sql && wrangler d1 execute hidden-lodge-db --local --file=migrations/0002_roster_cache.sql && wrangler d1 execute hidden-lodge-db --local --file=migrations/0003_admin.sql && wrangler d1 execute hidden-lodge-db --local --file=migrations/0004_nickname.sql",
-    "db:setup:prod": "wrangler d1 execute hidden-lodge-db --remote --file=migrations/0001_initial.sql && wrangler d1 execute hidden-lodge-db --remote --file=migrations/0002_roster_cache.sql && wrangler d1 execute hidden-lodge-db --remote --file=migrations/0003_admin.sql && wrangler d1 execute hidden-lodge-db --remote --file=migrations/0004_nickname.sql"
+    "db:setup": "wrangler d1 execute hidden-lodge-db --local --file=migrations/0001_initial.sql && wrangler d1 execute hidden-lodge-db --local --file=migrations/0002_roster_cache.sql && wrangler d1 execute hidden-lodge-db --local --file=migrations/0003_admin.sql && wrangler d1 execute hidden-lodge-db --local --file=migrations/0004_nickname.sql && wrangler d1 execute hidden-lodge-db --local --file=migrations/0005_links.sql && wrangler d1 execute hidden-lodge-db --local --file=migrations/0006_raid_teams.sql && wrangler d1 execute hidden-lodge-db --local --file=migrations/0007_split_dps_roles.sql",
+    "db:setup:prod": "wrangler d1 execute hidden-lodge-db --remote --file=migrations/0001_initial.sql && wrangler d1 execute hidden-lodge-db --remote --file=migrations/0002_roster_cache.sql && wrangler d1 execute hidden-lodge-db --remote --file=migrations/0003_admin.sql && wrangler d1 execute hidden-lodge-db --remote --file=migrations/0004_nickname.sql && wrangler d1 execute hidden-lodge-db --remote --file=migrations/0005_links.sql && wrangler d1 execute hidden-lodge-db --remote --file=migrations/0006_raid_teams.sql && wrangler d1 execute hidden-lodge-db --remote --file=migrations/0007_split_dps_roles.sql"
   },
   "dependencies": {
     "@astrojs/cloudflare": "^13.1.2",

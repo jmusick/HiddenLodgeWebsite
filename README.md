@@ -54,6 +54,12 @@ Admin access is granted by guild rank via middleware. Officer or higher can acce
 	- create, edit, delete, and reorder link categories
 	- browse available Lucide icons for categories
 	- create, edit, delete, and reorder links within categories
+- Roster Teams module:
+	- create and manage multiple raid team setups
+	- toggle each team between Flex (30 max) and Mythic (20 max)
+	- add and remove level 90 members regardless of authentication status
+	- assign and update Tank, Healer, Melee DPS, or Ranged DPS role per member
+	- review raid buff coverage, class distribution, and token split
 - Export module:
 	- generate character-to-label export JSON for guild addon workflows
 	- copy JSON to clipboard
@@ -78,6 +84,7 @@ Admin access is granted by guild rank via middleware. Officer or higher can acce
 |---|---|---|
 | `/profile` | Yes | Battle.net account profile and main-character selection |
 | `/admin` | Yes + Admin | Redirects to the default admin module |
+| `/admin/roster-teams` | Yes + Admin | Multi-team raid roster builder and analysis |
 | `/admin/mains` | Yes + Admin | Member overview, main/alt visibility, and nickname management |
 | `/admin/links` | Yes + Admin | Public links category/link management |
 | `/admin/export` | Yes + Admin | Export JSON for guild labels and addon workflows |
@@ -103,6 +110,12 @@ Admin access is granted by guild rank via middleware. Officer or higher can acce
 | Endpoint | Method | Description |
 |---|---|---|
 | `/api/admin/update-nickname` | POST | Set or clear a guild member display nickname |
+| `/api/admin/roster-teams/create-team` | POST | Create a raid team |
+| `/api/admin/roster-teams/update-team` | POST | Update team name, mode, and sort order |
+| `/api/admin/roster-teams/delete-team` | POST | Delete a raid team |
+| `/api/admin/roster-teams/add-member` | POST | Add a level 90 member to a team with assigned role |
+| `/api/admin/roster-teams/remove-member` | POST | Remove a member from a team |
+| `/api/admin/roster-teams/update-member-role` | POST | Update assigned role for an existing team member |
 | `/api/admin/links/create-category` | POST | Create a public link category |
 | `/api/admin/links/update-category` | POST | Update category title, icon, or sort order |
 | `/api/admin/links/delete-category` | POST | Delete a link category and its links |
@@ -119,14 +132,12 @@ Admin access is granted by guild rank via middleware. Officer or higher can acce
 ### Retired API Endpoints
 
 These handlers remain in the codebase as retired stubs and currently return HTTP 410:
-
 - `/api/admin/create-profile`
 - `/api/admin/assign-character`
 - `/api/admin/unassign-character`
 - `/api/admin/update-profile`
 
 ## Authentication and Session Flow
-
 1. User visits `/auth/login`.
 2. The site creates a CSRF state token and redirects to Blizzard OAuth2.
 3. Blizzard redirects back to `/auth/callback` after login approval.
@@ -144,6 +155,8 @@ These handlers remain in the codebase as retired stubs and currently return HTTP
 | `sessions` | Session IDs and expiration timestamps |
 | `characters` | User-owned WoW characters and selected main tracking |
 | `roster_members_cache` | Cached Blizzard guild roster data plus collection stats |
+| `raid_teams` | Saved raid team definitions with mode and ordering |
+| `raid_team_members` | Team membership assignments and role ownership |
 | `link_categories` | Public Useful Links page categories |
 | `links` | Public Useful Links entries |
 
@@ -162,7 +175,9 @@ These handlers remain in the codebase as retired stubs and currently return HTTP
 │   ├── 0002_roster_cache.sql
 │   ├── 0003_admin.sql
 │   ├── 0004_nickname.sql
-│   └── 0005_links.sql
+│   ├── 0005_links.sql
+│   ├── 0006_raid_teams.sql
+│   └── 0007_split_dps_roles.sql
 ├── public/
 │   ├── _routes.json
 │   └── images/
@@ -200,12 +215,20 @@ These handlers remain in the codebase as retired stubs and currently return HTTP
 │   │   │   ├── export.astro
 │   │   │   ├── index.astro
 │   │   │   ├── links.astro
-│   │   │   └── mains.astro
+│   │   │   ├── mains.astro
+│   │   │   └── roster-teams.astro
 │   │   ├── api/
 │   │   │   ├── set-main.ts
 │   │   │   ├── admin/
 │   │   │   │   ├── assign-character.ts
 │   │   │   │   ├── create-profile.ts
+│   │   │   │   ├── roster-teams/
+│   │   │   │   │   ├── add-member.ts
+│   │   │   │   │   ├── create-team.ts
+│   │   │   │   │   ├── delete-team.ts
+│   │   │   │   │   ├── remove-member.ts
+│   │   │   │   │   ├── update-member-role.ts
+│   │   │   │   │   └── update-team.ts
 │   │   │   │   ├── unassign-character.ts
 │   │   │   │   ├── update-nickname.ts
 │   │   │   │   ├── update-profile.ts
