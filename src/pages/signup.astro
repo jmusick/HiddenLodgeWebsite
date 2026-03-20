@@ -19,6 +19,7 @@ import {
   tokenArmorType,
   type AssignedRole,
 } from '../lib/raid-teams';
+import { classColor } from '../lib/wow';
 
 const user = Astro.locals.user;
 const isAdmin = Astro.locals.isAdmin;
@@ -355,6 +356,13 @@ for (const row of selectedDaySummaryRows) {
                   !signedUpCharIds.has(m.blizzard_char_id) &&
                   !(m.user_id !== null && signedUpUserIds.has(m.user_id))
               );
+              const absentByClass = new Map();
+              for (const member of absentRows) {
+                const arr = absentByClass.get(member.class_name) ?? [];
+                arr.push(member);
+                absentByClass.set(member.class_name, arr);
+              }
+              const absentClassGroups = [...absentByClass.entries()].sort((a, b) => a[0].localeCompare(b[0]));
               const summary = computeTeamSummary(
                 sortedRows.map((row) => ({ className: row.class_name, assignedRole: row.signup_role }))
               );
@@ -449,14 +457,21 @@ for (const row of selectedDaySummaryRows) {
                   {absentRows.length > 0 && (
                     <details class="absent-section">
                       <summary class="absent-toggle">Absent ({absentRows.length})</summary>
-                      <ul class="absent-members">
-                        {absentRows.map((row) => (
-                          <li class="absent-member">
-                            <span class="member-name">{row.character_name}</span>
-                            <span class="member-meta">{row.class_name}{row.nickname ? ` · ${row.nickname}` : ''}</span>
-                          </li>
+                      <div class="absent-groups">
+                        {absentClassGroups.map(([className, classMembers]) => (
+                          <section class="absent-class-group">
+                            <h5 class="absent-class-heading">{className} ({classMembers.length})</h5>
+                            <ul class="absent-members">
+                              {classMembers.map((row) => (
+                                <li class="absent-member">
+                                  <span class="member-name" style={`color: ${classColor(row.class_name)}`}>{row.character_name}</span>
+                                  {row.nickname && <span class="member-meta">{row.nickname}</span>}
+                                </li>
+                              ))}
+                            </ul>
+                          </section>
                         ))}
-                      </ul>
+                      </div>
                     </details>
                   )}
                 </article>
@@ -977,14 +992,36 @@ for (const row of selectedDaySummaryRows) {
     gap: 0.2rem;
   }
 
+  .absent-groups {
+    margin-top: 0.3rem;
+    display: grid;
+    gap: 0.42rem;
+  }
+
+  .absent-class-group {
+    border: 1px solid rgba(232, 124, 124, 0.12);
+    border-radius: 0.3rem;
+    padding: 0.3rem 0.38rem;
+    background: rgba(16, 10, 10, 0.25);
+  }
+
+  .absent-class-heading {
+    margin: 0;
+    font-size: 0.74rem;
+    letter-spacing: 0.02em;
+    text-transform: uppercase;
+    color: rgba(220, 194, 194, 0.86);
+  }
+
   .absent-member {
-    border: 1px solid rgba(232, 124, 124, 0.15);
+    border: 1px solid rgba(232, 124, 124, 0.1);
     border-radius: 0.28rem;
     padding: 0.22rem 0.38rem;
     display: flex;
     gap: 0.5rem;
     align-items: baseline;
-    opacity: 0.75;
+    opacity: 0.86;
+    background: rgba(10, 6, 6, 0.18);
   }
 
   .absent-member .member-name {
