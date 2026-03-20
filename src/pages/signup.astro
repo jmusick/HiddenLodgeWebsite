@@ -21,15 +21,8 @@ import {
 } from '../lib/raid-teams';
 import { classColor } from '../lib/wow';
 
-const user = Astro.locals.user;
+const user = Astro.locals.user!;
 const isAdmin = Astro.locals.isAdmin;
-if (!user) {
-  return Astro.redirect('/auth/login');
-}
-
-if (!Astro.locals.isGuildMember) {
-  return new Response('Guild membership required.', { status: 403 });
-}
 
 interface CharacterRow {
   id: number;
@@ -86,6 +79,17 @@ const ROLE_OPTIONS: Array<{ value: AssignedRole; label: string }> = [
 
 function roleLabel(role: AssignedRole): string {
   return ROLE_OPTIONS.find((opt) => opt.value === role)?.label ?? role;
+}
+
+function groupAbsentRows(rows: RosterMemberRow[]): [string, RosterMemberRow[]][] {
+  const absentByClass = new Map<string, RosterMemberRow[]>();
+  for (const member of rows) {
+    const group = absentByClass.get(member.class_name) ?? [];
+    group.push(member);
+    absentByClass.set(member.class_name, group);
+  }
+
+  return [...absentByClass.entries()].sort((a, b) => a[0].localeCompare(b[0]));
 }
 
 const ymParam = new URL(Astro.request.url).searchParams.get('ym');
@@ -356,13 +360,7 @@ for (const row of selectedDaySummaryRows) {
                   !signedUpCharIds.has(m.blizzard_char_id) &&
                   !(m.user_id !== null && signedUpUserIds.has(m.user_id))
               );
-              const absentByClass = new Map();
-              for (const member of absentRows) {
-                const arr = absentByClass.get(member.class_name) ?? [];
-                arr.push(member);
-                absentByClass.set(member.class_name, arr);
-              }
-              const absentClassGroups = [...absentByClass.entries()].sort((a, b) => a[0].localeCompare(b[0]));
+              const absentClassGroups = groupAbsentRows(absentRows);
               const summary = computeTeamSummary(
                 sortedRows.map((row) => ({ className: row.class_name, assignedRole: row.signup_role }))
               );

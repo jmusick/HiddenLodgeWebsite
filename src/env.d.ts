@@ -6,6 +6,7 @@ interface CloudflareEnv {
 	BLIZZARD_CLIENT_SECRET: string;
 	BLIZZARD_REDIRECT_URI: string;
 	CRON_SECRET?: string;
+	RAID_PROGRESS_TARGET?: string;
 }
 
 declare module 'cloudflare:workers' {

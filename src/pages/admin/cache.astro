@@ -2,7 +2,7 @@
 export const prerender = false;
 
 if (!Astro.locals.isAdmin) {
-	return Astro.redirect('/');
+  return Astro.redirect('/');
 }
 
 return Astro.redirect('/admin/settings');

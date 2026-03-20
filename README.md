@@ -4,7 +4,7 @@ Official guild website for The Hidden Lodge, a semi-hardcore AOTC/Mythic raiding
 
 ## Overview
 
-The site combines public guild information, Blizzard-authenticated member profiles, a cached guild roster, curated resource links, a lore archive, and a small admin area for guild management tasks.
+The site combines public guild information, Blizzard-authenticated member profiles, cached roster and raider analytics views, curated resource links, a lore archive, and a guild officer admin area for day-to-day operations.
 
 ## Tech Stack
 
@@ -33,6 +33,16 @@ The site combines public guild information, Blizzard-authenticated member profil
 	- pagination controls
 	- collection stat spotlights for achievements, mounts, pets, and toys
 	- Raider.IO shortcuts per character
+- Raiders analytics page backed by D1 cache with:
+	- team-scoped character list for active roster teams
+	- class/status/search filters and sortable columns
+	- Blizzard class icons in the class column
+	- color-coded equipped iLvl values using WoW quality colors
+	- direct links to per-character raider detail pages
+- Raider detail profile page (`/raiders/:charId`) with:
+	- character portrait and full-body render
+	- status, team tags, and equipment/score/tier/gems/enchants summary
+	- full raid-progress matrix (difficulty rows and raid-name columns)
 - Authenticated profile page where users can:
 	- log in with Battle.net
 	- view their synced WoW characters
@@ -76,6 +86,10 @@ Admin access is granted by guild rank via middleware. Officer or higher can acce
 	- suppress absent alts when the same authenticated user signed up on another character
 	- override member signup roles inline from the signup calendar
 	- remove outdated raids
+- Settings module:
+	- configure tracked raid-progress expansion/tier bundle
+	- view roster/raiders cache health and auth-state breakdown
+	- manually trigger cache refresh for roster and raiders caches
 - Export module:
 	- generate character-to-label export JSON for guild addon workflows
 	- copy JSON to clipboard
@@ -93,6 +107,8 @@ Admin access is granted by guild rank via middleware. Officer or higher can acce
 | `/lore` | No | Lore archive with story picker, story reader, and artwork lightbox |
 | `/links` | No | Curated useful links grouped by configurable categories |
 | `/roster` | No | Cached guild roster with filters, sorting, pagination, and collection stats |
+| `/raiders` | No | Cached raider analytics table for active roster-team characters |
+| `/raiders/:charId` | No | Raider detail page with media, stats, and raid progress matrix |
 
 ### Authenticated / Admin Pages
 
@@ -104,6 +120,8 @@ Admin access is granted by guild rank via middleware. Officer or higher can acce
 | `/admin/raid-signups` | Yes + Admin | Manage primary schedules and ad-hoc raids |
 | `/admin/roster-teams` | Yes + Admin | Multi-team raid roster builder and analysis |
 | `/admin/mains` | Yes + Admin | Member overview, main/alt visibility, and nickname management |
+| `/admin/settings` | Yes + Admin | Raid-progress target settings and cache health controls |
+| `/admin/cache` | Yes + Admin | Backward-compatible redirect to `/admin/settings` |
 | `/admin/links` | Yes + Admin | Public links category/link management |
 | `/admin/export` | Yes + Admin | Export JSON for guild labels and addon workflows |
 
@@ -131,6 +149,8 @@ Admin access is granted by guild rank via middleware. Officer or higher can acce
 | Endpoint | Method | Description |
 |---|---|---|
 | `/api/admin/update-nickname` | POST | Set or clear a guild member display nickname |
+| `/api/admin/cache/refresh` | POST | Trigger roster and raiders cache refresh from admin |
+| `/api/admin/settings/raid-progress-target` | POST | Update the tracked raid-progress tier bundle |
 | `/api/admin/raid-signups/create-primary` | POST | Create a recurring primary raid schedule |
 | `/api/admin/raid-signups/delete-primary` | POST | Delete a recurring primary raid schedule |
 | `/api/admin/raid-signups/create-adhoc` | POST | Create an ad-hoc raid |
@@ -153,7 +173,7 @@ Admin access is granted by guild rank via middleware. Officer or higher can acce
 
 | Endpoint | Method | Description |
 |---|---|---|
-| `/api/cron/refresh-roster` | GET | Refreshes the guild roster and character-detail cache; requires `X-Cron-Secret` |
+| `/api/cron/refresh-roster` | GET | Refreshes both roster and raiders caches; requires `X-Cron-Secret` |
 
 ### Retired API Endpoints
 
@@ -181,6 +201,7 @@ These handlers remain in the codebase as retired stubs and currently return HTTP
 | `sessions` | Session IDs and expiration timestamps |
 | `characters` | User-owned WoW characters and selected main tracking |
 | `roster_members_cache` | Cached Blizzard guild roster data plus collection stats |
+| `raider_metrics_cache` | Cached team-scoped raider metrics including iLvl, M+, tier, gems/enchants, and raid progress |
 | `primary_raid_schedules` | Recurring primary raid schedule definitions |
 | `ad_hoc_raids` | One-off officer-created raids |
 | `raid_signups` | Member signups mapped to primary occurrences and ad-hoc raids |
@@ -188,12 +209,15 @@ These handlers remain in the codebase as retired stubs and currently return HTTP
 | `raid_team_members` | Team membership assignments and role ownership |
 | `link_categories` | Public Useful Links page categories |
 | `links` | Public Useful Links entries |
+| `site_settings` | Small key-value settings store (e.g., tracked raid-progress target) |
 
 ### Roster Cache Behavior
 
 - Roster summary data uses a short TTL for quick refreshes
 - Character detail data uses a longer TTL and refreshes in batches to avoid Blizzard and platform limits
 - The roster page can render from cached data while the cache warms additional members in the background
+- Raiders cache separates summary sync and detail sync to avoid heavy Blizzard fan-out on every request
+- Raid progress is stored as structured JSON labels for reliable table/profile rendering
 
 ## Project Structure
 
@@ -207,7 +231,15 @@ These handlers remain in the codebase as retired stubs and currently return HTTP
 │   ├── 0005_links.sql
 │   ├── 0006_raid_teams.sql
 │   ├── 0007_split_dps_roles.sql
-│   └── 0008_raid_signups.sql
+│   ├── 0008_raid_signups.sql
+│   ├── 0009_primary_repeat_cycle.sql
+│   ├── 0010_signup_status.sql
+│   ├── 0011_signup_role.sql
+│   ├── 0012_signup_timestamp.sql
+│   ├── 0013_raiders_cache.sql
+│   ├── 0014_raid_progress.sql
+│   ├── 0015_raid_progress_target.sql
+│   └── 0016_site_settings.sql
 ├── public/
 │   ├── _routes.json
 │   └── images/
@@ -222,7 +254,8 @@ These handlers remain in the codebase as retired stubs and currently return HTTP
 │   │   └── Welcome.astro
 │   ├── data/
 │   │   ├── dadJokes.ts
-│   │   └── externalLinks.ts
+│   │   ├── externalLinks.ts
+│   │   └── raidProgressTargets.ts
 │   ├── layouts/
 │   │   ├── AdminLayout.astro
 │   │   └── Layout.astro
@@ -230,6 +263,7 @@ These handlers remain in the codebase as retired stubs and currently return HTTP
 │   │   ├── auth.ts
 │   │   ├── blizzard.ts
 │   │   ├── debug-shim.ts
+│   │   ├── raiders.ts
 │   │   ├── roster-cache.ts
 │   │   ├── runtime-env.ts
 │   │   └── wow.ts
@@ -240,13 +274,16 @@ These handlers remain in the codebase as retired stubs and currently return HTTP
 │   │   ├── lore.astro
 │   │   ├── profile.astro
 │   │   ├── raiding.astro
+│   │   ├── raiders.astro
 │   │   ├── roster.astro
 │   │   ├── admin/
+│   │   │   ├── cache.astro
 │   │   │   ├── export.astro
 │   │   │   ├── index.astro
 │   │   │   ├── links.astro
 │   │   │   ├── mains.astro
-│   │   │   └── roster-teams.astro
+│   │   │   ├── roster-teams.astro
+│   │   │   └── settings.astro
 │   │   ├── api/
 │   │   │   ├── set-main.ts
 │   │   │   ├── admin/
@@ -262,6 +299,10 @@ These handlers remain in the codebase as retired stubs and currently return HTTP
 │   │   │   │   ├── unassign-character.ts
 │   │   │   │   ├── update-nickname.ts
 │   │   │   │   ├── update-profile.ts
+│   │   │   │   ├── cache/
+│   │   │   │   │   └── refresh.ts
+│   │   │   │   └── settings/
+│   │   │   │       └── raid-progress-target.ts
 │   │   │   │   └── links/
 │   │   │   │       ├── create-category.ts
 │   │   │   │       ├── create-link.ts
@@ -271,6 +312,8 @@ These handlers remain in the codebase as retired stubs and currently return HTTP
 │   │   │   │       └── update-link.ts
 │   │   │   └── cron/
 │   │   │       └── refresh-roster.ts
+│   │   ├── raiders/
+│   │   │   └── [charId].astro
 │   │   └── auth/
 │   │       ├── callback.ts
 │   │       ├── login.ts

@@ -1,0 +1,431 @@
+---
+export const prerender = false;
+
+import AdminLayout from '../../layouts/AdminLayout.astro';
+import { env } from 'cloudflare:workers';
+import { RAID_PROGRESS_TARGET_GROUPS, resolveRaidProgressTier } from '../../data/raidProgressTargets';
+
+if (!Astro.locals.isAdmin) {
+  return Astro.redirect('/');
+}
+
+interface RosterCacheRow {
+  total_members: number;
+  pending_details: number;
+  last_summary_sync: number | null;
+  last_detail_sync: number | null;
+}
+
+interface RaidersCacheRow {
+  total_members: number;
+  pending_details: number;
+  ready_count: number;
+  missing_count: number;
+  expired_count: number;
+  unavailable_count: number;
+  last_summary_sync: number | null;
+  last_detail_sync: number | null;
+}
+
+interface SiteSettingRow {
+  value: string;
+}
+
+const now = Math.floor(Date.now() / 1000);
+const rosterTtlCutoff = now - 24 * 60 * 60;
+const raidersTtlCutoff = now - 12 * 60 * 60;
+const statusParam = new URL(Astro.request.url).searchParams.get('status');
+
+let rosterCache: RosterCacheRow | null = null;
+let raidersCache: RaidersCacheRow | null = null;
+let raidProgressTarget = '';
+let cacheError = '';
+
+try {
+  const [rosterResult, raidersResult, settingResult] = await env.DB.batch([
+    env.DB.prepare(
+      `SELECT
+          COUNT(*) AS total_members,
+          SUM(CASE WHEN details_synced_at IS NULL OR details_synced_at < ? THEN 1 ELSE 0 END) AS pending_details,
+          MAX(summary_synced_at) AS last_summary_sync,
+          MAX(details_synced_at) AS last_detail_sync
+       FROM roster_members_cache`
+    ).bind(rosterTtlCutoff),
+    env.DB.prepare(
+      `SELECT
+          COUNT(*) AS total_members,
+          SUM(CASE WHEN auth_state = 'ready' AND (details_synced_at IS NULL OR details_synced_at < ?) THEN 1 ELSE 0 END) AS pending_details,
+          SUM(CASE WHEN auth_state = 'ready' THEN 1 ELSE 0 END) AS ready_count,
+          SUM(CASE WHEN auth_state = 'missing' THEN 1 ELSE 0 END) AS missing_count,
+          SUM(CASE WHEN auth_state = 'expired' THEN 1 ELSE 0 END) AS expired_count,
+          SUM(CASE WHEN auth_state = 'unavailable' THEN 1 ELSE 0 END) AS unavailable_count,
+          MAX(summary_synced_at) AS last_summary_sync,
+          MAX(details_synced_at) AS last_detail_sync
+       FROM raider_metrics_cache`
+    ).bind(raidersTtlCutoff),
+    env.DB.prepare(`SELECT value FROM site_settings WHERE key = 'raid_progress_target' LIMIT 1`),
+  ]);
+
+  rosterCache = (rosterResult.results?.[0] ?? null) as RosterCacheRow | null;
+  raidersCache = (raidersResult.results?.[0] ?? null) as RaidersCacheRow | null;
+  raidProgressTarget = ((settingResult.results?.[0] as SiteSettingRow | undefined)?.value ?? '').trim();
+} catch (error) {
+  cacheError = error instanceof Error ? error.message : 'Unable to load cache status.';
+}
+
+const selectedRaidTier = resolveRaidProgressTier(raidProgressTarget);
+
+function formatEpoch(value: number | null): string {
+  return value ? new Date(value * 1000).toLocaleString() : 'Never';
+}
+---
+
+<AdminLayout title="Settings | Admin | The Hidden Lodge">
+  <div class="cache-page">
+    <div class="page-header">
+      <div>
+        <h1>Guild Settings</h1>
+        <p class="page-desc">
+          Configure Raiders progress tracking and monitor cache health for roster and raiders data.
+        </p>
+      </div>
+    </div>
+
+    {statusParam === 'refresh-ok' && (
+      <div class="flash flash-ok" role="status">Cache refresh triggered successfully.</div>
+    )}
+    {statusParam === 'refresh-error' && (
+      <div class="flash flash-error" role="alert">Cache refresh failed. Check logs and try again.</div>
+    )}
+    {statusParam === 'raid-target-updated' && (
+      <div class="flash flash-ok" role="status">Tracked raid updated.</div>
+    )}
+    {statusParam === 'raid-target-error' && (
+      <div class="flash flash-error" role="alert">Could not update tracked raid setting.</div>
+    )}
+
+    {cacheError ? (
+      <div class="flash flash-error" role="alert">
+        {cacheError}
+      </div>
+    ) : (
+      <>
+        <section class="admin-section">
+          <h2>Raid Progress Setting</h2>
+          <p class="setting-copy">
+            Choose which expansion and season bundle the Raiders page should use when building the raid progress matrix.
+          </p>
+          <form method="POST" action="/api/admin/settings/raid-progress-target" class="setting-form">
+            <label for="raid_progress_target">Tracked tier</label>
+            <select
+              id="raid_progress_target"
+              name="raid_progress_target"
+            >
+              {RAID_PROGRESS_TARGET_GROUPS.map((group) => (
+                <option value={group.id} selected={selectedRaidTier?.id === group.id}>
+                  {`${group.expansion} · ${group.tier}`}
+                </option>
+              ))}
+            </select>
+            <button type="submit">Save Setting</button>
+          </form>
+          <p class="setting-current">Current tracked bundle: <strong>{selectedRaidTier ? `${selectedRaidTier.expansion} · ${selectedRaidTier.tier}` : 'Not configured'}</strong></p>
+          {selectedRaidTier && (
+            <p class="setting-current">Included raids/codes: <strong>{selectedRaidTier.raids.map((raid) => `${raid.code} (${raid.raidName})`).join(' · ')}</strong></p>
+          )}
+        </section>
+
+        <section class="admin-section cache-health-card">
+          <div class="section-heading-row">
+            <div>
+              <h2>Cache Health</h2>
+              <p class="section-copy">
+                Use this section to review cache freshness and trigger a manual refresh for both roster and raiders caches.
+              </p>
+            </div>
+            <form method="POST" action="/api/admin/cache/refresh" class="refresh-form">
+              <button type="submit" class="refresh-btn">Refresh Now</button>
+            </form>
+          </div>
+          <div class="cache-health-grid">
+            <section class="cache-subsection">
+              <h3>Roster Cache</h3>
+              <ul class="stats-list">
+                <li><span>Total members</span><strong>{rosterCache?.total_members ?? 0}</strong></li>
+                <li><span>Pending detail refresh</span><strong>{rosterCache?.pending_details ?? 0}</strong></li>
+                <li><span>Last summary sync</span><strong>{formatEpoch(rosterCache?.last_summary_sync ?? null)}</strong></li>
+                <li><span>Last detail sync</span><strong>{formatEpoch(rosterCache?.last_detail_sync ?? null)}</strong></li>
+              </ul>
+            </section>
+
+            <section class="cache-subsection">
+              <h3>Raiders Cache</h3>
+              <ul class="stats-list">
+                <li><span>Total team raiders</span><strong>{raidersCache?.total_members ?? 0}</strong></li>
+                <li><span>Pending detail refresh</span><strong>{raidersCache?.pending_details ?? 0}</strong></li>
+                <li><span>Last summary sync</span><strong>{formatEpoch(raidersCache?.last_summary_sync ?? null)}</strong></li>
+                <li><span>Last detail sync</span><strong>{formatEpoch(raidersCache?.last_detail_sync ?? null)}</strong></li>
+              </ul>
+
+              <h4>Auth State Breakdown</h4>
+              <ul class="pill-list">
+                <li class="pill pill-ready">Ready: {raidersCache?.ready_count ?? 0}</li>
+                <li class="pill pill-missing">Missing: {raidersCache?.missing_count ?? 0}</li>
+                <li class="pill pill-expired">Expired: {raidersCache?.expired_count ?? 0}</li>
+                <li class="pill pill-unavailable">Unavailable: {raidersCache?.unavailable_count ?? 0}</li>
+              </ul>
+            </section>
+          </div>
+        </section>
+      </>
+    )}
+  </div>
+</AdminLayout>
+
+<style>
+  .cache-page {
+    display: grid;
+    gap: 1rem;
+  }
+
+  .page-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 1rem;
+  }
+
+  .section-heading-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 1rem;
+    flex-wrap: wrap;
+  }
+
+  .refresh-form {
+    flex-shrink: 0;
+  }
+
+  .refresh-btn {
+    border: 1px solid rgba(214, 176, 106, 0.55);
+    border-radius: 0.45rem;
+    background: rgba(214, 176, 106, 0.12);
+    color: #f3e2be;
+    padding: 0.45rem 0.8rem;
+    font-size: 0.9rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: border-color 160ms ease, background 160ms ease;
+  }
+
+  .refresh-btn:hover,
+  .refresh-btn:focus-visible {
+    border-color: rgba(214, 176, 106, 0.8);
+    background: rgba(214, 176, 106, 0.2);
+  }
+
+  h1 {
+    margin: 0;
+  }
+
+  .page-desc {
+    margin: 0.35rem 0 0;
+    color: #d8e2e8;
+    max-width: 68ch;
+  }
+
+  .section-copy {
+    margin: 0.35rem 0 0;
+    color: #d8e2e8;
+    max-width: 70ch;
+  }
+
+  .cache-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 1rem;
+  }
+
+  .cache-health-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 1rem;
+    margin-top: 0.75rem;
+  }
+
+  .cache-subsection {
+    border: 1px solid rgba(214, 176, 106, 0.2);
+    border-radius: 0.55rem;
+    background: rgba(5, 10, 16, 0.4);
+    padding: 0.8rem;
+  }
+
+  .admin-section {
+    border: 1px solid rgba(214, 176, 106, 0.32);
+    border-radius: 0.7rem;
+    background:
+      linear-gradient(150deg, rgba(214, 176, 106, 0.1), transparent 38%),
+      rgba(11, 21, 32, 0.8);
+    padding: 1rem;
+  }
+
+  .setting-copy {
+    margin: 0.6rem 0 0;
+    color: #d8e2e8;
+  }
+
+  .setting-form {
+    margin-top: 0.8rem;
+    display: grid;
+    gap: 0.55rem;
+  }
+
+  .setting-form label {
+    color: #e7d9bc;
+    font-size: 0.82rem;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+  }
+
+  .setting-form select {
+    border: 1px solid rgba(214, 176, 106, 0.35);
+    border-radius: 0.45rem;
+    background: rgba(5, 10, 16, 0.55);
+    color: #e9eef1;
+    padding: 0.5rem 0.6rem;
+  }
+
+  .setting-form button {
+    width: fit-content;
+    border: 1px solid rgba(214, 176, 106, 0.55);
+    border-radius: 0.45rem;
+    background: rgba(214, 176, 106, 0.12);
+    color: #f3e2be;
+    padding: 0.42rem 0.75rem;
+    font-size: 0.88rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: border-color 160ms ease, background 160ms ease;
+  }
+
+  .setting-form button:hover,
+  .setting-form button:focus-visible {
+    border-color: rgba(214, 176, 106, 0.8);
+    background: rgba(214, 176, 106, 0.2);
+  }
+
+  .setting-current {
+    margin: 0.6rem 0 0;
+    color: #d8e2e8;
+  }
+
+  h2 {
+    margin: 0;
+    color: #f1d9a9;
+  }
+
+  h3 {
+    margin: 1rem 0 0.5rem;
+    color: #e7d9bc;
+    font-size: 0.95rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+
+  h4 {
+    margin: 0.9rem 0 0.5rem;
+    color: #e7d9bc;
+    font-size: 0.85rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+
+  .stats-list {
+    list-style: none;
+    margin: 0.75rem 0 0;
+    padding: 0;
+    display: grid;
+    gap: 0.55rem;
+  }
+
+  .stats-list li {
+    display: flex;
+    justify-content: space-between;
+    gap: 1rem;
+    border-bottom: 1px solid rgba(214, 176, 106, 0.15);
+    padding-bottom: 0.4rem;
+    color: #d8e2e8;
+  }
+
+  .stats-list strong {
+    color: #f1d9a9;
+    font-weight: 700;
+    text-align: right;
+  }
+
+  .pill-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.45rem;
+  }
+
+  .pill {
+    display: inline-flex;
+    align-items: center;
+    padding: 0.22rem 0.55rem;
+    border-radius: 999px;
+    border: 1px solid rgba(255, 255, 255, 0.16);
+    font-size: 0.82rem;
+  }
+
+  .pill-ready {
+    color: #9ce5b0;
+    background: rgba(56, 142, 81, 0.18);
+    border-color: rgba(109, 202, 138, 0.34);
+  }
+
+  .pill-missing {
+    color: #cfdae2;
+    background: rgba(132, 154, 171, 0.14);
+    border-color: rgba(190, 205, 215, 0.26);
+  }
+
+  .pill-expired,
+  .pill-unavailable {
+    color: #f0c07f;
+    background: rgba(173, 96, 31, 0.16);
+    border-color: rgba(240, 192, 127, 0.3);
+  }
+
+  .flash {
+    border-radius: 0.55rem;
+    padding: 0.7rem 0.85rem;
+    border: 1px solid transparent;
+  }
+
+  .flash-error {
+    border-color: rgba(233, 127, 106, 0.5);
+    background: rgba(95, 35, 26, 0.5);
+    color: #ffd4cc;
+  }
+
+  .flash-ok {
+    border-color: rgba(109, 202, 138, 0.4);
+    background: rgba(28, 76, 44, 0.5);
+    color: #cef2d6;
+  }
+
+  @media (max-width: 900px) {
+    .cache-grid {
+      grid-template-columns: 1fr;
+    }
+
+    .cache-health-grid {
+      grid-template-columns: 1fr;
+    }
+  }
+</style>

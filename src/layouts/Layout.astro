@@ -26,6 +26,7 @@ const publicNavItems = [
 ];
 
 const memberNavItems = [
+	...(isGuildMember ? [{ href: '/raiders', label: 'Raiders' }] : []),
 	...(isGuildMember ? [{ href: '/signup', label: 'Signup' }] : []),
 	...(isAdmin ? [{ href: '/admin', label: 'Admin' }] : []),
 ];

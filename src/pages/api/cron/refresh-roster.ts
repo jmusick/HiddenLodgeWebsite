@@ -1,6 +1,7 @@
 import type { APIRoute } from 'astro';
 import { env } from 'cloudflare:workers';
 import { refreshRosterCache } from '../../../lib/roster-cache';
+import { refreshRaidersCache } from '../../../lib/raiders';
 
 export const GET: APIRoute = async ({ request }) => {
   const provided = request.headers.get('X-Cron-Secret');
@@ -9,8 +10,16 @@ export const GET: APIRoute = async ({ request }) => {
   }
 
   try {
-    const status = await refreshRosterCache();
-    return Response.json({ success: true, ...status });
+    const [rosterStatus, raidersStatus] = await Promise.all([
+      refreshRosterCache(),
+      refreshRaidersCache(),
+    ]);
+
+    return Response.json({
+      success: true,
+      roster: rosterStatus,
+      raiders: raidersStatus,
+    });
   } catch (err) {
     return new Response(String(err), { status: 500 });
   }

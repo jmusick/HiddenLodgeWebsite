@@ -559,6 +559,7 @@ const statusParam = new URL(Astro.request.url).searchParams.get('status');
 	.unauthed-wrap {
 		max-height: 480px;
 		overflow-y: auto;
+		position: relative;
 	}
 
 	.data-table {
@@ -578,6 +579,14 @@ const statusParam = new URL(Astro.request.url).searchParams.get('status');
 		font-size: 0.78rem;
 		text-transform: uppercase;
 		white-space: nowrap;
+	}
+
+	.unauthed-wrap .data-table thead th {
+		position: sticky;
+		top: 0;
+		z-index: 5;
+		background: rgba(20, 28, 36, 0.98);
+		box-shadow: inset 0 -1px 0 rgba(214, 176, 106, 0.25);
 	}
 
 	.data-table td {

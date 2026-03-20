@@ -57,7 +57,10 @@ const timezoneOptions = getSupportedTimeZones();
 					)
 				}
 			</div>
-			<a href="/auth/logout" class="logout-btn">Log Out</a>
+			<div class="profile-actions">
+				<a href="/auth/login" class="refresh-btn">Refresh Blizzard Account Data</a>
+				<a href="/auth/logout" class="logout-btn">Log Out</a>
+			</div>
 		</header>
 
 		<section class="timezone-section" aria-labelledby="timezone-heading">
@@ -212,6 +215,33 @@ const timezoneOptions = getSupportedTimeZones();
 		border-radius: 0.25rem;
 		color: var(--muted);
 		transition: color 0.15s, border-color 0.15s;
+	}
+
+	.profile-actions {
+		display: flex;
+		align-items: center;
+		gap: 0.5rem;
+		flex-wrap: wrap;
+		justify-content: flex-end;
+	}
+
+	.refresh-btn {
+		font-family: var(--font-body);
+		font-size: 0.8rem;
+		letter-spacing: 0.05em;
+		text-transform: uppercase;
+		padding: 0.42rem 0.8rem;
+		border: 1px solid rgba(214, 176, 106, 0.55);
+		border-radius: 0.25rem;
+		color: #f3e2be;
+		background: rgba(214, 176, 106, 0.1);
+		transition: background 0.15s, border-color 0.15s, color 0.15s;
+	}
+
+	.refresh-btn:hover {
+		background: rgba(214, 176, 106, 0.2);
+		border-color: rgba(214, 176, 106, 0.8);
+		color: #fff3d5;
 	}
 
 	.logout-btn:hover {

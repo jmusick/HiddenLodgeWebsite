@@ -1,0 +1,582 @@
+---
+export const prerender = false;
+
+import Layout from '../../layouts/Layout.astro';
+import { Icon } from 'astro-icon/components';
+import { classColor } from '../../lib/wow';
+import { getRaiderByCharId, getRaiderMedia } from '../../lib/raiders';
+import { RAID_PROGRESS_TARGET_GROUPS } from '../../data/raidProgressTargets';
+
+const { charId } = Astro.params;
+const id = Number(charId);
+if (!charId || !Number.isFinite(id)) {
+  return new Response('Not found', { status: 404 });
+}
+
+const [raider, media] = await Promise.all([
+  getRaiderByCharId(id),
+  getRaiderMedia(id),
+]);
+if (!raider) {
+  return new Response('Not found', { status: 404 });
+}
+const { portrait, fullBody } = media;
+
+function authLabel(state: string): string {
+  if (state === 'ready') return 'Connected';
+  if (state === 'expired') return 'Token Expired';
+  if (state === 'unavailable') return 'Unavailable';
+  return 'Not Connected';
+}
+
+function scoreColor(filled: number | null, total: number | null): string {
+  if (filled === null || total === null || total === 0) return 'inherit';
+  const pct = filled / total;
+  if (pct >= 1)    return '#a335ee';
+  if (pct >= 0.75) return '#0070dd';
+  if (pct >= 0.5)  return '#1eff00';
+  return '#ffffff';
+}
+
+function formatScore(filled: number | null, total: number | null): string {
+  if (filled === null || total === null) return '—';
+  if (total === 0) return 'N/A';
+  return `${Math.round((filled / total) * 100)}% (${filled}/${total})`;
+}
+
+interface RaidProgressMatrixRow {
+  mode: 'L' | 'N' | 'H' | 'M';
+  cells: string[];
+}
+
+interface RaidProgressMatrix {
+  headers: string[];
+  rows: RaidProgressMatrixRow[];
+}
+
+function parseRaidProgressMatrix(label: string | null): RaidProgressMatrix | null {
+  if (!label) return null;
+
+  try {
+    const parsed = JSON.parse(label) as RaidProgressMatrix;
+    if (!parsed || !Array.isArray(parsed.headers) || !Array.isArray(parsed.rows)) return null;
+
+    const headers = parsed.headers
+      .map((header) => String(header).trim().toUpperCase())
+      .filter(Boolean);
+    if (headers.length === 0) return null;
+
+    const rows = parsed.rows
+      .map((row) => ({
+        mode: String(row.mode ?? '').toUpperCase() as 'L' | 'N' | 'H' | 'M',
+        cells: Array.isArray(row.cells) ? row.cells.map((cell) => String(cell).trim()) : [],
+      }))
+      .filter((row) => ['L', 'N', 'H', 'M'].includes(row.mode));
+
+    if (rows.length === 0) return null;
+
+    const normalizedRows = rows.map((row) => {
+      const cells = row.cells.slice(0, headers.length);
+      while (cells.length < headers.length) cells.push('0/0');
+      return { mode: row.mode, cells } as RaidProgressMatrixRow;
+    });
+
+    return { headers, rows: normalizedRows };
+  } catch {
+    return null;
+  }
+}
+
+const RAID_NAME_BY_CODE = new Map(
+  RAID_PROGRESS_TARGET_GROUPS.flatMap((group) =>
+    group.raids.map((raid) => [raid.code.toUpperCase(), raid.raidName] as const)
+  )
+);
+
+function fullRaidName(code: string): string {
+  return RAID_NAME_BY_CODE.get(code.toUpperCase()) ?? code;
+}
+
+function fullDifficultyName(mode: 'L' | 'N' | 'H' | 'M'): string {
+  if (mode === 'L') return 'Raid Finder';
+  if (mode === 'N') return 'Normal';
+  if (mode === 'H') return 'Heroic';
+  return 'Mythic';
+}
+
+const color = classColor(raider.className);
+const pageTitle = `${raider.name} — ${raider.realm} | The Hidden Lodge`;
+const raidProgressMatrix = parseRaidProgressMatrix(raider.raidProgressLabel);
+---
+
+<Layout title={pageTitle}>
+  <section>
+    <a href="/raiders" class="back-link">
+      <Icon name="lucide:arrow-left" aria-hidden="true" />
+      Back to Raiders
+    </a>
+
+    <header class="raider-header">
+      {portrait
+        ? <img src={portrait} alt="" class="header-portrait" aria-hidden="true" />
+        : <div class="raider-avatar" style={`--class-color: ${color}`} aria-hidden="true">{raider.name.charAt(0).toUpperCase()}</div>
+      }
+      <div class="raider-identity">
+        <h1 class="raider-name" style={`color: ${color}`}>{raider.name}</h1>
+        <p class="raider-subtitle">{raider.className} &middot; {raider.realm}</p>
+        {raider.teamNames.length > 0 && (
+          <div class="team-list">
+            {raider.teamNames.map((team) => <span class="team-chip">{team}</span>)}
+          </div>
+        )}
+      </div>
+      <div class="raider-status">
+        <span class:list={['status-badge', raider.authState]}>{authLabel(raider.authState)}</span>
+      </div>
+    </header>
+  </section>
+
+  <section class="body-layout" aria-label="Raider detail">
+    {fullBody && (
+      <div class="full-body-col">
+        <img src={fullBody} alt={`${raider.name} character render`} class="full-body-img" />
+      </div>
+    )}
+    <div class="stats-col">
+      <div class="stats-grid">
+        <div class="stat-card">
+          <div class="stat-label">
+            <Icon name="lucide:shield" class="stat-icon" aria-hidden="true" />
+            Equipped Item Level
+          </div>
+          <div class="stat-value">{raider.equippedItemLevel ?? '—'}</div>
+        </div>
+
+        <div class="stat-card">
+          <div class="stat-label">
+            <Icon name="lucide:layers" class="stat-icon" aria-hidden="true" />
+            Average Item Level
+          </div>
+          <div class="stat-value">{raider.averageItemLevel ?? '—'}</div>
+        </div>
+
+        <div class="stat-card">
+          <div class="stat-label">
+            <Icon name="lucide:trophy" class="stat-icon" aria-hidden="true" />
+            M+ Score
+          </div>
+          <div class="stat-value">
+            {raider.mythicScore ? raider.mythicScore.toLocaleString(undefined, { maximumFractionDigits: 0 }) : '—'}
+          </div>
+        </div>
+
+        <div class="stat-card">
+          <div class="stat-label">
+            <Icon name="lucide:star" class="stat-icon" aria-hidden="true" />
+            Tier Pieces
+          </div>
+          <div class="stat-value">{raider.tierPiecesEquipped ?? '—'}</div>
+        </div>
+
+        <div class="stat-card">
+          <div class="stat-label">
+            <Icon name="lucide:gem" class="stat-icon" aria-hidden="true" />
+            Gems
+          </div>
+          <div class="stat-value" style={`color: ${scoreColor(raider.socketedGems, raider.totalSockets)}`}>
+            {formatScore(raider.socketedGems, raider.totalSockets)}
+          </div>
+        </div>
+
+        <div class="stat-card">
+          <div class="stat-label">
+            <Icon name="lucide:sparkles" class="stat-icon" aria-hidden="true" />
+            Enchants
+          </div>
+          <div class="stat-value" style={`color: ${scoreColor(raider.enchantedSlots, raider.enchantableSlots)}`}>
+            {formatScore(raider.enchantedSlots, raider.enchantableSlots)}
+          </div>
+        </div>
+      </div>
+
+      <section class="raid-progress-panel panel" aria-label="Raid progress">
+        <h2 class="raid-progress-title">
+          <Icon name="lucide:swords" class="raid-progress-icon" aria-hidden="true" />
+          Raid Progress
+        </h2>
+        {raidProgressMatrix ? (
+          <div class="raid-progress-grid-lg" style={`--raid-cols: ${raidProgressMatrix.headers.length}`}>
+            {raidProgressMatrix.headers.map((header, index) => (
+              <div class:list={['raid-grid-lg-cell', 'raid-grid-lg-head', { 'starts-col-two': index === 0 }]}>{fullRaidName(header)}</div>
+            ))}
+
+            {raidProgressMatrix.rows.map((row) => (
+              <>
+                <div class="raid-grid-lg-cell mode-col">{fullDifficultyName(row.mode)}</div>
+                {row.cells.map((cell) => (
+                  <div class="raid-grid-lg-cell">{cell}</div>
+                ))}
+              </>
+            ))}
+          </div>
+        ) : (
+          <p class="raid-progress-empty">No tracked raid progress available yet.</p>
+        )}
+      </section>
+
+      <section class="sync-info panel" aria-label="Sync info">
+        <p class="sync-text">
+          <Icon name="lucide:clock" class="sync-icon" aria-hidden="true" />
+          Last detail sync:&nbsp;
+          <strong>
+            {raider.lastCheckedAt
+              ? new Date(raider.lastCheckedAt * 1000).toLocaleString()
+              : 'Never'}
+          </strong>
+        </p>
+      </section>
+    </div>
+  </section>
+</Layout>
+
+<style>
+  .back-link {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    color: #b0c4d0;
+    font-size: 0.9rem;
+    text-decoration: none;
+    margin-bottom: 1.25rem;
+    transition: color 0.15s;
+  }
+
+  .back-link:hover {
+    color: #f1d9a9;
+  }
+
+  .back-link svg {
+    width: 0.95rem;
+    height: 0.95rem;
+  }
+
+  /* ── Header ── */
+  .raider-header {
+    display: flex;
+    align-items: center;
+    gap: 0.9rem;
+    padding: 0.9rem 1.25rem;
+    border: 1px solid rgba(214, 176, 106, 0.32);
+    border-radius: 0.75rem;
+    background:
+      linear-gradient(155deg, rgba(214, 176, 106, 0.07), transparent 50%),
+      rgba(11, 21, 32, 0.78);
+    margin-bottom: 1.25rem;
+  }
+
+  .header-portrait {
+    width: 3.5rem;
+    height: 3.5rem;
+    border-radius: 0.4rem;
+    object-fit: cover;
+    object-position: top center;
+    border: 2px solid rgba(214, 176, 106, 0.4);
+    flex-shrink: 0;
+  }
+
+  .raider-avatar {
+    width: 3.5rem;
+    height: 3.5rem;
+    border-radius: 50%;
+    border: 2px solid var(--class-color, #d8e2e8);
+    background: rgba(214, 176, 106, 0.1);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-family: 'Cinzel', serif;
+    font-size: 1.4rem;
+    font-weight: 700;
+    color: var(--class-color, #d8e2e8);
+    flex-shrink: 0;
+  }
+
+  .raider-identity {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .raider-name {
+    margin: 0;
+    font-family: 'Cinzel', serif;
+    font-size: clamp(1.2rem, 3vw, 1.75rem);
+    font-weight: 700;
+    line-height: 1.1;
+  }
+
+  .raider-subtitle {
+    margin: 0.15rem 0 0.4rem;
+    color: #b0c4d0;
+    font-size: 0.93rem;
+  }
+
+  .team-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.3rem;
+  }
+
+  .team-chip {
+    display: inline-flex;
+    align-items: center;
+    padding: 0.15rem 0.4rem;
+    border-radius: 999px;
+    border: 1px solid rgba(214, 176, 106, 0.28);
+    background: rgba(214, 176, 106, 0.08);
+    font-size: 0.8rem;
+    color: #f3e2be;
+  }
+
+  .raider-status {
+    margin-left: auto;
+    flex-shrink: 0;
+  }
+
+  .status-badge {
+    display: inline-flex;
+    align-items: center;
+    padding: 0.3rem 0.7rem;
+    border-radius: 999px;
+    font-size: 0.82rem;
+    font-weight: 700;
+    letter-spacing: 0.03em;
+    text-transform: uppercase;
+    border: 1px solid rgba(255, 255, 255, 0.14);
+  }
+
+  .status-badge.ready {
+    color: #9ce5b0;
+    background: rgba(56, 142, 81, 0.18);
+    border-color: rgba(109, 202, 138, 0.34);
+  }
+
+  .status-badge.expired,
+  .status-badge.unavailable {
+    color: #f0c07f;
+    background: rgba(173, 96, 31, 0.16);
+    border-color: rgba(240, 192, 127, 0.3);
+  }
+
+  .status-badge.missing {
+    color: #cfdae2;
+    background: rgba(132, 154, 171, 0.14);
+    border-color: rgba(190, 205, 215, 0.26);
+  }
+
+  /* ── Body: full-body image + stats ── */
+  .body-layout {
+    display: flex;
+    align-items: flex-start;
+    gap: 1.25rem;
+  }
+
+  .full-body-col {
+    flex-shrink: 0;
+    width: 18rem;
+    height: 32rem;
+    border-radius: 0.75rem;
+    overflow: hidden;
+    border: 1px solid rgba(214, 176, 106, 0.32);
+    background: rgba(5, 10, 16, 0.6);
+  }
+
+  .full-body-img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    object-position: 45% top;
+    transform: translateY(-6%) scale(1.08);
+    transform-origin: center top;
+    display: block;
+  }
+
+  .stats-col {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+  }
+
+  /* ── Stat cards ── */
+  .stats-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.75rem;
+  }
+
+  .stat-card {
+    border: 1px solid rgba(214, 176, 106, 0.32);
+    border-radius: 0.75rem;
+    background:
+      linear-gradient(155deg, rgba(214, 176, 106, 0.07), transparent 50%),
+      rgba(11, 21, 32, 0.78);
+    padding: 1rem 1.1rem;
+  }
+
+  .stat-label {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    color: #b0c4d0;
+    font-size: 0.82rem;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    margin-bottom: 0.4rem;
+  }
+
+  .stat-icon {
+    width: 0.95rem;
+    height: 0.95rem;
+    flex-shrink: 0;
+  }
+
+  .stat-value {
+    font-family: 'Cinzel', serif;
+    font-size: clamp(1.2rem, 2.5vw, 1.7rem);
+    font-weight: 700;
+    color: #f1d9a9;
+    line-height: 1;
+  }
+
+  .raid-progress-panel {
+    padding: 1rem 1.1rem;
+  }
+
+  .raid-progress-title {
+    margin: 0 0 0.75rem;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.45rem;
+    color: #f1d9a9;
+    font-size: 1.05rem;
+    letter-spacing: 0.02em;
+  }
+
+  .raid-progress-icon {
+    width: 1rem;
+    height: 1rem;
+  }
+
+  .raid-progress-grid-lg {
+    display: grid;
+    grid-template-columns: 7.8rem repeat(var(--raid-cols), minmax(9.5rem, 1fr));
+    gap: 0.35rem;
+    font-size: 0.95rem;
+    line-height: 1.15;
+    width: 100%;
+  }
+
+  .raid-grid-lg-cell {
+    border: 1px solid rgba(109, 172, 229, 0.28);
+    border-radius: 0.45rem;
+    padding: 0.36rem 0.48rem;
+    text-align: center;
+    white-space: nowrap;
+    box-sizing: border-box;
+    overflow: hidden;
+    background: rgba(60, 119, 172, 0.14);
+    color: #cfe3f4;
+    font-weight: 700;
+  }
+
+  .raid-grid-lg-cell.raid-grid-lg-head {
+    background: rgba(214, 176, 106, 0.18);
+    color: #f3ddb0;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    font-size: 0.83rem;
+    border-color: rgba(214, 176, 106, 0.38);
+  }
+
+  .raid-grid-lg-cell.raid-grid-lg-head.starts-col-two {
+    grid-column: 2;
+  }
+
+  .raid-grid-lg-cell.mode-col {
+    background: rgba(148, 165, 178, 0.2);
+    color: #dbe6ef;
+    border-color: rgba(171, 188, 201, 0.34);
+    font-weight: 800;
+    letter-spacing: 0.03em;
+    text-align: left;
+    padding-left: 0.55rem;
+  }
+
+  .raid-progress-empty {
+    margin: 0;
+    color: #b0c4d0;
+    font-size: 0.95rem;
+  }
+
+  /* ── Sync info ── */
+  .sync-info {
+    padding: 0.75rem 1rem;
+  }
+
+  .sync-text {
+    margin: 0;
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    color: #b0c4d0;
+    font-size: 0.9rem;
+  }
+
+  .sync-text strong {
+    color: #d8e2e8;
+  }
+
+  .sync-icon {
+    width: 0.95rem;
+    height: 0.95rem;
+    flex-shrink: 0;
+  }
+
+  /* ── Responsive ── */
+  @media (max-width: 800px) {
+    .body-layout {
+      flex-direction: column;
+    }
+
+    .full-body-col {
+      width: 100%;
+      max-width: 22rem;
+      height: 28rem;
+      margin: 0 auto;
+    }
+
+    .stats-grid {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .raid-progress-grid-lg {
+      grid-template-columns: 6.2rem repeat(var(--raid-cols), minmax(7.4rem, 1fr));
+      font-size: 0.86rem;
+      gap: 0.28rem;
+    }
+
+    .raid-grid-lg-cell {
+      padding: 0.28rem 0.34rem;
+    }
+  }
+
+  @media (max-width: 440px) {
+    .stats-grid {
+      grid-template-columns: 1fr;
+    }
+
+    .raider-status {
+      display: none;
+    }
+  }
+</style>

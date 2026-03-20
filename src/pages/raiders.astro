@@ -1,0 +1,794 @@
+---
+export const prerender = false;
+
+import Layout from '../layouts/Layout.astro';
+import { Icon } from 'astro-icon/components';
+import { classColor } from '../lib/wow';
+import { loadRaidersViewData } from '../lib/raiders';
+
+const { raiders, totalMembers, readyCount, unavailableCount, status, errorMessage } = await loadRaidersViewData();
+
+const sortedRaiders = [...raiders].sort((a, b) => {
+  const scoreA = a.mythicScore ?? -1;
+  const scoreB = b.mythicScore ?? -1;
+  if (scoreA !== scoreB) return scoreB - scoreA;
+  return a.name.localeCompare(b.name);
+});
+
+const classOptions = [...new Set(sortedRaiders.map((raider) => raider.className))].sort((a, b) =>
+  a.localeCompare(b)
+);
+const teamOptions = [...new Set(sortedRaiders.flatMap((raider) => raider.teamNames))].sort((a, b) =>
+  a.localeCompare(b)
+);
+
+function authLabel(state: string): string {
+  if (state === 'ready') return 'Connected';
+  if (state === 'expired') return 'Token expired';
+  if (state === 'unavailable') return 'Unavailable';
+  return 'Not connected';
+}
+
+function scoreColor(filled: number | null, total: number | null): string {
+  if (filled === null || total === null || total === 0) return '';
+  const pct = filled / total;
+  if (pct >= 1)   return '#a335ee'; // epic purple
+  if (pct >= 0.75) return '#0070dd'; // rare blue
+  if (pct >= 0.5)  return '#1eff00'; // uncommon green
+  return '#ffffff';                  // common white
+}
+
+function formatScore(filled: number | null, total: number | null): string {
+  if (filled === null || total === null) return '—';
+  if (total === 0) return 'N/A';
+  return `${Math.round((filled / total) * 100)}% (${filled}/${total})`;
+}
+
+function formatLastChecked(epochSeconds: number | null): string {
+  if (!epochSeconds) return 'Never';
+  return new Date(epochSeconds * 1000).toLocaleString();
+}
+
+function classAbbrev(className: string): string {
+  const normalized = className.trim().toLowerCase();
+  const map: Record<string, string> = {
+    'death knight': 'DK',
+    'demon hunter': 'DH',
+    druid: 'DR',
+    evoker: 'EV',
+    hunter: 'HU',
+    mage: 'MA',
+    monk: 'MO',
+    paladin: 'PA',
+    priest: 'PR',
+    rogue: 'RO',
+    shaman: 'SH',
+    warlock: 'WL',
+    warrior: 'WR',
+  };
+
+  return map[normalized] ?? className.slice(0, 2).toUpperCase();
+}
+
+function ilvlColor(itemLevel: number | null): string {
+  if (itemLevel === null) return '#ffffff';
+  if (itemLevel >= 286) return '#ff8000'; // legendary
+  if (itemLevel >= 269) return '#a335ee'; // epic
+  if (itemLevel >= 256) return '#0070dd'; // rare
+  if (itemLevel >= 243) return '#1eff00'; // uncommon
+  return '#ffffff'; // common
+}
+
+const topItemLevel = sortedRaiders.reduce((best, raider) =>
+  (raider.equippedItemLevel ?? -1) > (best?.equippedItemLevel ?? -1) ? raider : best,
+  null as (typeof sortedRaiders)[number] | null
+);
+const topMythicScore = sortedRaiders.reduce((best, raider) =>
+  (raider.mythicScore ?? -1) > (best?.mythicScore ?? -1) ? raider : best,
+  null as (typeof sortedRaiders)[number] | null
+);
+
+const spotlightCards = [
+  {
+    label: 'Tracked Raiders',
+    icon: 'lucide:users-round',
+    value: String(totalMembers),
+    detail: `${readyCount} connected`,
+    className: '',
+  },
+  {
+    label: 'Highest Item Level',
+    icon: 'lucide:shield',
+    value: topItemLevel?.equippedItemLevel ? String(topItemLevel.equippedItemLevel) : '—',
+    detail: topItemLevel?.name ?? '—',
+    className: topItemLevel?.className ?? '',
+  },
+  {
+    label: 'Highest M+ Score',
+    icon: 'lucide:trophy',
+    value: topMythicScore?.mythicScore ? topMythicScore.mythicScore.toLocaleString(undefined, { maximumFractionDigits: 0 }) : '—',
+    detail: topMythicScore?.name ?? '—',
+    className: topMythicScore?.className ?? '',
+  },
+];
+---
+
+<Layout title="The Hidden Lodge | Raiders" description="Authenticated raider view backed by Battle.net character data for roster-team members.">
+  <section>
+    <h1 class="title-row"><Icon name="lucide:shield-user" class="title-icon" aria-hidden="true" />Raiders</h1>
+    <p class="intro-copy">This page only includes characters assigned to active roster teams. Data is served from cache and refreshed by cron to avoid live Blizzard fan-out on page requests.</p>
+  </section>
+
+  <section class="panel cache-panel" aria-label="Raiders cache status">
+    <h2 class="title-row"><Icon name="lucide:database" class="title-icon" aria-hidden="true" />Cache Status</h2>
+    {errorMessage ? (
+      <p class="panel-text error-text">{errorMessage}</p>
+    ) : (
+      <p class="panel-text">
+        Last summary sync: <strong>{status.lastSummarySync ? new Date(status.lastSummarySync * 1000).toLocaleString() : 'Never'}</strong>
+        {' · '}
+        Last detail sync: <strong>{status.lastDetailSync ? new Date(status.lastDetailSync * 1000).toLocaleString() : 'Never'}</strong>
+        {' · '}
+        Pending detail refresh: <strong>{status.pendingDetailCount}</strong>
+      </p>
+    )}
+  </section>
+
+  <section class="spotlights" aria-label="Raiders snapshot">
+    {spotlightCards.map(({ label, icon, value, detail, className }) => {
+      const color = className ? classColor(className) : '#d8e2e8';
+      return (
+        <article class="spotlight-card">
+          <header class="spotlight-header">
+            <Icon name={icon} class="spotlight-icon" aria-hidden="true" />
+            <span class="spotlight-label">{label}</span>
+          </header>
+          <p class="spotlight-value">{value}</p>
+          <p class="spotlight-name" style={`color: ${color}`}>{detail}</p>
+        </article>
+      );
+    })}
+  </section>
+
+  <section class="panel">
+    <h2 class="title-row"><Icon name="lucide:list" class="title-icon" aria-hidden="true" />Roster Team Raiders ({sortedRaiders.length})</h2>
+    <div class="controls" aria-label="Raiders controls">
+      <label>
+        Search
+        <input id="raiders-search" type="search" placeholder="Character name..." autocomplete="off" />
+      </label>
+      <label>
+        Class
+        <select id="raiders-class-filter">
+          <option value="all">All Classes</option>
+          {classOptions.map((className) => <option value={className}>{className}</option>)}
+        </select>
+      </label>
+      <label>
+        Team
+        <select id="raiders-team-filter">
+          <option value="all">All Teams</option>
+          {teamOptions.map((teamName) => <option value={teamName}>{teamName}</option>)}
+        </select>
+      </label>
+      <label>
+        Data Status
+        <select id="raiders-auth-filter">
+          <option value="all">All Statuses</option>
+          <option value="ready">Connected</option>
+          <option value="expired">Token expired</option>
+          <option value="missing">Not connected</option>
+          <option value="unavailable">Unavailable</option>
+        </select>
+      </label>
+    </div>
+
+    <div class="table-wrap">
+      <div class="pagination-controls">
+        <label>
+          Per page
+          <select id="raiders-page-size">
+            <option value="25" selected>25</option>
+            <option value="50">50</option>
+            <option value="100">100</option>
+          </select>
+        </label>
+        <button id="raiders-prev-page" type="button">Prev</button>
+        <span id="raiders-page-info">Page 1</span>
+        <button id="raiders-next-page" type="button">Next</button>
+        <p id="raiders-count" class="results-count" aria-live="polite">Showing {sortedRaiders.length} raiders</p>
+      </div>
+      <table class="raiders-table" id="raiders-table">
+        <thead>
+          <tr>
+            <th><button class="sort-btn" type="button" data-sort-key="name">Name</button></th>
+            <th><button class="sort-btn" type="button" data-sort-key="class">Class</button></th>
+            <th><button class="sort-btn" type="button" data-sort-key="equippedItemLevel">iLvl</button></th>
+            <th><button class="sort-btn" type="button" data-sort-key="mythicScore">M+ Score</button></th>
+            <th><button class="sort-btn" type="button" data-sort-key="tierPiecesEquipped">Tier</button></th>
+            <th>Gems</th>
+            <th>Enchants</th>
+            <th><button class="sort-btn" type="button" data-sort-key="authState">Status</button></th>
+            <th><button class="sort-btn" type="button" data-sort-key="lastCheckedAt">Last Checked</button></th>
+          </tr>
+        </thead>
+        <tbody>
+          {sortedRaiders.map((raider) => {
+            const color = classColor(raider.className);
+            const teamList = raider.teamNames.join(', ');
+            const isUnknownClass = raider.className.trim().toLowerCase() === 'unknown';
+            return (
+              <tr
+                data-name={raider.name.toLowerCase()}
+                data-class={raider.className}
+                data-team={teamList}
+                data-auth-state={raider.authState}
+                data-equipped-item-level={String(raider.equippedItemLevel ?? -1)}
+                data-raid-progress-kills={String(raider.raidProgressKills ?? -1)}
+                data-mythic-score={String(raider.mythicScore ?? -1)}
+                data-tier-pieces-equipped={String(raider.tierPiecesEquipped ?? -1)}
+                data-last-checked-at={String(raider.lastCheckedAt ?? 0)}
+              >
+                <td><a href={`/raiders/${raider.blizzardCharId}`} class="name-link"><span class="name-pill" style={`--class-color: ${color}`}>{raider.name}</span></a></td>
+                <td>
+                  {isUnknownClass ? (
+                    <span class="class-icon-wrap" aria-hidden="true"></span>
+                  ) : (
+                    <span class="class-icon-wrap" title={raider.className} aria-label={raider.className}>
+                      {raider.classIconUrl ? (
+                        <img
+                          src={raider.classIconUrl}
+                          alt={raider.className}
+                          loading="lazy"
+                          decoding="async"
+                          class="class-icon-img"
+                        />
+                      ) : (
+                        <span
+                          class="class-icon"
+                          style={`--class-color: ${color}`}
+                          aria-hidden="true"
+                        >
+                          {classAbbrev(raider.className)}
+                        </span>
+                      )}
+                    </span>
+                  )}
+                </td>
+                <td>
+                  <div class="ilvl-cell">
+                    <span class="ilvl-main" style={`color: ${ilvlColor(raider.equippedItemLevel)}`}>
+                      {raider.equippedItemLevel ?? '—'}
+                    </span>
+                  </div>
+                </td>
+                <td>{raider.mythicScore ? raider.mythicScore.toLocaleString(undefined, { maximumFractionDigits: 0 }) : '—'}</td>
+                <td>{raider.tierPiecesEquipped ?? '—'}</td>
+                <td><span class="score-val" style={`color: ${scoreColor(raider.socketedGems, raider.totalSockets)}`}>{formatScore(raider.socketedGems, raider.totalSockets)}</span></td>
+                <td><span class="score-val" style={`color: ${scoreColor(raider.enchantedSlots, raider.enchantableSlots)}`}>{formatScore(raider.enchantedSlots, raider.enchantableSlots)}</span></td>
+                <td>
+                  <span class:list={['status-badge', raider.authState]}>{authLabel(raider.authState)}</span>
+                </td>
+                <td>{formatLastChecked(raider.lastCheckedAt)}</td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  </section>
+</Layout>
+
+<script>
+  const pageSizeSelect = document.querySelector<HTMLSelectElement>('#raiders-page-size');
+  const prevPageBtn = document.querySelector<HTMLButtonElement>('#raiders-prev-page');
+  const nextPageBtn = document.querySelector<HTMLButtonElement>('#raiders-next-page');
+  const pageInfo = document.querySelector<HTMLSpanElement>('#raiders-page-info');
+
+  let currentPage = 1;
+  let pageSize = 25;
+
+  const searchInput = document.querySelector<HTMLInputElement>('#raiders-search');
+  const classFilter = document.querySelector<HTMLSelectElement>('#raiders-class-filter');
+  const teamFilter = document.querySelector<HTMLSelectElement>('#raiders-team-filter');
+  const authFilter = document.querySelector<HTMLSelectElement>('#raiders-auth-filter');
+  const countLabel = document.querySelector<HTMLParagraphElement>('#raiders-count');
+  const table = document.querySelector<HTMLTableElement>('#raiders-table');
+  const tableBody = table?.querySelector('tbody');
+  const sortButtons = [...document.querySelectorAll<HTMLButtonElement>('.sort-btn')];
+
+  let sortKey = 'mythicScore';
+  let sortDirection = 'desc';
+
+  const compareText = (a: string, b: string) => a.localeCompare(b, undefined, { sensitivity: 'base' });
+
+  function applyFiltersAndSort() {
+    if (!tableBody) return;
+
+    const query = searchInput?.value.trim().toLowerCase() ?? '';
+    const selectedClass = classFilter?.value ?? 'all';
+    const selectedTeam = teamFilter?.value ?? 'all';
+    const selectedAuth = authFilter?.value ?? 'all';
+
+    const rows = [...tableBody.querySelectorAll('tr')];
+    const visibleRows = rows.filter((row) => {
+      const rowName = row.dataset.name ?? '';
+      const rowClass = row.dataset.class ?? '';
+      const rowTeam = row.dataset.team ?? '';
+      const rowAuthState = row.dataset.authState ?? '';
+
+      const matchesSearch = query.length === 0 || rowName.includes(query);
+      const matchesClass = selectedClass === 'all' || rowClass === selectedClass;
+      const matchesTeam = selectedTeam === 'all' || rowTeam.split(',').map((value) => value.trim()).includes(selectedTeam);
+      const matchesAuth = selectedAuth === 'all' || rowAuthState === selectedAuth;
+
+      return matchesSearch && matchesClass && matchesTeam && matchesAuth;
+    });
+
+    const numericKeys = new Set(['equippedItemLevel', 'raidProgressKills', 'mythicScore', 'tierPiecesEquipped', 'lastCheckedAt']);
+
+    visibleRows.sort((rowA, rowB) => {
+      const toAttr = (key: string) => key.replace(/[A-Z]/g, (char) => `-${char.toLowerCase()}`);
+      const valueA = rowA.dataset[toAttr(sortKey)] ?? rowA.dataset[sortKey] ?? '';
+      const valueB = rowB.dataset[toAttr(sortKey)] ?? rowB.dataset[sortKey] ?? '';
+
+      const order = numericKeys.has(sortKey)
+        ? Number(valueA) - Number(valueB)
+        : compareText(valueA, valueB);
+
+      return sortDirection === 'asc' ? order : order * -1;
+    });
+
+    const totalPages = Math.max(1, Math.ceil(visibleRows.length / pageSize));
+    if (currentPage > totalPages) currentPage = totalPages;
+    const startIdx = (currentPage - 1) * pageSize;
+    const pageRows = visibleRows.slice(startIdx, startIdx + pageSize);
+
+    rows.forEach((row) => {
+      row.hidden = !pageRows.includes(row);
+    });
+
+    visibleRows.forEach((row) => tableBody.appendChild(row));
+
+    if (pageInfo) pageInfo.textContent = `Page ${currentPage} of ${totalPages}`;
+    if (prevPageBtn) prevPageBtn.disabled = currentPage <= 1;
+    if (nextPageBtn) nextPageBtn.disabled = currentPage >= totalPages;
+    if (countLabel) {
+      countLabel.textContent = `Showing ${visibleRows.length} raider${visibleRows.length === 1 ? '' : 's'} (page ${currentPage})`;
+    }
+
+    sortButtons.forEach((button) => {
+      const isActive = button.dataset.sortKey === sortKey;
+      button.setAttribute('aria-sort', isActive ? sortDirection : 'none');
+    });
+  }
+
+  pageSizeSelect?.addEventListener('change', () => {
+    pageSize = Number(pageSizeSelect.value) || 25;
+    currentPage = 1;
+    applyFiltersAndSort();
+  });
+
+  prevPageBtn?.addEventListener('click', () => {
+    if (currentPage > 1) {
+      currentPage -= 1;
+      applyFiltersAndSort();
+    }
+  });
+
+  nextPageBtn?.addEventListener('click', () => {
+    currentPage += 1;
+    applyFiltersAndSort();
+  });
+
+  searchInput?.addEventListener('input', () => {
+    currentPage = 1;
+    applyFiltersAndSort();
+  });
+  classFilter?.addEventListener('change', () => {
+    currentPage = 1;
+    applyFiltersAndSort();
+  });
+  teamFilter?.addEventListener('change', () => {
+    currentPage = 1;
+    applyFiltersAndSort();
+  });
+  authFilter?.addEventListener('change', () => {
+    currentPage = 1;
+    applyFiltersAndSort();
+  });
+
+  sortButtons.forEach((button) => {
+    button.addEventListener('click', () => {
+      const nextKey = button.dataset.sortKey;
+      if (!nextKey) return;
+
+      if (nextKey === sortKey) {
+        sortDirection = sortDirection === 'asc' ? 'desc' : 'asc';
+      } else {
+        sortKey = nextKey;
+        sortDirection = nextKey === 'name' || nextKey === 'class' || nextKey === 'authState' ? 'asc' : 'desc';
+      }
+
+      applyFiltersAndSort();
+    });
+  });
+
+  applyFiltersAndSort();
+</script>
+
+<style>
+  h1 {
+    margin-top: 0;
+    font-size: clamp(2rem, 3.1vw, 2.95rem);
+  }
+
+  .intro-copy {
+    max-width: 72ch;
+    color: #d8e2e8;
+    font-size: 1.05rem;
+  }
+
+  .panel {
+    margin-top: 1rem;
+    border: 1px solid rgba(214, 176, 106, 0.38);
+    border-radius: 0.75rem;
+    background:
+      linear-gradient(155deg, rgba(214, 176, 106, 0.08), transparent 45%),
+      rgba(11, 21, 32, 0.78);
+    padding: 1rem;
+    box-shadow: 0 14px 28px rgba(0, 0, 0, 0.22);
+  }
+
+  .cache-panel {
+    padding-block: 0.85rem;
+  }
+
+  .panel-text {
+    margin: 0.75rem 0 0;
+  }
+
+  .error-text {
+    color: #ffb39d;
+  }
+
+  h2 {
+    margin: 0;
+    color: #e4c27a;
+  }
+
+  .title-row {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+
+  .title-icon {
+    width: 1rem;
+    height: 1rem;
+    color: #f1d9a9;
+  }
+
+  .controls {
+    margin-top: 1rem;
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 0.65rem;
+    align-items: end;
+  }
+
+  .controls label {
+    display: grid;
+    gap: 0.4rem;
+    color: #e7d9bc;
+    font-size: 0.86rem;
+    letter-spacing: 0.03em;
+    text-transform: uppercase;
+  }
+
+  .controls input,
+  .controls select,
+  .pagination-controls select,
+  .pagination-controls button {
+    border: 1px solid rgba(214, 176, 106, 0.4);
+    border-radius: 0.45rem;
+    background: rgba(7, 14, 22, 0.85);
+    color: #d8e2e8;
+    padding: 0.5rem 0.6rem;
+    font-size: 0.94rem;
+  }
+
+  .spotlights {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 0.75rem;
+    margin-top: 1rem;
+  }
+
+  .spotlight-card {
+    border: 1px solid rgba(214, 176, 106, 0.32);
+    border-radius: 0.75rem;
+    background:
+      linear-gradient(155deg, rgba(214, 176, 106, 0.07), transparent 50%),
+      rgba(11, 21, 32, 0.78);
+    padding: 1rem 1.1rem;
+    display: grid;
+    gap: 0.25rem;
+  }
+
+  .spotlight-header {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    color: #b0c4d0;
+    font-size: 0.82rem;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+  }
+
+  .spotlight-icon {
+    width: 0.95rem;
+    height: 0.95rem;
+    flex-shrink: 0;
+  }
+
+  .spotlight-value {
+    margin: 0.35rem 0 0;
+    font-family: 'Cinzel', serif;
+    font-size: clamp(1.4rem, 2.5vw, 1.9rem);
+    font-weight: 700;
+    color: #f1d9a9;
+    line-height: 1;
+  }
+
+  .spotlight-name {
+    margin: 0.3rem 0 0;
+    font-size: 0.97rem;
+    font-weight: 600;
+  }
+
+  .table-wrap {
+    margin-top: 0.85rem;
+    overflow-x: auto;
+    border: 1px solid rgba(214, 176, 106, 0.24);
+    border-radius: 0.65rem;
+    background: rgba(5, 10, 16, 0.55);
+  }
+
+  .pagination-controls {
+    display: flex;
+    align-items: center;
+    gap: 0.7rem;
+    padding: 0.9rem 1rem;
+    border-bottom: 1px solid rgba(214, 176, 106, 0.18);
+    background: rgba(15, 28, 43, 0.55);
+  }
+
+  .pagination-controls label {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin-right: 0.35rem;
+    color: #e7d9bc;
+    font-size: 0.82rem;
+    letter-spacing: 0.03em;
+    text-transform: uppercase;
+  }
+
+  .pagination-controls button {
+    cursor: pointer;
+  }
+
+  .pagination-controls button:disabled {
+    opacity: 0.45;
+    cursor: default;
+  }
+
+  #raiders-page-info {
+    min-width: 7.8rem;
+    text-align: center;
+    color: #d8e2e8;
+    font-size: 0.9rem;
+  }
+
+  .results-count {
+    margin: 0 0 0 auto;
+    text-align: right;
+    font-size: 0.95rem;
+    color: #d8e2e8;
+    white-space: nowrap;
+  }
+
+  .raiders-table {
+    width: 100%;
+    border-collapse: collapse;
+    min-width: 860px;
+  }
+
+  .raiders-table th,
+  .raiders-table td {
+    border-bottom: 1px solid rgba(214, 176, 106, 0.18);
+    padding: 0.58rem 0.65rem;
+    text-align: left;
+    color: #d8e2e8;
+    font-size: 0.95rem;
+    vertical-align: top;
+  }
+
+  .raiders-table thead th {
+    background: rgba(15, 28, 43, 0.88);
+    position: sticky;
+    top: 0;
+    z-index: 1;
+  }
+
+  .raiders-table tbody tr:hover {
+    background: rgba(214, 176, 106, 0.08);
+  }
+
+  .sort-btn {
+    width: 100%;
+    border: 0;
+    background: transparent;
+    color: #e4c27a;
+    font-weight: 700;
+    letter-spacing: 0.03em;
+    text-transform: uppercase;
+    font-size: 0.78rem;
+    text-align: left;
+    cursor: pointer;
+    padding: 0;
+  }
+
+  .sort-btn[aria-sort='asc']::after {
+    content: ' ▲';
+    font-size: 0.7rem;
+  }
+
+  .sort-btn[aria-sort='desc']::after {
+    content: ' ▼';
+    font-size: 0.7rem;
+  }
+
+  .name-link {
+    text-decoration: none;
+  }
+
+  .name-link:hover .name-pill {
+    text-decoration: underline;
+    text-underline-offset: 3px;
+  }
+
+  .name-pill {
+    color: var(--class-color, #d8e2e8);
+    font-weight: 700;
+  }
+
+  .class-icon {
+    display: inline-flex;
+    justify-content: center;
+    align-items: center;
+    min-width: 2rem;
+    height: 1.4rem;
+    padding: 0 0.34rem;
+    border-radius: 999px;
+    border: 1px solid color-mix(in srgb, var(--class-color, #9fb0bf) 55%, transparent);
+    background: color-mix(in srgb, var(--class-color, #9fb0bf) 15%, rgba(7, 14, 22, 0.9));
+    color: var(--class-color, #d8e2e8);
+    font-size: 0.66rem;
+    font-weight: 800;
+    letter-spacing: 0.03em;
+    text-transform: uppercase;
+    line-height: 1;
+    vertical-align: middle;
+  }
+
+  .class-icon-wrap {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 1.4rem;
+    height: 1.4rem;
+  }
+
+  .class-icon-img {
+    width: 1.3rem;
+    height: 1.3rem;
+    border-radius: 50%;
+    border: 1px solid rgba(214, 176, 106, 0.35);
+    background: rgba(4, 10, 16, 0.85);
+    object-fit: cover;
+    display: block;
+  }
+
+  .team-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.35rem;
+  }
+
+  .team-chip {
+    display: inline-flex;
+    align-items: center;
+    padding: 0.18rem 0.45rem;
+    border-radius: 999px;
+    border: 1px solid rgba(214, 176, 106, 0.28);
+    background: rgba(214, 176, 106, 0.08);
+    font-size: 0.82rem;
+    color: #f3e2be;
+  }
+
+  .status-badge {
+    display: inline-flex;
+    align-items: center;
+    padding: 0.22rem 0.55rem;
+    border-radius: 999px;
+    font-size: 0.82rem;
+    font-weight: 700;
+    letter-spacing: 0.03em;
+    text-transform: uppercase;
+    border: 1px solid rgba(255, 255, 255, 0.14);
+  }
+
+  .status-badge.ready {
+    color: #9ce5b0;
+    background: rgba(56, 142, 81, 0.18);
+    border-color: rgba(109, 202, 138, 0.34);
+  }
+
+  .status-badge.expired,
+  .status-badge.unavailable {
+    color: #f0c07f;
+    background: rgba(173, 96, 31, 0.16);
+    border-color: rgba(240, 192, 127, 0.3);
+  }
+
+  .status-badge.missing {
+    color: #cfdae2;
+    background: rgba(132, 154, 171, 0.14);
+    border-color: rgba(190, 205, 215, 0.26);
+  }
+
+  .score-val {
+    font-weight: 600;
+  }
+
+  .ilvl-cell {
+    display: inline-flex;
+    flex-direction: column;
+    gap: 0.08rem;
+    line-height: 1.1;
+  }
+
+  .ilvl-main {
+    font-weight: 700;
+  }
+
+  .muted {
+    color: #92a8b6;
+  }
+
+  @media (max-width: 1000px) {
+    .controls {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .results-count {
+      margin-left: 0;
+      text-align: left;
+      width: 100%;
+    }
+
+    .pagination-controls {
+      flex-wrap: wrap;
+      row-gap: 0.55rem;
+    }
+  }
+
+  @media (max-width: 640px) {
+    .controls,
+    .spotlights {
+      grid-template-columns: 1fr;
+    }
+  }
+</style>
