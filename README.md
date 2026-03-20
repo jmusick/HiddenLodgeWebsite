@@ -64,12 +64,16 @@ Admin access is granted by guild rank via middleware. Officer or higher can acce
 	- create and manage multiple raid team setups
 	- toggle each team between Flex (30 max) and Mythic (20 max)
 	- add and remove level 90 members regardless of authentication status
+	- keep the member picker open after adding a member for faster bulk assignment
+	- show only members not already assigned to that specific team in the add picker
 	- assign and update Tank, Healer, Melee DPS, or Ranged DPS role per member
 	- review raid buff coverage, class distribution, and token split
 - Raid Signups module:
 	- create recurring primary raid schedules
 	- create ad-hoc raids with separate date and time selection
 	- monitor signup counts and view signup summaries ordered by signup time
+	- infer absent roster members in day summaries when they are not signed up
+	- suppress absent alts when the same authenticated user signed up on another character
 	- override member signup roles inline from the signup calendar
 	- remove outdated raids
 - Export module:

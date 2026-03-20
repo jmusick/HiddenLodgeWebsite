@@ -181,6 +181,8 @@ const classOptions = [...new Set(availableMembers.map((m) => m.class_name))].sor
 const buffOptions = [...new Set(availableMembers.map((m) => primaryRaidBuff(m.class_name)))].sort((a, b) => a.localeCompare(b));
 
 const statusParam = new URL(Astro.request.url).searchParams.get('status');
+const openPickerTeamId = Number.parseInt(new URL(Astro.request.url).searchParams.get('open_picker') ?? '', 10);
+const shouldKeepPickerOpen = Number.isInteger(openPickerTeamId) && openPickerTeamId > 0;
 const statusMessages: Record<string, { type: 'ok' | 'error'; text: string }> = {
   'team-created': { type: 'ok', text: 'Team created.' },
   'team-updated': { type: 'ok', text: 'Team updated.' },
@@ -274,6 +276,7 @@ function roleLabel(role: AssignedRole): string {
           const teamLimit = modeLimit(team.raid_mode);
           const rosterOpenSpots = Math.max(0, teamLimit - currentCount);
           const assignedIds = memberIdsByTeam.get(team.id) ?? new Set();
+          const availableToAdd = availableMembers.filter((member) => !assignedIds.has(member.blizzard_char_id));
 
           return (
             <section class="team-card">
@@ -451,7 +454,11 @@ function roleLabel(role: AssignedRole): string {
                 )}
               </div>
 
-              <details class="panel member-picker" data-team-id={String(team.id)}>
+              <details
+                class="panel member-picker"
+                data-team-id={String(team.id)}
+                open={shouldKeepPickerOpen && openPickerTeamId === team.id}
+              >
                 <summary class="panel-summary">+ Add Level 90 Members</summary>
 
                 <div class="picker-controls">
@@ -499,10 +506,9 @@ function roleLabel(role: AssignedRole): string {
                       </tr>
                     </thead>
                     <tbody>
-                      {availableMembers.map((member) => {
+                      {availableToAdd.map((member) => {
                         const buffs = allRaidBuffs(member.class_name);
                         const primaryBuff = primaryRaidBuff(member.class_name);
-                        const isAssigned = assignedIds.has(member.blizzard_char_id);
                         return (
                           <tr
                             class="member-row"
@@ -528,27 +534,26 @@ function roleLabel(role: AssignedRole): string {
                               </span>
                             </td>
                             <td>
-                              {isAssigned ? (
-                                <span class="already-pill">On Team</span>
-                              ) : (
-                                <form method="POST" action="/api/admin/roster-teams/add-member" class="inline-form">
-                                  <input type="hidden" name="team_id" value={team.id} />
-                                  <input type="hidden" name="blizzard_char_id" value={member.blizzard_char_id} />
-                                  <select name="assigned_role" aria-label={`Add role for ${member.name}`}>
-                                    <option value="tank">Tank</option>
-                                    <option value="healer">Healer</option>
-                                    <option value="melee-dps">Melee DPS</option>
-                                    <option value="ranged-dps" selected>Ranged DPS</option>
-                                  </select>
-                                  <button type="submit" class="btn btn-primary btn-sm">Add</button>
-                                </form>
-                              )}
+                              <form method="POST" action="/api/admin/roster-teams/add-member" class="inline-form">
+                                <input type="hidden" name="team_id" value={team.id} />
+                                <input type="hidden" name="blizzard_char_id" value={member.blizzard_char_id} />
+                                <select name="assigned_role" aria-label={`Add role for ${member.name}`}>
+                                  <option value="tank">Tank</option>
+                                  <option value="healer">Healer</option>
+                                  <option value="melee-dps">Melee DPS</option>
+                                  <option value="ranged-dps" selected>Ranged DPS</option>
+                                </select>
+                                <button type="submit" class="btn btn-primary btn-sm">Add</button>
+                              </form>
                             </td>
                           </tr>
                         );
                       })}
                     </tbody>
                   </table>
+                  {availableToAdd.length === 0 && (
+                    <p class="muted">All level 90 candidates are already on this team.</p>
+                  )}
                 </div>
               </details>
                 </div>

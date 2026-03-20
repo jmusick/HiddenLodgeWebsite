@@ -64,6 +64,16 @@ interface DaySummarySignupRow {
   class_name: string;
   nickname: string | null;
   battle_tag: string;
+  blizzard_char_id: number | null;
+  user_id: number;
+}
+
+interface RosterMemberRow {
+  blizzard_char_id: number;
+  character_name: string;
+  class_name: string;
+  nickname: string | null;
+  user_id: number | null;
 }
 
 const ROLE_OPTIONS: Array<{ value: AssignedRole; label: string }> = [
@@ -214,43 +224,71 @@ const selectedDayCell = selectedDay ? dayCells.find((cell) => cell.isoDate === s
 const selectedDayRaids = selectedDayCell?.raids ?? [];
 
 let selectedDaySummaryRows: DaySummarySignupRow[] = [];
+let allRosterMembers: RosterMemberRow[] = [];
 if (selectedDayCell) {
   const selectedDayStart = Math.floor(new Date(`${selectedDayCell.isoDate}T00:00:00.000Z`).getTime() / 1000);
   const selectedDayEnd = selectedDayStart + 86400;
 
-  const result = await env.DB.prepare(
-    `SELECT
-      rs.id,
-      rs.raid_kind,
-      rs.primary_schedule_id,
-      rs.ad_hoc_raid_id,
-      rs.occurrence_start_utc,
-      rs.signed_up_at,
-      rs.signup_status,
-      rs.signup_role,
-      c.name AS character_name,
-      c.class_name,
-      u.nickname,
-      u.battle_tag
-    FROM raid_signups rs
-    JOIN characters c ON c.id = rs.character_id
-    JOIN users u ON u.id = rs.user_id
-    LEFT JOIN ad_hoc_raids ahr ON ahr.id = rs.ad_hoc_raid_id
-    WHERE (
-      rs.raid_kind = 'primary'
-      AND rs.occurrence_start_utc >= ?
-      AND rs.occurrence_start_utc < ?
-    )
-    OR (
-      rs.raid_kind = 'adhoc'
-      AND ahr.starts_at_utc >= ?
-      AND ahr.starts_at_utc < ?
-    )`
-  )
-    .bind(selectedDayStart, selectedDayEnd, selectedDayStart, selectedDayEnd)
-    .all<DaySummarySignupRow>();
+  const [result, rosterResult] = await env.DB.batch([
+    env.DB.prepare(
+      `SELECT
+        rs.id,
+        rs.raid_kind,
+        rs.primary_schedule_id,
+        rs.ad_hoc_raid_id,
+        rs.occurrence_start_utc,
+        rs.signed_up_at,
+        rs.signup_status,
+        rs.signup_role,
+        c.name AS character_name,
+        c.class_name,
+        c.blizzard_char_id,
+        u.nickname,
+        u.battle_tag,
+        rs.user_id
+      FROM raid_signups rs
+      JOIN characters c ON c.id = rs.character_id
+      JOIN users u ON u.id = rs.user_id
+      LEFT JOIN ad_hoc_raids ahr ON ahr.id = rs.ad_hoc_raid_id
+      WHERE (
+        rs.raid_kind = 'primary'
+        AND rs.occurrence_start_utc >= ?
+        AND rs.occurrence_start_utc < ?
+      )
+      OR (
+        rs.raid_kind = 'adhoc'
+        AND ahr.starts_at_utc >= ?
+        AND ahr.starts_at_utc < ?
+      )`
+    ).bind(selectedDayStart, selectedDayEnd, selectedDayStart, selectedDayEnd),
+    env.DB.prepare(
+      `SELECT DISTINCT
+        rtm.blizzard_char_id,
+        rmc.name AS character_name,
+        rmc.class_name,
+        (
+          SELECT u2.id
+          FROM characters c2
+          JOIN users u2 ON u2.id = c2.user_id
+          WHERE c2.blizzard_char_id = rtm.blizzard_char_id
+          LIMIT 1
+        ) AS user_id,
+        (
+          SELECT u2.nickname
+          FROM characters c2
+          JOIN users u2 ON u2.id = c2.user_id
+          WHERE c2.blizzard_char_id = rtm.blizzard_char_id
+            AND u2.nickname IS NOT NULL
+          LIMIT 1
+        ) AS nickname
+      FROM raid_team_members rtm
+      JOIN roster_members_cache rmc ON rmc.blizzard_char_id = rtm.blizzard_char_id
+      ORDER BY rmc.class_name ASC, rmc.name ASC`
+    ),
+  ]);
 
   selectedDaySummaryRows = (result.results ?? []) as DaySummarySignupRow[];
+  allRosterMembers = (rosterResult.results ?? []) as RosterMemberRow[];
 }
 
 const daySummaryByRaidKey = new Map<string, DaySummarySignupRow[]>();
@@ -304,6 +342,19 @@ for (const row of selectedDaySummaryRows) {
                 }
                 return a.character_name.localeCompare(b.character_name);
               });
+              const signedUpCharIds = new Set(
+                sortedRows
+                  .map((r) => r.blizzard_char_id)
+                  .filter((id): id is number => typeof id === 'number' && id > 0)
+              );
+              const signedUpUserIds = new Set(
+                sortedRows.map((r) => r.user_id).filter((id): id is number => typeof id === 'number' && id > 0)
+              );
+              const absentRows = allRosterMembers.filter(
+                (m) =>
+                  !signedUpCharIds.has(m.blizzard_char_id) &&
+                  !(m.user_id !== null && signedUpUserIds.has(m.user_id))
+              );
               const summary = computeTeamSummary(
                 sortedRows.map((row) => ({ className: row.class_name, assignedRole: row.signup_role }))
               );
@@ -315,11 +366,11 @@ for (const row of selectedDaySummaryRows) {
                   <h3>{raid.title}</h3>
                   <p class="summary-raid-time">{formatEpochInTimeZone(raid.startsAtUtc, userTimeZone)}</p>
                   <p class="summary-counts">
-                    Coming: <strong>{comingCount}</strong> &middot; Tentative: <strong>{tentativeCount}</strong> &middot; Total: <strong>{sortedRows.length}</strong>
+                    Coming: <strong>{comingCount}</strong> &middot; Tentative: <strong>{tentativeCount}</strong> &middot; Absent: <strong class="count-absent">{absentRows.length}</strong>
                   </p>
 
                   {sortedRows.length === 0 ? (
-                    <p class="summary-empty">No member signups yet. Everyone else is absent by default.</p>
+                    <p class="summary-empty">No member signups yet.</p>
                   ) : (
                     <>
                       <div class="summary-grid">
@@ -394,6 +445,19 @@ for (const row of selectedDaySummaryRows) {
                         ))}
                       </ul>
                     </>
+                  )}
+                  {absentRows.length > 0 && (
+                    <details class="absent-section">
+                      <summary class="absent-toggle">Absent ({absentRows.length})</summary>
+                      <ul class="absent-members">
+                        {absentRows.map((row) => (
+                          <li class="absent-member">
+                            <span class="member-name">{row.character_name}</span>
+                            <span class="member-meta">{row.class_name}{row.nickname ? ` · ${row.nickname}` : ''}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    </details>
                   )}
                 </article>
               );
@@ -873,6 +937,64 @@ for (const row of selectedDaySummaryRows) {
     font-size: 0.72rem;
     line-height: 1.2;
     min-width: 7.5rem;
+  }
+
+  .count-absent {
+    color: #e87c7c;
+  }
+
+  .absent-section {
+    margin-top: 0.55rem;
+  }
+
+  .absent-toggle {
+    color: var(--muted);
+    font-size: 0.8rem;
+    cursor: pointer;
+    user-select: none;
+    list-style: none;
+  }
+
+  .absent-toggle::-webkit-details-marker {
+    display: none;
+  }
+
+  .absent-toggle::before {
+    content: '▶ ';
+    font-size: 0.65rem;
+    opacity: 0.7;
+  }
+
+  details[open] .absent-toggle::before {
+    content: '▼ ';
+  }
+
+  .absent-members {
+    list-style: none;
+    margin: 0.3rem 0 0;
+    padding: 0;
+    display: grid;
+    gap: 0.2rem;
+  }
+
+  .absent-member {
+    border: 1px solid rgba(232, 124, 124, 0.15);
+    border-radius: 0.28rem;
+    padding: 0.22rem 0.38rem;
+    display: flex;
+    gap: 0.5rem;
+    align-items: baseline;
+    opacity: 0.75;
+  }
+
+  .absent-member .member-name {
+    font-size: 0.78rem;
+    color: rgba(215, 225, 233, 0.7);
+    font-weight: 600;
+  }
+
+  .absent-member .member-meta {
+    font-size: 0.72rem;
   }
 
   .summary-override-form .btn-compact {

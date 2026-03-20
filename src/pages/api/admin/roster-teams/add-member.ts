@@ -14,8 +14,13 @@ export async function POST(context: APIContext): Promise<Response> {
   const blizzardCharId = parseInt((formData.get('blizzard_char_id') as string | null) ?? '', 10);
   const assignedRole = normalizeAssignedRole((formData.get('assigned_role') as string | null) ?? null);
 
+  const redirectWith = (status: string): Response => {
+    const openPicker = Number.isInteger(teamId) && teamId > 0 ? `&open_picker=${teamId}` : '';
+    return new Response(null, { status: 302, headers: { Location: `/admin/roster-teams?status=${status}${openPicker}` } });
+  };
+
   if (Number.isNaN(teamId) || Number.isNaN(blizzardCharId) || !assignedRole) {
-    return new Response(null, { status: 302, headers: { Location: '/admin/roster-teams?status=error' } });
+    return redirectWith('error');
   }
 
   const teamRow = await env.DB.prepare(`SELECT raid_mode FROM raid_teams WHERE id = ?`)
@@ -24,7 +29,7 @@ export async function POST(context: APIContext): Promise<Response> {
 
   const raidMode = normalizeTeamMode(teamRow?.raid_mode);
   if (!raidMode) {
-    return new Response(null, { status: 302, headers: { Location: '/admin/roster-teams?status=error' } });
+    return redirectWith('error');
   }
 
   const charRow = await env.DB.prepare(
@@ -34,7 +39,7 @@ export async function POST(context: APIContext): Promise<Response> {
     .first<{ level: number }>();
 
   if (!charRow || Number(charRow.level) !== 90) {
-    return new Response(null, { status: 302, headers: { Location: '/admin/roster-teams?status=must-be-90' } });
+    return redirectWith('must-be-90');
   }
 
   const existsRow = await env.DB.prepare(
@@ -52,7 +57,7 @@ export async function POST(context: APIContext): Promise<Response> {
 
     const memberCount = Number(countRow?.member_count ?? 0);
     if (memberCount >= modeLimit(raidMode)) {
-      return new Response(null, { status: 302, headers: { Location: '/admin/roster-teams?status=team-full' } });
+      return redirectWith('team-full');
     }
   }
 
@@ -66,5 +71,5 @@ export async function POST(context: APIContext): Promise<Response> {
     .bind(teamId, blizzardCharId, assignedRole)
     .run();
 
-  return new Response(null, { status: 302, headers: { Location: '/admin/roster-teams?status=member-added' } });
+  return redirectWith('member-added');
 }
