@@ -7,6 +7,7 @@ const REGION = 'us';
 const SUMMARY_TTL_SECONDS = 15 * 60;
 const DETAILS_TTL_SECONDS = 24 * 60 * 60;
 const DETAIL_BATCH_SIZE = 8;
+const API_BASE = `https://${REGION}.api.blizzard.com`;
 
 interface GuildRosterMember {
   character: {
@@ -169,7 +170,16 @@ async function fetchGuildRoster(accessToken: string): Promise<GuildRosterMember[
   }
 
   if (!rosterResponse?.ok) {
-    throw new Error(`Blizzard guild roster request failed (HTTP ${rosterResponse?.status ?? 'unknown'})`);
+    let bodySnippet = '';
+    try {
+      const rawBody = await rosterResponse?.text();
+      bodySnippet = rawBody ? ` body=${rawBody.slice(0, 200)}` : '';
+    } catch {
+      // Ignore body parsing issues; status code is the primary signal.
+    }
+    throw new Error(
+      `Blizzard guild roster request failed (HTTP ${rosterResponse?.status ?? 'unknown'}).${bodySnippet}`
+    );
   }
 
   const data = (await rosterResponse.json()) as { members?: GuildRosterMember[] };
@@ -305,59 +315,96 @@ export async function refreshRosterCache(
 
   const rosterById = new Map(rosterMembers.map((member) => [member.character.id, member]));
 
+  const normalizeHrefToUrl = (href: string): URL | null => {
+    const trimmed = href.trim();
+    if (!trimmed) return null;
+
+    try {
+      return new URL(trimmed);
+    } catch {
+      if (trimmed.startsWith('/')) {
+        try {
+          return new URL(`${API_BASE}${trimmed}`);
+        } catch {
+          return null;
+        }
+      }
+      return null;
+    }
+  };
+
   for (const candidate of detailCandidates) {
-    const candidateId = Number(candidate.blizzard_char_id);
-    const rosterMember = rosterById.get(candidateId);
-    const href = rosterMember?.character.key?.href;
-    if (!href) {
+    try {
+      const candidateId = Number(candidate.blizzard_char_id);
+      const rosterMember = rosterById.get(candidateId);
+      const href = rosterMember?.character.key?.href;
+      if (!href) {
+        continue;
+      }
+
+      const profileHref = normalizeHrefToUrl(href);
+      if (!profileHref) {
+        console.error('Roster detail refresh skipped: invalid profile href', {
+          candidateId,
+          href,
+        });
+        continue;
+      }
+
+      const namespace = profileHref.searchParams.get('namespace') ?? `profile-${REGION}`;
+      const profileBase = `${profileHref.origin}${profileHref.pathname}`;
+      const profileUrl = `${profileBase}?namespace=${namespace}&locale=en_US`;
+      const collectionBase = `${profileBase}/collections`;
+
+      const [profile, mounts, pets, toys] = await Promise.all([
+        fetchJsonWithRetry(profileUrl, accessToken),
+        fetchJsonWithRetry(`${collectionBase}/mounts?namespace=${namespace}&locale=en_US`, accessToken),
+        fetchJsonWithRetry(`${collectionBase}/pets?namespace=${namespace}&locale=en_US`, accessToken),
+        fetchJsonWithRetry(`${collectionBase}/toys?namespace=${namespace}&locale=en_US`, accessToken),
+      ]);
+
+      if (!profile || !mounts || !pets || !toys) {
+        continue;
+      }
+
+      await db
+        .prepare(
+          `UPDATE roster_members_cache
+           SET realm = ?,
+               class_name = ?,
+               race_name = ?,
+               level = ?,
+               achievement_points = ?,
+               mount_count = ?,
+               pet_count = ?,
+               toy_count = ?,
+               details_synced_at = ?,
+               updated_at = ?
+           WHERE blizzard_char_id = ?`
+        )
+        .bind(
+          profile.realm?.name ?? formatRealmFromSlug(candidate.realm_slug),
+          profile.character_class?.name ?? profile.playable_class?.name ?? 'Unknown',
+          profile.race?.name ?? profile.playable_race?.name ?? 'Unknown',
+          Number(profile.level ?? 0),
+          Number(profile.achievement_points ?? 0),
+          Array.isArray(mounts.mounts) ? mounts.mounts.length : 0,
+          Array.isArray(pets.pets) ? pets.pets.length : 0,
+          Array.isArray(toys.toys) ? toys.toys.length : 0,
+          now,
+          now,
+          candidateId
+        )
+        .run();
+    } catch (error) {
+      console.error('Roster detail refresh failed for candidate', {
+        candidateId: candidate.blizzard_char_id,
+        name: candidate.name,
+        realmSlug: candidate.realm_slug,
+        error,
+      });
       continue;
     }
-
-    const profileBase = href.split('?')[0];
-    const namespace = new URL(href).searchParams.get('namespace') ?? `profile-${REGION}`;
-    const profileUrl = `${profileBase}?namespace=${namespace}&locale=en_US`;
-    const collectionBase = `${profileBase}/collections`;
-
-    const [profile, mounts, pets, toys] = await Promise.all([
-      fetchJsonWithRetry(profileUrl, accessToken),
-      fetchJsonWithRetry(`${collectionBase}/mounts?namespace=${namespace}&locale=en_US`, accessToken),
-      fetchJsonWithRetry(`${collectionBase}/pets?namespace=${namespace}&locale=en_US`, accessToken),
-      fetchJsonWithRetry(`${collectionBase}/toys?namespace=${namespace}&locale=en_US`, accessToken),
-    ]);
-
-    if (!profile || !mounts || !pets || !toys) {
-      continue;
-    }
-
-    await db
-      .prepare(
-        `UPDATE roster_members_cache
-         SET realm = ?,
-             class_name = ?,
-             race_name = ?,
-             level = ?,
-             achievement_points = ?,
-             mount_count = ?,
-             pet_count = ?,
-             toy_count = ?,
-             details_synced_at = ?,
-             updated_at = ?
-         WHERE blizzard_char_id = ?`
-      )
-      .bind(
-        profile.realm?.name ?? formatRealmFromSlug(candidate.realm_slug),
-        profile.character_class?.name ?? profile.playable_class?.name ?? 'Unknown',
-        profile.race?.name ?? profile.playable_race?.name ?? 'Unknown',
-        Number(profile.level ?? 0),
-        Number(profile.achievement_points ?? 0),
-        Array.isArray(mounts.mounts) ? mounts.mounts.length : 0,
-        Array.isArray(pets.pets) ? pets.pets.length : 0,
-        Array.isArray(toys.toys) ? toys.toys.length : 0,
-        now,
-        now,
-        candidateId
-      )
-      .run();
   }
   return getMeta(db);
 }
