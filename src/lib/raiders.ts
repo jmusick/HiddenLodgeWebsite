@@ -34,8 +34,6 @@ interface RaiderSourceRow {
   realm_slug: string;
   class_name: string;
   team_names: string | null;
-  access_token: string | null;
-  token_expires_at: number | null;
 }
 
 interface CachedRaiderRow {
@@ -68,6 +66,7 @@ interface BlizzardSummaryResponse {
 
 interface BlizzardClientCredentialsTokenResponse {
   access_token?: string;
+  expires_in?: number;
 }
 
 interface BlizzardPlayableClassIndexResponse {
@@ -184,6 +183,13 @@ let classIconCache:
     }
   | null = null;
 
+let appAccessTokenCache:
+  | {
+      accessToken: string;
+      expiresAt: number;
+    }
+  | null = null;
+
 function getDatabase(db?: D1Database): D1Database {
   return db ?? env.DB;
 }
@@ -228,7 +234,7 @@ async function fetchJsonWithRetry<T>(url: string, accessToken: string, attempts 
   return null;
 }
 
-async function fetchBlizzardClientAccessToken(): Promise<string | null> {
+async function fetchBlizzardClientAccessToken(): Promise<{ accessToken: string; expiresAt: number } | null> {
   if (!env.BLIZZARD_CLIENT_ID || !env.BLIZZARD_CLIENT_SECRET) {
     return null;
   }
@@ -248,7 +254,31 @@ async function fetchBlizzardClientAccessToken(): Promise<string | null> {
   }
 
   const data = (await response.json()) as BlizzardClientCredentialsTokenResponse;
-  return data.access_token ?? null;
+  if (!data.access_token) {
+    return null;
+  }
+
+  const ttlSeconds = Math.max(60, Number(data.expires_in ?? 0) || 0);
+  return {
+    accessToken: data.access_token,
+    expiresAt: nowInSeconds() + Math.max(60, ttlSeconds - 60),
+  };
+}
+
+async function getBlizzardAppAccessToken(): Promise<string | null> {
+  const now = nowInSeconds();
+  if (appAccessTokenCache && appAccessTokenCache.expiresAt > now) {
+    return appAccessTokenCache.accessToken;
+  }
+
+  const nextToken = await fetchBlizzardClientAccessToken();
+  if (!nextToken) {
+    appAccessTokenCache = null;
+    return null;
+  }
+
+  appAccessTokenCache = nextToken;
+  return nextToken.accessToken;
 }
 
 async function ensureClassIconCache(): Promise<Map<string, string>> {
@@ -257,7 +287,7 @@ async function ensureClassIconCache(): Promise<Map<string, string>> {
     return classIconCache.byClassName;
   }
 
-  const accessToken = await fetchBlizzardClientAccessToken();
+  const accessToken = await getBlizzardAppAccessToken();
   if (!accessToken) {
     classIconCache = {
       expiresAt: now + 5 * 60,
@@ -467,24 +497,21 @@ async function enrichRaider(row: RaiderSourceRow, now: number, raidProgressTarge
     raidProgressTotal: null,
   };
 
-  if (!row.access_token) {
-    return baseRecord;
-  }
-
-  if (!row.token_expires_at || row.token_expires_at <= now) {
-    return { ...baseRecord, authState: 'expired' };
+  const accessToken = await getBlizzardAppAccessToken();
+  if (!accessToken) {
+    return { ...baseRecord, authState: 'unavailable' };
   }
 
   const [summary, equipment, mythicProfile, raidEncounters] = await Promise.all([
-    fetchJsonWithRetry<BlizzardSummaryResponse>(buildCharacterUrl(row.realm_slug, row.name), row.access_token),
-    fetchJsonWithRetry<BlizzardEquipmentResponse>(buildCharacterUrl(row.realm_slug, row.name, '/equipment'), row.access_token),
+    fetchJsonWithRetry<BlizzardSummaryResponse>(buildCharacterUrl(row.realm_slug, row.name), accessToken),
+    fetchJsonWithRetry<BlizzardEquipmentResponse>(buildCharacterUrl(row.realm_slug, row.name, '/equipment'), accessToken),
     fetchJsonWithRetry<BlizzardMythicProfileResponse>(
       buildCharacterUrl(row.realm_slug, row.name, '/mythic-keystone-profile'),
-      row.access_token
+      accessToken
     ),
     fetchJsonWithRetry<BlizzardRaidEncountersResponse>(
       buildCharacterUrl(row.realm_slug, row.name, '/encounters/raids'),
-      row.access_token
+      accessToken
     ),
   ]);
 
@@ -546,7 +573,7 @@ async function getCacheStatus(db: D1Database): Promise<RaidersCacheStatus> {
           MAX(details_synced_at) AS last_detail_sync,
           SUM(
             CASE
-              WHEN auth_state = 'ready' AND (details_synced_at IS NULL OR details_synced_at < ?)
+              WHEN details_synced_at IS NULL OR details_synced_at < ?
               THEN 1
               ELSE 0
             END
@@ -625,12 +652,6 @@ async function upsertSummaryRows(db: D1Database, rows: RaiderSourceRow[], now: n
   if (rows.length === 0) return;
 
   const statements = rows.map((row) => {
-    const authState: RaiderAuthState = !row.access_token
-      ? 'missing'
-      : !row.token_expires_at || row.token_expires_at <= now
-        ? 'expired'
-        : 'ready';
-
     return db
       .prepare(
         `INSERT INTO raider_metrics_cache (
@@ -651,8 +672,23 @@ async function upsertSummaryRows(db: D1Database, rows: RaiderSourceRow[], now: n
             realm_slug = excluded.realm_slug,
             class_name = excluded.class_name,
             team_names = excluded.team_names,
-            auth_state = excluded.auth_state,
-            source_token_expires_at = excluded.source_token_expires_at,
+            auth_state = CASE
+              WHEN raider_metrics_cache.name <> excluded.name
+                OR raider_metrics_cache.realm <> excluded.realm
+                OR raider_metrics_cache.realm_slug <> excluded.realm_slug
+              THEN 'missing'
+              WHEN raider_metrics_cache.auth_state = 'expired'
+              THEN 'missing'
+              ELSE raider_metrics_cache.auth_state
+            END,
+            source_token_expires_at = NULL,
+            details_synced_at = CASE
+              WHEN raider_metrics_cache.name <> excluded.name
+                OR raider_metrics_cache.realm <> excluded.realm
+                OR raider_metrics_cache.realm_slug <> excluded.realm_slug
+              THEN NULL
+              ELSE raider_metrics_cache.details_synced_at
+            END,
             summary_synced_at = excluded.summary_synced_at,
             updated_at = excluded.updated_at`
       )
@@ -663,8 +699,8 @@ async function upsertSummaryRows(db: D1Database, rows: RaiderSourceRow[], now: n
         row.realm_slug,
         row.class_name,
         normalizeTeamNames(row.team_names).join(', '),
-        authState,
-        row.token_expires_at,
+        'missing',
+        null,
         now,
         now
       );
@@ -700,17 +736,9 @@ async function listDetailCandidates(
          rmc.realm,
          rmc.realm_slug,
          rmc.class_name,
-         rmc.team_names,
-         u.access_token,
-         u.token_expires_at
+         rmc.team_names
        FROM raider_metrics_cache rmc
-       LEFT JOIN characters c ON c.blizzard_char_id = rmc.blizzard_char_id
-       LEFT JOIN users u ON u.id = c.user_id
-       WHERE rmc.auth_state = 'ready'
-         AND u.access_token IS NOT NULL
-         AND u.token_expires_at IS NOT NULL
-         AND u.token_expires_at > ?
-         AND (
+       WHERE (
            rmc.raid_progress_label IS NULL
            OR (
                ? <> ''
@@ -724,12 +752,10 @@ async function listDetailCandidates(
            OR rmc.details_synced_at IS NULL
            OR rmc.details_synced_at < ?
          )
-       GROUP BY rmc.blizzard_char_id
        ORDER BY rmc.details_synced_at IS NOT NULL, rmc.details_synced_at ASC, rmc.name ASC
        LIMIT ?`
     )
       .bind(
-        now,
         effectiveRaidProgressTierId,
         effectiveRaidProgressTierId,
         effectiveRaidProgressTierId,
@@ -758,15 +784,11 @@ export async function refreshRaidersCache(
          rmc.name,
          rmc.realm,
          rmc.realm_slug,
-         rmc.class_name,
-         GROUP_CONCAT(DISTINCT rt.name) AS team_names,
-         MAX(u.access_token) AS access_token,
-         MAX(u.token_expires_at) AS token_expires_at
+        rmc.class_name,
+        GROUP_CONCAT(DISTINCT rt.name) AS team_names
        FROM raid_team_members rtm
        JOIN raid_teams rt ON rt.id = rtm.team_id
        JOIN roster_members_cache rmc ON rmc.blizzard_char_id = rtm.blizzard_char_id
-       LEFT JOIN characters c ON c.blizzard_char_id = rtm.blizzard_char_id
-       LEFT JOIN users u ON u.id = c.user_id
        WHERE rt.is_archived = 0
        GROUP BY rmc.blizzard_char_id, rmc.name, rmc.realm, rmc.realm_slug, rmc.class_name`
     )
@@ -829,7 +851,7 @@ export async function refreshRaidersCache(
         detailed.raidProgressLabel,
         detailed.raidProgressKills,
         detailed.raidProgressTotal,
-        source.token_expires_at,
+        null,
         now,
         now,
         source.blizzard_char_id
@@ -842,25 +864,23 @@ export async function refreshRaidersCache(
 
 export async function getRaiderMedia(charId: number, dbInput?: D1Database): Promise<{ portrait: string | null; fullBody: string | null }> {
   const db = getDatabase(dbInput);
-  const now = nowInSeconds();
 
   const row = await db
     .prepare(
-      `SELECT rmc.name, rmc.realm_slug, u.access_token, u.token_expires_at
+      `SELECT rmc.name, rmc.realm_slug
        FROM raider_metrics_cache rmc
-       LEFT JOIN characters c ON c.blizzard_char_id = rmc.blizzard_char_id
-       LEFT JOIN users u ON u.id = c.user_id
        WHERE rmc.blizzard_char_id = ?`
     )
     .bind(charId)
-    .first<{ name: string; realm_slug: string; access_token: string | null; token_expires_at: number | null }>();
+    .first<{ name: string; realm_slug: string }>();
 
-  if (!row?.access_token || !row.token_expires_at || row.token_expires_at <= now) {
+  const accessToken = await getBlizzardAppAccessToken();
+  if (!row || !accessToken) {
     return { portrait: null, fullBody: null };
   }
 
   const url = buildCharacterUrl(row.realm_slug, row.name, '/character-media');
-  const media = await fetchJsonWithRetry<BlizzardMediaResponse>(url, row.access_token);
+  const media = await fetchJsonWithRetry<BlizzardMediaResponse>(url, accessToken);
   if (!media?.assets) return { portrait: null, fullBody: null };
 
   const find = (keys: string[]) => {
@@ -947,7 +967,7 @@ export async function loadRaidersViewData(dbInput?: D1Database): Promise<Raiders
   let raiders = await listCachedRaiders(db);
   let status = await getCacheStatus(db);
 
-  // Keep token-derived auth states current (missing/expired/ready) without triggering heavy Blizzard detail fan-out.
+  // Keep roster-team membership and queue state current without triggering heavy Blizzard detail fan-out.
   try {
     status = await refreshRaidersCache(db, { skipDetails: true });
     raiders = await listCachedRaiders(db);

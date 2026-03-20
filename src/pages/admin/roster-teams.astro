@@ -3,12 +3,12 @@ export const prerender = false;
 
 import AdminLayout from '../../layouts/AdminLayout.astro';
 import { env } from 'cloudflare:workers';
+import { Icon } from 'astro-icon/components';
 import { classColor } from '../../lib/wow';
 import {
   ASSIGNED_ROLES,
   allRaidBuffs,
   computeTeamSummary,
-  modeLimit,
   primaryRaidBuff,
   raidBuffDescription,
   tokenArmorType,
@@ -190,9 +190,7 @@ const statusMessages: Record<string, { type: 'ok' | 'error'; text: string }> = {
   'member-added': { type: 'ok', text: 'Member added to team.' },
   'member-removed': { type: 'ok', text: 'Member removed from team.' },
   'member-updated': { type: 'ok', text: 'Member role updated.' },
-  'team-full': { type: 'error', text: 'Team is already at the mode player cap.' },
   'must-be-90': { type: 'error', text: 'Only level 90 characters can be added.' },
-  'mode-too-small': { type: 'error', text: 'Cannot switch to that mode because the team is above the cap.' },
   error: { type: 'error', text: 'Something went wrong. Please try again.' },
 };
 const flash = statusParam ? (statusMessages[statusParam] ?? null) : null;
@@ -224,7 +222,7 @@ function roleLabel(role: AssignedRole): string {
         <h1>Roster Teams</h1>
         <p class="page-desc">
           Build multiple raid rosters from level 90 guild members. Officers assign Tank, Healer, Melee DPS, or Ranged DPS when adding members.
-          Team mode controls cap: Flex up to 30, Mythic up to 20.
+          Team mode controls encounter rules only; roster sizes can exceed in-raid participant limits.
         </p>
       </div>
       <div class="stats">
@@ -250,8 +248,8 @@ function roleLabel(role: AssignedRole): string {
           <label class="field mode-field">
             <span>Mode</span>
             <select name="raid_mode" required>
-              <option value="mythic" selected>Mythic (20 max)</option>
-              <option value="flex">Flex (30 max)</option>
+              <option value="mythic" selected>Mythic</option>
+              <option value="flex">Flex</option>
             </select>
           </label>
           <label class="field order-field">
@@ -273,8 +271,6 @@ function roleLabel(role: AssignedRole): string {
             members.map((m) => ({ className: m.class_name, assignedRole: m.assigned_role }))
           );
           const currentCount = members.length;
-          const teamLimit = modeLimit(team.raid_mode);
-          const rosterOpenSpots = Math.max(0, teamLimit - currentCount);
           const assignedIds = memberIdsByTeam.get(team.id) ?? new Set();
           const availableToAdd = availableMembers.filter((member) => !assignedIds.has(member.blizzard_char_id));
 
@@ -286,9 +282,7 @@ function roleLabel(role: AssignedRole): string {
                   <p class="team-subline">
                     {team.raid_mode === 'mythic' ? 'Mythic' : 'Flex'} mode
                     <span aria-hidden="true"> • </span>
-                    {currentCount} / {teamLimit}
-                    <span aria-hidden="true"> • </span>
-                    {rosterOpenSpots} spot{rosterOpenSpots === 1 ? '' : 's'} open
+                    {currentCount} member{currentCount === 1 ? '' : 's'}
                   </p>
                 </div>
                 <form
@@ -316,8 +310,8 @@ function roleLabel(role: AssignedRole): string {
                   <label class="field mode-field">
                     <span>Mode</span>
                     <select name="raid_mode" required>
-                      <option value="mythic" selected={team.raid_mode === 'mythic'}>Mythic (20 max)</option>
-                      <option value="flex" selected={team.raid_mode === 'flex'}>Flex (30 max)</option>
+                      <option value="mythic" selected={team.raid_mode === 'mythic'}>Mythic</option>
+                      <option value="flex" selected={team.raid_mode === 'flex'}>Flex</option>
                     </select>
                   </label>
                   <label class="field order-field">
@@ -328,15 +322,29 @@ function roleLabel(role: AssignedRole): string {
                 </form>
               </details>
 
-              <div class="summary-grid">
-                <article class="summary-card">
-                  <h3>Role Count</h3>
-                  <p>Tank: <strong>{summary.roleCounts.tank}</strong></p>
-                  <p>Healer: <strong>{summary.roleCounts.healer}</strong></p>
-                  <p>Melee DPS: <strong>{summary.roleCounts['melee-dps']}</strong></p>
-                  <p>Ranged DPS: <strong>{summary.roleCounts['ranged-dps']}</strong></p>
-                </article>
+              <article class="summary-card role-strip-card">
+                <h3>Role Count</h3>
+                <ul class="role-strip" aria-label="Role counts">
+                  <li>
+                    <span class="role-chip-label"><Icon name="lucide:shield" aria-hidden="true" />Tank</span>
+                    <strong>{summary.roleCounts.tank}</strong>
+                  </li>
+                  <li>
+                    <span class="role-chip-label"><Icon name="lucide:heart-pulse" aria-hidden="true" />Healer</span>
+                    <strong>{summary.roleCounts.healer}</strong>
+                  </li>
+                  <li>
+                    <span class="role-chip-label"><Icon name="lucide:swords" aria-hidden="true" />Melee DPS</span>
+                    <strong>{summary.roleCounts['melee-dps']}</strong>
+                  </li>
+                  <li>
+                    <span class="role-chip-label"><Icon name="lucide:crosshair" aria-hidden="true" />Ranged DPS</span>
+                    <strong>{summary.roleCounts['ranged-dps']}</strong>
+                  </li>
+                </ul>
+              </article>
 
+              <div class="summary-grid">
                 <article class="summary-card">
                   <h3>Raid Buff Coverage</h3>
                   {summary.raidBuffs.length === 0 && summary.missingRaidBuffs.length === 0 ? (
@@ -361,7 +369,7 @@ function roleLabel(role: AssignedRole): string {
                   )}
                 </article>
 
-                <article class="summary-card summary-wide">
+                <article class="summary-card">
                   <h3>Class &amp; Token Distribution</h3>
                   <div class="distribution-grid">
                     <section>
@@ -830,11 +838,8 @@ function roleLabel(role: AssignedRole): string {
 
   .summary-grid {
     display: grid;
-    grid-auto-flow: column;
-    grid-auto-columns: minmax(240px, 1fr);
+    grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 0.75rem;
-    overflow-x: auto;
-    padding-bottom: 0.15rem;
   }
 
   .summary-card {
@@ -842,10 +847,8 @@ function roleLabel(role: AssignedRole): string {
     border-radius: 0.55rem;
     padding: 0.65rem;
     background: rgba(14, 10, 6, 0.5);
-  }
-
-  .summary-wide {
-    grid-column: auto;
+    min-width: 0;
+    overflow: visible;
   }
 
   .summary-card h3,
@@ -859,6 +862,50 @@ function roleLabel(role: AssignedRole): string {
     margin: 0.2rem 0;
     color: var(--text);
     font-size: 0.9rem;
+  }
+
+  .role-strip-card {
+    margin-bottom: 0.75rem;
+  }
+
+  .role-strip {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 0.45rem;
+  }
+
+  .role-strip li {
+    border: 1px solid rgba(214, 176, 106, 0.24);
+    border-radius: 0.45rem;
+    background: rgba(214, 176, 106, 0.08);
+    padding: 0.32rem 0.5rem;
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 0.5rem;
+    color: var(--text);
+    font-size: 0.83rem;
+  }
+
+  .role-strip li strong {
+    color: var(--gold-bright);
+    font-size: 0.95rem;
+  }
+
+  .role-chip-label {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.3rem;
+  }
+
+  .role-chip-label [data-icon] {
+    width: 0.9rem;
+    height: 0.9rem;
+    color: var(--gold-bright);
+    flex-shrink: 0;
   }
 
   .distribution-grid {
@@ -1151,6 +1198,14 @@ function roleLabel(role: AssignedRole): string {
   }
 
   @media (max-width: 1100px) {
+    .summary-grid {
+      grid-template-columns: 1fr;
+    }
+
+    .role-strip {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
     .picker-controls {
       grid-template-columns: repeat(2, minmax(0, 1fr));
     }
@@ -1161,6 +1216,10 @@ function roleLabel(role: AssignedRole): string {
   }
 
   @media (max-width: 760px) {
+    .role-strip {
+      grid-template-columns: 1fr;
+    }
+
     .picker-controls {
       grid-template-columns: 1fr;
     }

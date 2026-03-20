@@ -35,6 +35,7 @@ The site combines public guild information, Blizzard-authenticated member profil
 	- Raider.IO shortcuts per character
 - Raiders analytics page backed by D1 cache with:
 	- team-scoped character list for active roster teams
+	- app-level Blizzard token refreshes so roster-team metrics can populate without each raider linking Battle.net
 	- class/status/search filters and sortable columns
 	- Blizzard class icons in the class column
 	- color-coded equipped iLvl values using WoW quality colors
@@ -72,7 +73,8 @@ Admin access is granted by guild rank via middleware. Officer or higher can acce
 	- create, edit, delete, and reorder links within categories
 - Roster Teams module:
 	- create and manage multiple raid team setups
-	- toggle each team between Flex (30 max) and Mythic (20 max)
+	- toggle each team between Flex and Mythic mode
+	- maintain roster sizes above in-raid participant caps when attendance rotates week to week
 	- add and remove level 90 members regardless of authentication status
 	- keep the member picker open after adding a member for faster bulk assignment
 	- show only members not already assigned to that specific team in the add picker
@@ -88,7 +90,7 @@ Admin access is granted by guild rank via middleware. Officer or higher can acce
 	- remove outdated raids
 - Settings module:
 	- configure tracked raid-progress expansion/tier bundle
-	- view roster/raiders cache health and auth-state breakdown
+	- view roster/raiders cache health, raiders data-state breakdown, and raiders catch-up ETA
 	- manually trigger cache refresh for roster and raiders caches
 - Export module:
 	- generate character-to-label export JSON for guild addon workflows
@@ -107,8 +109,8 @@ Admin access is granted by guild rank via middleware. Officer or higher can acce
 | `/lore` | No | Lore archive with story picker, story reader, and artwork lightbox |
 | `/links` | No | Curated useful links grouped by configurable categories |
 | `/roster` | No | Cached guild roster with filters, sorting, pagination, and collection stats |
-| `/raiders` | No | Cached raider analytics table for active roster-team characters |
-| `/raiders/:charId` | No | Raider detail page with media, stats, and raid progress matrix |
+| `/raiders` | Yes + Guild Member | Cached raider analytics table for active roster-team characters |
+| `/raiders/:charId` | Yes + Guild Member | Raider detail page with media, stats, and raid progress matrix |
 
 ### Authenticated / Admin Pages
 
@@ -116,7 +118,7 @@ Admin access is granted by guild rank via middleware. Officer or higher can acce
 |---|---|---|
 | `/profile` | Yes | Battle.net account profile and main-character selection |
 | `/signup` | Yes + Guild Member | Raid signup calendar with timezone-aware raid times |
-| `/admin` | Yes + Admin | Redirects to the default admin module |
+| `/admin` | Yes + Admin | Redirects to `/admin/mains` |
 | `/admin/raid-signups` | Yes + Admin | Manage primary schedules and ad-hoc raids |
 | `/admin/roster-teams` | Yes + Admin | Multi-team raid roster builder and analysis |
 | `/admin/mains` | Yes + Admin | Member overview, main/alt visibility, and nickname management |
@@ -217,6 +219,7 @@ These handlers remain in the codebase as retired stubs and currently return HTTP
 - Character detail data uses a longer TTL and refreshes in batches to avoid Blizzard and platform limits
 - The roster page can render from cached data while the cache warms additional members in the background
 - Raiders cache separates summary sync and detail sync to avoid heavy Blizzard fan-out on every request
+- Raiders detail/media calls use app-level client-credentials access so details are not blocked on per-user Battle.net login
 - Raid progress is stored as structured JSON labels for reliable table/profile rendering
 
 ## Project Structure
@@ -246,6 +249,7 @@ These handlers remain in the codebase as retired stubs and currently return HTTP
 │       ├── leadership/
 │       └── lore/
 ├── scripts/
+│   ├── copy-prod-data.mjs
 │   └── patch-wrangler-config.mjs
 ├── src/
 │   ├── assets/

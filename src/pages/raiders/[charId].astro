@@ -23,10 +23,10 @@ if (!raider) {
 const { portrait, fullBody } = media;
 
 function authLabel(state: string): string {
-  if (state === 'ready') return 'Connected';
-  if (state === 'expired') return 'Token Expired';
+  if (state === 'ready') return 'Loaded';
+  if (state === 'expired') return 'Stale';
   if (state === 'unavailable') return 'Unavailable';
-  return 'Not Connected';
+  return 'Pending';
 }
 
 function scoreColor(filled: number | null, total: number | null): string {

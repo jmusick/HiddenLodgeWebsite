@@ -34,6 +34,8 @@ interface SiteSettingRow {
 const now = Math.floor(Date.now() / 1000);
 const rosterTtlCutoff = now - 24 * 60 * 60;
 const raidersTtlCutoff = now - 12 * 60 * 60;
+const CRON_INTERVAL_MINUTES = 10;
+const RAIDERS_DETAIL_BATCH_SIZE_PER_RUN = 6;
 const statusParam = new URL(Astro.request.url).searchParams.get('status');
 
 let rosterCache: RosterCacheRow | null = null;
@@ -54,7 +56,7 @@ try {
     env.DB.prepare(
       `SELECT
           COUNT(*) AS total_members,
-          SUM(CASE WHEN auth_state = 'ready' AND (details_synced_at IS NULL OR details_synced_at < ?) THEN 1 ELSE 0 END) AS pending_details,
+          SUM(CASE WHEN details_synced_at IS NULL OR details_synced_at < ? THEN 1 ELSE 0 END) AS pending_details,
           SUM(CASE WHEN auth_state = 'ready' THEN 1 ELSE 0 END) AS ready_count,
           SUM(CASE WHEN auth_state = 'missing' THEN 1 ELSE 0 END) AS missing_count,
           SUM(CASE WHEN auth_state = 'expired' THEN 1 ELSE 0 END) AS expired_count,
@@ -78,6 +80,30 @@ const selectedRaidTier = resolveRaidProgressTier(raidProgressTarget);
 function formatEpoch(value: number | null): string {
   return value ? new Date(value * 1000).toLocaleString() : 'Never';
 }
+
+function formatPendingEta(pending: number, perRun: number, intervalMinutes: number): string {
+  if (!pending || pending <= 0) return 'Up to date';
+
+  const runsNeeded = Math.ceil(pending / Math.max(1, perRun));
+  const totalMinutes = runsNeeded * Math.max(1, intervalMinutes);
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+
+  if (hours > 0 && minutes > 0) {
+    return `~${hours}h ${minutes}m (${runsNeeded} run${runsNeeded === 1 ? '' : 's'})`;
+  }
+  if (hours > 0) {
+    return `~${hours}h (${runsNeeded} run${runsNeeded === 1 ? '' : 's'})`;
+  }
+  return `~${minutes}m (${runsNeeded} run${runsNeeded === 1 ? '' : 's'})`;
+}
+
+const raidersPendingDetails = Number(raidersCache?.pending_details ?? 0);
+const raidersEta = formatPendingEta(
+  raidersPendingDetails,
+  RAIDERS_DETAIL_BATCH_SIZE_PER_RUN,
+  CRON_INTERVAL_MINUTES
+);
 ---
 
 <AdminLayout title="Settings | Admin | The Hidden Lodge">
@@ -163,15 +189,17 @@ function formatEpoch(value: number | null): string {
               <ul class="stats-list">
                 <li><span>Total team raiders</span><strong>{raidersCache?.total_members ?? 0}</strong></li>
                 <li><span>Pending detail refresh</span><strong>{raidersCache?.pending_details ?? 0}</strong></li>
+                <li><span>Estimated catch-up ETA</span><strong>{raidersEta}</strong></li>
                 <li><span>Last summary sync</span><strong>{formatEpoch(raidersCache?.last_summary_sync ?? null)}</strong></li>
                 <li><span>Last detail sync</span><strong>{formatEpoch(raidersCache?.last_detail_sync ?? null)}</strong></li>
               </ul>
+              <p class="eta-note">Assumes cron runs every {CRON_INTERVAL_MINUTES} minutes and each run fills about {RAIDERS_DETAIL_BATCH_SIZE_PER_RUN} raiders.</p>
 
-              <h4>Auth State Breakdown</h4>
+              <h4>Raiders Data State</h4>
               <ul class="pill-list">
-                <li class="pill pill-ready">Ready: {raidersCache?.ready_count ?? 0}</li>
-                <li class="pill pill-missing">Missing: {raidersCache?.missing_count ?? 0}</li>
-                <li class="pill pill-expired">Expired: {raidersCache?.expired_count ?? 0}</li>
+                <li class="pill pill-ready">Loaded: {raidersCache?.ready_count ?? 0}</li>
+                <li class="pill pill-missing">Pending: {raidersCache?.missing_count ?? 0}</li>
+                <li class="pill pill-expired">Stale: {raidersCache?.expired_count ?? 0}</li>
                 <li class="pill pill-unavailable">Unavailable: {raidersCache?.unavailable_count ?? 0}</li>
               </ul>
             </section>
@@ -362,6 +390,12 @@ function formatEpoch(value: number | null): string {
     color: #f1d9a9;
     font-weight: 700;
     text-align: right;
+  }
+
+  .eta-note {
+    margin: 0.65rem 0 0;
+    color: #c8d5dd;
+    font-size: 0.84rem;
   }
 
   .pill-list {

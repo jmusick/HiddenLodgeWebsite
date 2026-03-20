@@ -22,11 +22,6 @@ export interface TeamSummary {
   missingRaidBuffs: string[];
 }
 
-export const TEAM_MODE_LIMITS: Record<TeamMode, number> = {
-  flex: 30,
-  mythic: 20,
-};
-
 export const ASSIGNED_ROLES: AssignedRole[] = ['tank', 'healer', 'melee-dps', 'ranged-dps'];
 
 const CLASS_RAID_DATA: Record<string, ClassRaidData> = {
@@ -127,10 +122,6 @@ export function normalizeAssignedRole(value: string | null | undefined): Assigne
     return value;
   }
   return null;
-}
-
-export function modeLimit(mode: TeamMode): number {
-  return TEAM_MODE_LIMITS[mode];
 }
 
 export function classRaidData(className: string): ClassRaidData {

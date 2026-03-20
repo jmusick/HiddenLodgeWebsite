@@ -2,7 +2,7 @@ export const prerender = false;
 
 import type { APIContext } from 'astro';
 import { env } from 'cloudflare:workers';
-import { modeLimit, normalizeAssignedRole, normalizeTeamMode } from '../../../../lib/raid-teams';
+import { normalizeAssignedRole, normalizeTeamMode } from '../../../../lib/raid-teams';
 
 export async function POST(context: APIContext): Promise<Response> {
   if (!context.locals.isAdmin) {
@@ -47,19 +47,6 @@ export async function POST(context: APIContext): Promise<Response> {
   )
     .bind(teamId, blizzardCharId)
     .first<{ found: number }>();
-
-  if (!existsRow) {
-    const countRow = await env.DB.prepare(
-      `SELECT COUNT(*) AS member_count FROM raid_team_members WHERE team_id = ?`
-    )
-      .bind(teamId)
-      .first<{ member_count: number }>();
-
-    const memberCount = Number(countRow?.member_count ?? 0);
-    if (memberCount >= modeLimit(raidMode)) {
-      return redirectWith('team-full');
-    }
-  }
 
   await env.DB.prepare(
     `INSERT INTO raid_team_members (team_id, blizzard_char_id, assigned_role, updated_at)
