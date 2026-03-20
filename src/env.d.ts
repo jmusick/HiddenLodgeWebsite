@@ -19,6 +19,7 @@ declare namespace App {
 			battleTag: string;
 			blizzardId: number;
 		} | null;
+		isGuildMember: boolean;
 		isAdmin: boolean;
 	}
 }

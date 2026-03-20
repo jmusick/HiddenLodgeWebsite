@@ -1,0 +1,1079 @@
+---
+export const prerender = false;
+
+import Layout from '../layouts/Layout.astro';
+import { env } from 'cloudflare:workers';
+import {
+  dayKeyInTimeZone,
+  formatEpochInTimeZone,
+  monthGridUtc,
+  parseUtcTime,
+  parseYm,
+  shouldScheduleOccurOnUtcDate,
+  type AdHocRaid,
+  type PrimarySchedule,
+} from '../lib/raid-signups';
+import {
+  computeTeamSummary,
+  raidBuffDescription,
+  tokenArmorType,
+  type AssignedRole,
+} from '../lib/raid-teams';
+
+const user = Astro.locals.user;
+const isAdmin = Astro.locals.isAdmin;
+if (!user) {
+  return Astro.redirect('/auth/login');
+}
+
+if (!Astro.locals.isGuildMember) {
+  return new Response('Guild membership required.', { status: 403 });
+}
+
+interface CharacterRow {
+  id: number;
+  name: string;
+  realm: string;
+  class_name: string;
+  level: number;
+  is_main: number;
+}
+
+interface SignupRow {
+  id: number;
+  raid_kind: 'primary' | 'adhoc';
+  primary_schedule_id: number | null;
+  ad_hoc_raid_id: number | null;
+  occurrence_start_utc: number | null;
+  character_id: number;
+  character_name: string;
+  signup_status: 'coming' | 'tentative';
+  signup_role: AssignedRole;
+}
+
+interface DaySummarySignupRow {
+  id: number;
+  raid_kind: 'primary' | 'adhoc';
+  primary_schedule_id: number | null;
+  ad_hoc_raid_id: number | null;
+  occurrence_start_utc: number | null;
+  signed_up_at: number;
+  signup_status: 'coming' | 'tentative';
+  signup_role: AssignedRole;
+  character_name: string;
+  class_name: string;
+  nickname: string | null;
+  battle_tag: string;
+}
+
+const ROLE_OPTIONS: Array<{ value: AssignedRole; label: string }> = [
+  { value: 'tank', label: 'Tank' },
+  { value: 'healer', label: 'Healer' },
+  { value: 'melee-dps', label: 'Melee DPS' },
+  { value: 'ranged-dps', label: 'Ranged DPS' },
+];
+
+function roleLabel(role: AssignedRole): string {
+  return ROLE_OPTIONS.find((opt) => opt.value === role)?.label ?? role;
+}
+
+const ymParam = new URL(Astro.request.url).searchParams.get('ym');
+const parsedYm = parseYm(ymParam);
+const now = new Date();
+const year = parsedYm?.year ?? now.getUTCFullYear();
+const monthIndex = parsedYm?.monthIndex ?? now.getUTCMonth();
+
+const grid = monthGridUtc(year, monthIndex);
+const gridStartEpoch = Math.floor(grid.gridStart.getTime() / 1000);
+const gridEndEpoch = Math.floor(grid.gridEndExclusive.getTime() / 1000);
+
+const [settingsResult, charsResult, schedulesResult, adHocResult, signupsResult] = await env.DB.batch([
+  env.DB.prepare('SELECT time_zone FROM users WHERE id = ?').bind(user.id),
+  env.DB.prepare(
+     `SELECT id, name, realm, class_name, level, is_main
+     FROM characters
+     WHERE user_id = ?
+       AND level = 90
+     ORDER BY is_main DESC, name ASC`
+  ).bind(user.id),
+  env.DB.prepare(
+    `SELECT id, name, weekday_utc, start_time_utc, duration_minutes, repeat_cycle, created_at, is_active
+     FROM primary_raid_schedules
+     WHERE is_active = 1
+     ORDER BY weekday_utc ASC, start_time_utc ASC, name ASC`
+  ),
+  env.DB.prepare(
+    `SELECT id, name, starts_at_utc, duration_minutes, notes, is_active
+     FROM ad_hoc_raids
+     WHERE is_active = 1
+       AND starts_at_utc >= ?
+       AND starts_at_utc < ?
+     ORDER BY starts_at_utc ASC, name ASC`
+  ).bind(gridStartEpoch, gridEndEpoch),
+  env.DB.prepare(
+    `SELECT rs.id, rs.raid_kind, rs.primary_schedule_id, rs.ad_hoc_raid_id, rs.occurrence_start_utc,
+            rs.character_id, c.name AS character_name, rs.signup_status, rs.signup_role
+     FROM raid_signups rs
+     JOIN characters c ON c.id = rs.character_id
+     WHERE rs.user_id = ?`
+  ).bind(user.id),
+]);
+
+const userTimeZone = (settingsResult.results?.[0] as { time_zone?: string } | undefined)?.time_zone ?? 'UTC';
+const characters = (charsResult.results ?? []) as CharacterRow[];
+const primarySchedules = (schedulesResult.results ?? []) as PrimarySchedule[];
+const adHocRaids = (adHocResult.results ?? []) as AdHocRaid[];
+const signupRows = (signupsResult.results ?? []) as SignupRow[];
+
+const defaultCharacterId = characters.find((c) => c.is_main === 1)?.id ?? characters[0]?.id ?? null;
+
+interface CalendarRaid {
+  key: string;
+  kind: 'primary' | 'adhoc';
+  title: string;
+  startsAtUtc: number;
+  durationMinutes: number;
+  notes: string | null;
+  primaryScheduleId: number | null;
+  adHocRaidId: number | null;
+}
+
+const raidsByUtcDay = new Map<string, CalendarRaid[]>();
+
+function addRaidToDay(raid: CalendarRaid): void {
+  const dayKey = new Date(raid.startsAtUtc * 1000).toISOString().slice(0, 10);
+  const arr = raidsByUtcDay.get(dayKey) ?? [];
+  arr.push(raid);
+  raidsByUtcDay.set(dayKey, arr);
+}
+
+for (let cursor = new Date(grid.gridStart); cursor < grid.gridEndExclusive; cursor = new Date(cursor.getTime() + 86400000)) {
+  const dayStartEpoch = Math.floor(cursor.getTime() / 1000);
+  for (const schedule of primarySchedules) {
+    if (!shouldScheduleOccurOnUtcDate(schedule, cursor)) continue;
+    const parsedTime = parseUtcTime(schedule.start_time_utc);
+    if (!parsedTime) continue;
+
+    const startsAtUtc = dayStartEpoch + parsedTime.hour * 3600 + parsedTime.minute * 60;
+    addRaidToDay({
+      key: `primary:${schedule.id}:${startsAtUtc}`,
+      kind: 'primary',
+      title: schedule.name,
+      startsAtUtc,
+      durationMinutes: schedule.duration_minutes,
+      notes: null,
+      primaryScheduleId: schedule.id,
+      adHocRaidId: null,
+    });
+  }
+}
+
+for (const raid of adHocRaids) {
+  addRaidToDay({
+    key: `adhoc:${raid.id}`,
+    kind: 'adhoc',
+    title: raid.name,
+    startsAtUtc: raid.starts_at_utc,
+    durationMinutes: raid.duration_minutes,
+    notes: raid.notes,
+    primaryScheduleId: null,
+    adHocRaidId: raid.id,
+  });
+}
+
+for (const [key, raids] of raidsByUtcDay.entries()) {
+  raids.sort((a, b) => a.startsAtUtc - b.startsAtUtc || a.title.localeCompare(b.title));
+  raidsByUtcDay.set(key, raids);
+}
+
+const signupsByRaidKey = new Map<string, SignupRow>();
+for (const row of signupRows) {
+  if (row.raid_kind === 'primary' && row.primary_schedule_id && row.occurrence_start_utc) {
+    signupsByRaidKey.set(`primary:${row.primary_schedule_id}:${row.occurrence_start_utc}`, row);
+  }
+  if (row.raid_kind === 'adhoc' && row.ad_hoc_raid_id) {
+    signupsByRaidKey.set(`adhoc:${row.ad_hoc_raid_id}`, row);
+  }
+}
+
+const dayCells: Array<{ isoDate: string; dayNumber: number; inMonth: boolean; raids: CalendarRaid[] }> = [];
+for (let cursor = new Date(grid.gridStart); cursor < grid.gridEndExclusive; cursor = new Date(cursor.getTime() + 86400000)) {
+  const isoDate = cursor.toISOString().slice(0, 10);
+  dayCells.push({
+    isoDate,
+    dayNumber: cursor.getUTCDate(),
+    inMonth: cursor.getUTCMonth() === monthIndex,
+    raids: raidsByUtcDay.get(isoDate) ?? [],
+  });
+}
+
+const monthTitle = grid.monthStart.toLocaleDateString('en-US', { month: 'long', year: 'numeric', timeZone: 'UTC' });
+const statusParam = new URL(Astro.request.url).searchParams.get('status');
+const selectedDay = new URL(Astro.request.url).searchParams.get('day');
+const selectedDayCell = selectedDay ? dayCells.find((cell) => cell.isoDate === selectedDay) ?? null : null;
+const selectedDayRaids = selectedDayCell?.raids ?? [];
+
+let selectedDaySummaryRows: DaySummarySignupRow[] = [];
+if (selectedDayCell) {
+  const selectedDayStart = Math.floor(new Date(`${selectedDayCell.isoDate}T00:00:00.000Z`).getTime() / 1000);
+  const selectedDayEnd = selectedDayStart + 86400;
+
+  const result = await env.DB.prepare(
+    `SELECT
+      rs.id,
+      rs.raid_kind,
+      rs.primary_schedule_id,
+      rs.ad_hoc_raid_id,
+      rs.occurrence_start_utc,
+      rs.signed_up_at,
+      rs.signup_status,
+      rs.signup_role,
+      c.name AS character_name,
+      c.class_name,
+      u.nickname,
+      u.battle_tag
+    FROM raid_signups rs
+    JOIN characters c ON c.id = rs.character_id
+    JOIN users u ON u.id = rs.user_id
+    LEFT JOIN ad_hoc_raids ahr ON ahr.id = rs.ad_hoc_raid_id
+    WHERE (
+      rs.raid_kind = 'primary'
+      AND rs.occurrence_start_utc >= ?
+      AND rs.occurrence_start_utc < ?
+    )
+    OR (
+      rs.raid_kind = 'adhoc'
+      AND ahr.starts_at_utc >= ?
+      AND ahr.starts_at_utc < ?
+    )`
+  )
+    .bind(selectedDayStart, selectedDayEnd, selectedDayStart, selectedDayEnd)
+    .all<DaySummarySignupRow>();
+
+  selectedDaySummaryRows = (result.results ?? []) as DaySummarySignupRow[];
+}
+
+const daySummaryByRaidKey = new Map<string, DaySummarySignupRow[]>();
+for (const row of selectedDaySummaryRows) {
+  const raidKey =
+    row.raid_kind === 'primary' && row.primary_schedule_id && row.occurrence_start_utc
+      ? `primary:${row.primary_schedule_id}:${row.occurrence_start_utc}`
+      : row.raid_kind === 'adhoc' && row.ad_hoc_raid_id
+        ? `adhoc:${row.ad_hoc_raid_id}`
+        : null;
+
+  if (!raidKey) continue;
+  const arr = daySummaryByRaidKey.get(raidKey) ?? [];
+  arr.push(row);
+  daySummaryByRaidKey.set(raidKey, arr);
+}
+---
+
+<Layout title="Signup | The Hidden Lodge" description="Raid signup calendar for guild members.">
+  <div class="signup-page">
+    <header class="signup-header">
+      <div>
+        <h1>Raid Signup</h1>
+        <p>Choose your character and sign up directly from the calendar. Times are shown in <strong>{userTimeZone}</strong>.</p>
+        <p class="summary-hint">Click any date number in the calendar to load that day&apos;s raid summary.</p>
+      </div>
+      <nav class="month-nav" aria-label="Calendar month navigation">
+        <a href={`/signup?ym=${grid.prevYm}`} class="month-btn">&larr; Prev</a>
+        <span class="month-title">{monthTitle}</span>
+        <a href={`/signup?ym=${grid.nextYm}`} class="month-btn">Next &rarr;</a>
+      </nav>
+    </header>
+
+    {statusParam === 'signed' && <p class="flash flash-ok">Signup saved.</p>}
+    {statusParam === 'canceled' && <p class="flash flash-ok">Signup removed.</p>}
+    {statusParam === 'signup-role-updated' && <p class="flash flash-ok">Signup role updated.</p>}
+    {statusParam === 'error' && <p class="flash flash-error">Could not save signup. Please try again.</p>}
+
+    {selectedDayCell && (
+      <section class="day-summary" aria-labelledby="day-summary-heading">
+        <h2 id="day-summary-heading">Raid Summary for {selectedDayCell.isoDate}</h2>
+        {selectedDayRaids.length === 0 ? (
+          <p class="summary-empty">No raids scheduled for this day.</p>
+        ) : (
+          <div class="summary-raid-list">
+            {selectedDayRaids.map((raid) => {
+              const rows = daySummaryByRaidKey.get(raid.key) ?? [];
+              const sortedRows = [...rows].sort((a, b) => {
+                if (a.signed_up_at !== b.signed_up_at) {
+                  return a.signed_up_at - b.signed_up_at;
+                }
+                return a.character_name.localeCompare(b.character_name);
+              });
+              const summary = computeTeamSummary(
+                sortedRows.map((row) => ({ className: row.class_name, assignedRole: row.signup_role }))
+              );
+              const comingCount = sortedRows.filter((r) => r.signup_status === 'coming').length;
+              const tentativeCount = sortedRows.length - comingCount;
+
+              return (
+                <article class="summary-raid-card">
+                  <h3>{raid.title}</h3>
+                  <p class="summary-raid-time">{formatEpochInTimeZone(raid.startsAtUtc, userTimeZone)}</p>
+                  <p class="summary-counts">
+                    Coming: <strong>{comingCount}</strong> &middot; Tentative: <strong>{tentativeCount}</strong> &middot; Total: <strong>{sortedRows.length}</strong>
+                  </p>
+
+                  {sortedRows.length === 0 ? (
+                    <p class="summary-empty">No member signups yet. Everyone else is absent by default.</p>
+                  ) : (
+                    <>
+                      <div class="summary-grid">
+                        <article>
+                          <h4>Role Count</h4>
+                          <p>Tank: <strong>{summary.roleCounts.tank}</strong></p>
+                          <p>Healer: <strong>{summary.roleCounts.healer}</strong></p>
+                          <p>Melee DPS: <strong>{summary.roleCounts['melee-dps']}</strong></p>
+                          <p>Ranged DPS: <strong>{summary.roleCounts['ranged-dps']}</strong></p>
+                        </article>
+                        <article>
+                          <h4>Raid Buff Coverage</h4>
+                          <ul class="pill-list">
+                            {summary.raidBuffCounts.map(({ buff, count }) => (
+                              <li class="pill buff-tooltip" data-tooltip={raidBuffDescription(buff)}>
+                                {buff}
+                                <span class="pill-count">{count}</span>
+                              </li>
+                            ))}
+                            {summary.missingRaidBuffs.map((buff) => (
+                              <li class="pill pill-missing buff-tooltip" data-tooltip={raidBuffDescription(buff)}>
+                                {buff}
+                                <span class="pill-count">0</span>
+                              </li>
+                            ))}
+                          </ul>
+                        </article>
+                        <article>
+                          <h4>Class Breakdown</h4>
+                          <ul class="mini-list">
+                            {summary.classDistribution.map((item) => (
+                              <li>{item.className}: {item.count}</li>
+                            ))}
+                          </ul>
+                        </article>
+                        <article>
+                          <h4>Token Breakdown</h4>
+                          <ul class="mini-list">
+                            {summary.tokenDistribution.map((item) => (
+                              <li>
+                                {item.token} ({tokenArmorType(item.token)}): {item.count}
+                              </li>
+                            ))}
+                          </ul>
+                        </article>
+                      </div>
+
+                      <ul class="summary-members">
+                        {sortedRows.map((row) => (
+                          <li>
+                            <div class="member-main">
+                              <span class="member-name">{row.character_name}</span>
+                              <span class="member-meta">
+                                {row.class_name} &middot; {roleLabel(row.signup_role)} &middot; {row.signup_status === 'coming' ? 'Coming' : 'Tentative'} &middot; Signed {formatEpochInTimeZone(row.signed_up_at, userTimeZone)}
+                              </span>
+                              <span class="member-owner">{row.nickname ?? row.battle_tag}</span>
+                            </div>
+                            {isAdmin && (
+                              <form method="POST" action="/api/admin/raid-signups/update-signup-role" class="summary-override-form">
+                                <input type="hidden" name="signup_id" value={row.id} />
+                                <input type="hidden" name="return_to" value={Astro.url.pathname + Astro.url.search} />
+                                <label class="sr-only" for={`override-role-${row.id}`}>Override role for {row.character_name}</label>
+                                <select id={`override-role-${row.id}`} name="signup_role" required>
+                                  {ROLE_OPTIONS.map((opt) => (
+                                    <option value={opt.value} selected={opt.value === row.signup_role}>{opt.label}</option>
+                                  ))}
+                                </select>
+                                <button type="submit" class="btn btn-status btn-compact">Override</button>
+                              </form>
+                            )}
+                          </li>
+                        ))}
+                      </ul>
+                    </>
+                  )}
+                </article>
+              );
+            })}
+          </div>
+        )}
+      </section>
+    )}
+
+    {characters.length === 0 ? (
+      <p class="flash flash-error">
+        No level 90 synced characters found for your account. Log out and back in to resync before signing up.
+      </p>
+    ) : (
+      <div class="calendar-grid" role="grid" aria-label="Raid calendar">
+        {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map((day) => (
+          <div class="weekday-head" role="columnheader">{day}</div>
+        ))}
+
+        {dayCells.map((cell) => (
+          <section
+            class:list={['day-cell', { 'is-outside': !cell.inMonth, 'is-selected': selectedDayCell?.isoDate === cell.isoDate }]}
+            role="gridcell"
+            aria-label={cell.isoDate}
+          >
+            <div class="day-top">
+              <a href={`/signup?ym=${ymParam ?? `${year}-${String(monthIndex + 1).padStart(2, '0')}`}&day=${cell.isoDate}`} class="day-link">
+                <span class="day-num">{cell.dayNumber}</span>
+              </a>
+            </div>
+
+            <div class="day-raids">
+              {cell.raids.length === 0 ? (
+                <p class="no-raids">No raids</p>
+              ) : (
+                cell.raids.map((raid) => {
+                  const signup = signupsByRaidKey.get(raid.key) ?? null;
+                  const localTime = formatEpochInTimeZone(raid.startsAtUtc, userTimeZone);
+                  const localDay = dayKeyInTimeZone(raid.startsAtUtc, userTimeZone);
+
+                  return (
+                    <article class:list={['raid-card', raid.kind === 'primary' ? 'raid-primary' : 'raid-adhoc']}>
+                      <p class="raid-title">{raid.title}</p>
+                      <p class="raid-time">{localTime}</p>
+                      {localDay !== cell.isoDate && <p class="tz-shift">Local date: {localDay}</p>}
+                      {raid.notes && <p class="raid-notes">{raid.notes}</p>}
+
+                      {signup ? (
+                        <div class="signup-state">
+                          <p class="signed-as">
+                            {signup.signup_status === 'tentative' ? 'Tentative' : 'Coming'} as <strong>{signup.character_name}</strong>
+                          </p>
+                          <form method="POST" action="/api/signup/create" class="status-toggle-form">
+                            <input type="hidden" name="raid_kind" value={raid.kind} />
+                            {raid.kind === 'primary' ? (
+                              <>
+                                <input type="hidden" name="primary_schedule_id" value={raid.primaryScheduleId!} />
+                                <input type="hidden" name="occurrence_start_utc" value={raid.startsAtUtc} />
+                              </>
+                            ) : (
+                              <input type="hidden" name="ad_hoc_raid_id" value={raid.adHocRaidId!} />
+                            )}
+                            <input type="hidden" name="character_id" value={signup.character_id} />
+                            <input type="hidden" name="signup_role" value={signup.signup_role} />
+                            <input type="hidden" name="return_to" value={Astro.url.pathname + Astro.url.search} />
+                            <button
+                              type="submit"
+                              name="attendance_status"
+                              value="coming"
+                              class:list={['btn', 'btn-status', { active: signup.signup_status === 'coming' }]}
+                            >
+                              Signup
+                            </button>
+                            <button
+                              type="submit"
+                              name="attendance_status"
+                              value="tentative"
+                              class:list={['btn', 'btn-status', { active: signup.signup_status === 'tentative' }]}
+                            >
+                              Tentative
+                            </button>
+                          </form>
+                          <form method="POST" action="/api/signup/cancel" class="cancel-form">
+                            <input type="hidden" name="raid_kind" value={raid.kind} />
+                            {raid.kind === 'primary' ? (
+                              <>
+                                <input type="hidden" name="primary_schedule_id" value={raid.primaryScheduleId!} />
+                                <input type="hidden" name="occurrence_start_utc" value={raid.startsAtUtc} />
+                              </>
+                            ) : (
+                              <input type="hidden" name="ad_hoc_raid_id" value={raid.adHocRaidId!} />
+                            )}
+                            <input type="hidden" name="return_to" value={Astro.url.pathname + Astro.url.search} />
+                            <button type="submit" class="btn btn-cancel">Cancel</button>
+                          </form>
+                        </div>
+                      ) : (
+                        <form method="POST" action="/api/signup/create" class="signup-form">
+                          <input type="hidden" name="raid_kind" value={raid.kind} />
+                          {raid.kind === 'primary' ? (
+                            <>
+                              <input type="hidden" name="primary_schedule_id" value={raid.primaryScheduleId!} />
+                              <input type="hidden" name="occurrence_start_utc" value={raid.startsAtUtc} />
+                            </>
+                          ) : (
+                            <input type="hidden" name="ad_hoc_raid_id" value={raid.adHocRaidId!} />
+                          )}
+                          <input type="hidden" name="return_to" value={Astro.url.pathname + Astro.url.search} />
+
+                          <label>
+                            <span class="sr-only">Character</span>
+                            <select name="character_id" required>
+                              {characters.map((char) => (
+                                <option value={char.id} selected={char.id === defaultCharacterId}>
+                                  {char.name} ({char.class_name})
+                                </option>
+                              ))}
+                            </select>
+                          </label>
+                          <label>
+                            <span class="sr-only">Role</span>
+                            <select name="signup_role" required>
+                              {ROLE_OPTIONS.map((role) => (
+                                <option value={role.value} selected={role.value === 'ranged-dps'}>{role.label}</option>
+                              ))}
+                            </select>
+                          </label>
+                          <div class="status-toggle-form">
+                            <button type="submit" name="attendance_status" value="coming" class="btn btn-sign">Signup</button>
+                            <button type="submit" name="attendance_status" value="tentative" class="btn btn-tentative">Tentative</button>
+                          </div>
+                        </form>
+                      )}
+                    </article>
+                  );
+                })
+              )}
+            </div>
+          </section>
+        ))}
+      </div>
+    )}
+  </div>
+</Layout>
+
+<style>
+  .signup-page {
+    padding-block: 1.5rem 2rem;
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+  }
+
+  .signup-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 1rem;
+    flex-wrap: wrap;
+  }
+
+  .signup-header h1 {
+    margin: 0 0 0.35rem;
+    color: var(--gold-bright);
+  }
+
+  .signup-header p {
+    margin: 0;
+    color: var(--muted);
+    max-width: 72ch;
+  }
+
+  .summary-hint {
+    margin-top: 0.35rem;
+    color: #9dc7e8;
+    font-size: 0.86rem;
+    font-weight: 600;
+  }
+
+  .month-nav {
+    display: inline-flex;
+    gap: 0.6rem;
+    align-items: center;
+  }
+
+  .month-title {
+    font-family: var(--font-display);
+    color: var(--gold);
+    min-width: 8rem;
+    text-align: center;
+  }
+
+  .month-btn {
+    border: 1px solid var(--border);
+    border-radius: 0.35rem;
+    padding: 0.25rem 0.6rem;
+    color: var(--muted);
+  }
+
+  .month-btn:hover,
+  .month-btn:focus-visible {
+    color: var(--text);
+    border-color: var(--gold);
+  }
+
+  .flash {
+    margin: 0;
+    padding: 0.45rem 0.7rem;
+    border-radius: 0.35rem;
+    font-weight: 600;
+  }
+
+  .flash-ok {
+    background: rgba(0, 180, 80, 0.12);
+    border: 1px solid rgba(0, 180, 80, 0.4);
+    color: #6fdb91;
+  }
+
+  .flash-error {
+    background: rgba(180, 30, 30, 0.12);
+    border: 1px solid rgba(180, 30, 30, 0.4);
+    color: #f47e7e;
+  }
+
+  .calendar-grid {
+    display: grid;
+    grid-template-columns: repeat(7, minmax(0, 1fr));
+    gap: 0.45rem;
+  }
+
+  .weekday-head {
+    color: var(--gold);
+    text-align: center;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    font-size: 0.82rem;
+    text-transform: uppercase;
+    padding: 0.25rem 0;
+  }
+
+  .day-cell {
+    background: var(--bg-panel);
+    border: 1px solid var(--border);
+    border-radius: 0.5rem;
+    padding: 0.55rem;
+    min-height: 14rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+  }
+
+  .day-cell.is-outside {
+    opacity: 0.56;
+  }
+
+  .day-cell.is-selected {
+    border-color: rgba(214, 176, 106, 0.8);
+    box-shadow: inset 0 0 0 1px rgba(214, 176, 106, 0.22);
+  }
+
+  .day-top {
+    display: flex;
+    justify-content: flex-end;
+  }
+
+  .day-link {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 999px;
+    border: 1px solid rgba(214, 176, 106, 0.5);
+    background: rgba(214, 176, 106, 0.14);
+    min-width: 1.9rem;
+    min-height: 1.9rem;
+    padding: 0.08rem;
+    color: var(--gold-bright);
+  }
+
+  .day-link:hover,
+  .day-link:focus-visible {
+    background: rgba(214, 176, 106, 0.28);
+    border-color: rgba(214, 176, 106, 0.9);
+    box-shadow: 0 0 0 2px rgba(214, 176, 106, 0.2);
+    outline: none;
+  }
+
+  .day-cell.is-selected .day-link {
+    border-color: rgba(214, 176, 106, 1);
+    background: rgba(214, 176, 106, 0.34);
+    box-shadow: 0 0 0 2px rgba(214, 176, 106, 0.26);
+  }
+
+  .day-num {
+    font-size: 1rem;
+    color: var(--gold-bright);
+    font-weight: 700;
+  }
+
+  .day-raids {
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+  }
+
+  .no-raids {
+    margin: 0.2rem 0 0;
+    font-size: 0.8rem;
+    color: rgba(215, 225, 233, 0.45);
+  }
+
+  .raid-card {
+    border: 1px solid rgba(214, 176, 106, 0.25);
+    border-radius: 0.4rem;
+    padding: 0.45rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+    background: rgba(10, 19, 29, 0.8);
+  }
+
+  .raid-primary {
+    box-shadow: inset 0 0 0 1px rgba(214, 176, 106, 0.18);
+  }
+
+  .raid-adhoc {
+    border-color: rgba(115, 163, 212, 0.4);
+    box-shadow: inset 0 0 0 1px rgba(115, 163, 212, 0.15);
+  }
+
+  .raid-title,
+  .raid-time,
+  .raid-notes,
+  .signed-as,
+  .tz-shift {
+    margin: 0;
+  }
+
+  .raid-title {
+    font-weight: 700;
+    color: var(--gold-bright);
+    line-height: 1.25;
+  }
+
+  .raid-time {
+    color: #d8e2e8;
+    font-size: 0.84rem;
+  }
+
+  .tz-shift {
+    color: #8db3d6;
+    font-size: 0.74rem;
+  }
+
+  .raid-notes {
+    color: var(--muted);
+    font-size: 0.78rem;
+    line-height: 1.3;
+  }
+
+  .signup-state,
+  .signup-form {
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+  }
+
+  .status-toggle-form {
+    display: flex;
+    flex-direction: column;
+    gap: 0.32rem;
+  }
+
+  .status-toggle-form .btn {
+    width: 100%;
+  }
+
+  .cancel-form {
+    width: 100%;
+  }
+
+  .cancel-form .btn {
+    width: 100%;
+  }
+
+  .signed-as {
+    font-size: 0.8rem;
+    color: #9fd0aa;
+  }
+
+  .day-summary {
+    border: 1px solid var(--border);
+    border-radius: 0.55rem;
+    background: var(--bg-panel);
+    padding: 0.8rem;
+  }
+
+  .day-summary h2 {
+    margin: 0 0 0.5rem;
+    color: var(--gold);
+    font-size: 1.05rem;
+  }
+
+  .summary-raid-list {
+    display: grid;
+    gap: 0.65rem;
+  }
+
+  .summary-raid-card {
+    border: 1px solid rgba(214, 176, 106, 0.32);
+    border-radius: 0.45rem;
+    padding: 0.65rem;
+    background: rgba(7, 15, 24, 0.85);
+  }
+
+  .summary-raid-card h3 {
+    margin: 0;
+    color: var(--gold-bright);
+    font-size: 0.95rem;
+  }
+
+  .summary-raid-time,
+  .summary-counts,
+  .summary-empty {
+    margin: 0.3rem 0 0;
+    color: var(--muted);
+    font-size: 0.82rem;
+  }
+
+  .summary-members {
+    list-style: none;
+    margin: 0.55rem 0 0;
+    padding: 0;
+    display: grid;
+    gap: 0.3rem;
+  }
+
+  .summary-members li {
+    border: 1px solid rgba(214, 176, 106, 0.2);
+    border-radius: 0.32rem;
+    padding: 0.28rem 0.38rem;
+    display: flex;
+    justify-content: space-between;
+    gap: 0.3rem;
+    flex-wrap: wrap;
+  }
+
+  .member-main {
+    display: grid;
+    gap: 0.12rem;
+  }
+
+  .member-name {
+    color: var(--text);
+    font-weight: 700;
+    font-size: 0.8rem;
+  }
+
+  .member-meta,
+  .member-owner {
+    color: var(--muted);
+    font-size: 0.75rem;
+  }
+
+  .summary-override-form {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.22rem;
+    margin-left: auto;
+  }
+
+  .summary-override-form select {
+    background: rgba(7, 16, 26, 0.92);
+    color: var(--text);
+    border: 1px solid rgba(214, 176, 106, 0.35);
+    border-radius: 0.3rem;
+    padding: 0.2rem 0.38rem;
+    font-size: 0.72rem;
+    line-height: 1.2;
+    min-width: 7.5rem;
+  }
+
+  .summary-override-form .btn-compact {
+    padding: 0.2rem 0.45rem;
+    font-size: 0.7rem;
+    letter-spacing: 0.04em;
+  }
+
+  .summary-grid {
+    margin-top: 0.55rem;
+    display: grid;
+    gap: 0.45rem;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .summary-grid article {
+    border: 1px solid rgba(214, 176, 106, 0.24);
+    border-radius: 0.35rem;
+    padding: 0.45rem;
+    background: rgba(5, 12, 20, 0.78);
+  }
+
+  .summary-grid h4 {
+    margin: 0 0 0.3rem;
+    color: var(--gold);
+    font-size: 0.8rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+
+  .summary-grid p {
+    margin: 0.2rem 0;
+    color: var(--muted);
+    font-size: 0.78rem;
+  }
+
+  .pill-list,
+  .mini-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.3rem;
+  }
+
+  .mini-list {
+    display: grid;
+    gap: 0.2rem;
+  }
+
+  .mini-list li {
+    color: var(--muted);
+    font-size: 0.74rem;
+  }
+
+  .pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.2rem;
+    padding: 0.12rem 0.36rem;
+    border-radius: 999px;
+    border: 1px solid rgba(120, 170, 220, 0.35);
+    background: rgba(120, 170, 220, 0.12);
+    color: #b9d9f5;
+    font-size: 0.68rem;
+  }
+
+  .pill-missing {
+    border-color: rgba(220, 90, 90, 0.4);
+    background: rgba(220, 90, 90, 0.12);
+    color: #efb2b2;
+  }
+
+  .pill-count {
+    color: var(--text);
+    font-weight: 700;
+  }
+
+  .buff-tooltip {
+    position: relative;
+  }
+
+  .buff-tooltip::after {
+    content: attr(data-tooltip);
+    position: absolute;
+    left: 50%;
+    bottom: calc(100% + 0.35rem);
+    transform: translateX(-50%);
+    background: rgba(5, 10, 18, 0.96);
+    color: #dbe8f1;
+    border: 1px solid rgba(214, 176, 106, 0.32);
+    border-radius: 0.3rem;
+    padding: 0.26rem 0.38rem;
+    width: max-content;
+    max-width: 14rem;
+    font-size: 0.66rem;
+    line-height: 1.25;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 140ms ease;
+    z-index: 4;
+  }
+
+  .buff-tooltip:hover::after,
+  .buff-tooltip:focus-visible::after {
+    opacity: 1;
+  }
+
+  .signup-form select {
+    width: 100%;
+    font-size: 0.78rem;
+    background: rgba(5, 12, 19, 0.9);
+    color: var(--text);
+    border: 1px solid rgba(214, 176, 106, 0.4);
+    border-radius: 0.28rem;
+    padding: 0.28rem 0.4rem;
+  }
+
+  .btn {
+    font-size: 0.74rem;
+    border-radius: 0.28rem;
+    border: 1px solid transparent;
+    padding: 0.3rem 0.45rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    font-weight: 700;
+    cursor: pointer;
+  }
+
+  .btn-sign {
+    border-color: rgba(214, 176, 106, 0.6);
+    background: rgba(214, 176, 106, 0.15);
+    color: var(--gold-bright);
+  }
+
+  .btn-sign:hover {
+    background: rgba(214, 176, 106, 0.25);
+  }
+
+  .btn-cancel {
+    border-color: rgba(220, 85, 85, 0.6);
+    background: rgba(220, 85, 85, 0.14);
+    color: #f5a5a5;
+  }
+
+  .btn-tentative {
+    border-color: rgba(112, 171, 220, 0.6);
+    background: rgba(112, 171, 220, 0.14);
+    color: #a9d4f5;
+  }
+
+  .btn-status {
+    border-color: rgba(214, 176, 106, 0.4);
+    background: rgba(214, 176, 106, 0.07);
+    color: var(--muted);
+  }
+
+  .btn-status.active {
+    border-color: rgba(214, 176, 106, 0.7);
+    background: rgba(214, 176, 106, 0.2);
+    color: var(--gold-bright);
+  }
+
+  .btn-cancel:hover {
+    background: rgba(220, 85, 85, 0.25);
+  }
+
+  .sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+  }
+
+  @media (max-width: 1080px) {
+    .calendar-grid {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .weekday-head {
+      display: none;
+    }
+  }
+
+  @media (max-width: 620px) {
+    .calendar-grid {
+      grid-template-columns: minmax(0, 1fr);
+    }
+
+    .day-cell {
+      min-height: auto;
+    }
+
+    .summary-grid {
+      grid-template-columns: 1fr;
+    }
+  }
+</style>

@@ -1,0 +1,952 @@
+---
+export const prerender = false;
+
+import AdminLayout from '../../layouts/AdminLayout.astro';
+import { env } from 'cloudflare:workers';
+import {
+  formatEpochInTimeZone,
+  parseUtcTime,
+  repeatCycleLabel,
+  weekdayLabel,
+  type AdHocRaid,
+  type PrimarySchedule,
+} from '../../lib/raid-signups';
+
+if (!Astro.locals.isAdmin) {
+  return Astro.redirect('/');
+}
+
+interface PrimaryCountRow {
+  primary_schedule_id: number;
+  signup_count: number;
+}
+
+interface AdHocCountRow {
+  ad_hoc_raid_id: number;
+  signup_count: number;
+}
+
+const [settingsResult, primaryResult, adHocResult, primaryCountResult, adHocCountResult] = await env.DB.batch([
+  env.DB.prepare('SELECT time_zone FROM users WHERE id = ?').bind(Astro.locals.user!.id),
+  env.DB.prepare(
+    `SELECT id, name, weekday_utc, start_time_utc, duration_minutes, is_active
+     FROM primary_raid_schedules
+     ORDER BY is_active DESC, weekday_utc ASC, start_time_utc ASC, name ASC`
+  ),
+  env.DB.prepare(
+    `SELECT id, name, starts_at_utc, duration_minutes, notes, is_active
+     FROM ad_hoc_raids
+     ORDER BY is_active DESC, starts_at_utc ASC, name ASC`
+  ),
+  env.DB.prepare(
+    `SELECT primary_schedule_id, COUNT(*) AS signup_count
+     FROM raid_signups
+     WHERE primary_schedule_id IS NOT NULL
+     GROUP BY primary_schedule_id`
+  ),
+  env.DB.prepare(
+    `SELECT ad_hoc_raid_id, COUNT(*) AS signup_count
+     FROM raid_signups
+     WHERE ad_hoc_raid_id IS NOT NULL
+     GROUP BY ad_hoc_raid_id`
+  ),
+]);
+
+const adminTimeZone = (settingsResult.results?.[0] as { time_zone?: string } | undefined)?.time_zone ?? 'UTC';
+const primarySchedules = (primaryResult.results ?? []) as PrimarySchedule[];
+const adHocRaids = (adHocResult.results ?? []) as AdHocRaid[];
+const primaryCounts = (primaryCountResult.results ?? []) as PrimaryCountRow[];
+const adHocCounts = (adHocCountResult.results ?? []) as AdHocCountRow[];
+
+const primaryCountMap = new Map<number, number>(primaryCounts.map((r) => [r.primary_schedule_id, r.signup_count]));
+const adHocCountMap = new Map<number, number>(adHocCounts.map((r) => [r.ad_hoc_raid_id, r.signup_count]));
+
+const statusParam = new URL(Astro.request.url).searchParams.get('status');
+const statusMessages: Record<string, { type: 'ok' | 'error'; text: string }> = {
+  'primary-created': { type: 'ok', text: 'Primary schedule created.' },
+  'primary-updated': { type: 'ok', text: 'Primary schedule updated.' },
+  'primary-deleted': { type: 'ok', text: 'Primary schedule deleted.' },
+  'adhoc-created': { type: 'ok', text: 'Ad-hoc raid created.' },
+  'adhoc-deleted': { type: 'ok', text: 'Ad-hoc raid deleted.' },
+  error: { type: 'error', text: 'Something went wrong. Please try again.' },
+};
+
+const flash = statusParam ? (statusMessages[statusParam] ?? null) : null;
+
+function endTimeFromDuration(startTimeUtc: string, durationMinutes: number): string {
+  const parsed = parseUtcTime(startTimeUtc);
+  if (!parsed) return startTimeUtc;
+  const start = parsed.hour * 60 + parsed.minute;
+  const end = (start + durationMinutes) % (24 * 60);
+  const hh = String(Math.floor(end / 60)).padStart(2, '0');
+  const mm = String(end % 60).padStart(2, '0');
+  return `${hh}:${mm}`;
+}
+
+const WEEKDAY_OPTIONS = [
+  { value: 0, label: 'Sunday' },
+  { value: 1, label: 'Monday' },
+  { value: 2, label: 'Tuesday' },
+  { value: 3, label: 'Wednesday' },
+  { value: 4, label: 'Thursday' },
+  { value: 5, label: 'Friday' },
+  { value: 6, label: 'Saturday' },
+];
+
+
+function timeRangeInZoneLabel(weekdayUtc: number, startTimeUtc: string, durationMinutes: number, timeZone: string): string {
+  const parsedStart = parseUtcTime(startTimeUtc);
+  if (!parsedStart) return `Local: unavailable (${timeZone})`;
+
+  const referenceSundayUtcMs = Date.UTC(2024, 0, 7, 0, 0, 0, 0);
+  const startUtcMs =
+    referenceSundayUtcMs +
+    weekdayUtc * 24 * 60 * 60 * 1000 +
+    (parsedStart.hour * 60 + parsedStart.minute) * 60 * 1000;
+  const endUtcMs = startUtcMs + durationMinutes * 60 * 1000;
+
+  const formatter = new Intl.DateTimeFormat('en-US', {
+    timeZone,
+    weekday: 'short',
+    hour: 'numeric',
+    minute: '2-digit',
+  });
+
+  return `${formatter.format(new Date(startUtcMs))} - ${formatter.format(new Date(endUtcMs))} (${timeZone})`;
+}
+
+const WEEKDAY_SHORT_TO_INDEX: Record<string, number> = {
+  Sun: 0,
+  Mon: 1,
+  Tue: 2,
+  Wed: 3,
+  Thu: 4,
+  Fri: 5,
+  Sat: 6,
+};
+
+function localSlotFromUtcSchedule(
+  weekdayUtc: number,
+  startTimeUtc: string,
+  durationMinutes: number,
+  timeZone: string
+): { weekdayLocal: number; startLocal: string; endLocal: string } {
+  const parsedStart = parseUtcTime(startTimeUtc);
+  if (!parsedStart) {
+    return { weekdayLocal: weekdayUtc, startLocal: startTimeUtc, endLocal: startTimeUtc };
+  }
+
+  const referenceSundayUtcMs = Date.UTC(2024, 0, 7, 0, 0, 0, 0);
+  const startUtcMs =
+    referenceSundayUtcMs +
+    weekdayUtc * 24 * 60 * 60 * 1000 +
+    (parsedStart.hour * 60 + parsedStart.minute) * 60 * 1000;
+  const endUtcMs = startUtcMs + durationMinutes * 60 * 1000;
+
+  const partsFormatter = new Intl.DateTimeFormat('en-US', {
+    timeZone,
+    weekday: 'short',
+    hour: '2-digit',
+    minute: '2-digit',
+    hourCycle: 'h23',
+  });
+
+  const parseParts = (date: Date): { weekday: number; hhmm: string } => {
+    const parts = partsFormatter.formatToParts(date);
+    const weekdayRaw = parts.find((p) => p.type === 'weekday')?.value ?? 'Sun';
+    const hourRaw = parts.find((p) => p.type === 'hour')?.value ?? '00';
+    const minuteRaw = parts.find((p) => p.type === 'minute')?.value ?? '00';
+    const weekday = WEEKDAY_SHORT_TO_INDEX[weekdayRaw] ?? 0;
+    return { weekday, hhmm: `${hourRaw.padStart(2, '0')}:${minuteRaw.padStart(2, '0')}` };
+  };
+
+  const startLocal = parseParts(new Date(startUtcMs));
+  const endLocal = parseParts(new Date(endUtcMs));
+  return {
+    weekdayLocal: startLocal.weekday,
+    startLocal: startLocal.hhmm,
+    endLocal: endLocal.hhmm,
+  };
+}
+---
+
+<AdminLayout title="Raid Signups | Admin | The Hidden Lodge">
+  <div class="raid-signups-page">
+    <header class="page-header">
+      <div>
+        <h1>Raid Signups</h1>
+        <p class="page-desc">
+          Build your recurring primary raid schedule and create one-off ad-hoc raids. Members can sign up from the
+          calendar page.
+        </p>
+      </div>
+      <div class="stats">
+        <span class="stat"><strong>{primarySchedules.length}</strong> primary schedules</span>
+        <span class="stat"><strong>{adHocRaids.length}</strong> ad-hoc raids</span>
+      </div>
+    </header>
+
+    {flash && (
+      <div class:list={['flash', flash.type === 'ok' ? 'flash-ok' : 'flash-error']} role="alert">{flash.text}</div>
+    )}
+
+    <section class="create-grid">
+      <article class="panel">
+        <h2>Create Primary Schedule</h2>
+        <p class="panel-desc">Create one raid schedule name with multiple weekdays/times and a recurrence cycle.</p>
+        <form method="POST" action="/api/admin/raid-signups/create-primary" class="form-grid" id="primary-form" data-user-timezone={adminTimeZone}>
+          <label>
+            <span>Name</span>
+            <input type="text" name="name" maxlength="80" required placeholder="Mythic Progression" />
+          </label>
+          <label>
+            <span>Repeat Cycle</span>
+            <select name="repeat_cycle" required>
+              <option value="weekly" selected>Weekly</option>
+              <option value="biweekly">Every 2 Weeks</option>
+            </select>
+          </label>
+
+          <fieldset class="times-fieldset">
+            <legend>Raid Days / Times (UTC)</legend>
+            <div id="primary-time-rows" class="time-rows">
+              <div class="time-row">
+                <label>
+                  <span>Day</span>
+                  <select name="weekday_utc[]" required>
+                    <option value="0">Sunday</option>
+                    <option value="1">Monday</option>
+                    <option value="2">Tuesday</option>
+                    <option value="3">Wednesday</option>
+                    <option value="4" selected>Thursday</option>
+                    <option value="5">Friday</option>
+                    <option value="6">Saturday</option>
+                  </select>
+                </label>
+                <label>
+                  <span>Start</span>
+                  <input type="time" name="start_time_utc[]" required value="21:00" />
+                </label>
+                <label>
+                  <span>End</span>
+                  <input type="time" name="end_time_utc[]" required value="00:00" />
+                </label>
+                <button type="button" class="btn btn-subtle row-remove" aria-label="Remove day/time row">Remove</button>
+                <p class="tz-preview" data-tz-preview>
+                  {timeRangeInZoneLabel(4, '21:00', 180, adminTimeZone)}
+                </p>
+              </div>
+            </div>
+            <button type="button" class="btn btn-subtle" id="primary-add-row">+ Add Day / Time</button>
+          </fieldset>
+
+          <button type="submit" class="btn btn-primary">Create Primary</button>
+        </form>
+      </article>
+
+      <article class="panel">
+        <h2>Create Ad-Hoc Raid</h2>
+        <p class="panel-desc">Ad-hoc raids are one-off events. Time is converted from your browser local time to UTC.</p>
+        <form method="POST" action="/api/admin/raid-signups/create-adhoc" class="form-grid" id="adhoc-form">
+          <label>
+            <span>Name</span>
+            <input type="text" name="name" maxlength="80" required placeholder="Sunday Heroic Alt Run" />
+          </label>
+          <label>
+            <span>Local Date</span>
+            <input type="date" name="starts_at_date" required />
+          </label>
+          <label>
+            <span>Local Time</span>
+            <input type="time" name="starts_at_time" required />
+          </label>
+          <label>
+            <span>Notes (optional)</span>
+            <textarea name="notes" maxlength="240" placeholder="Attendance is optional. Bring geared alts."></textarea>
+          </label>
+          <input type="hidden" name="starts_at_utc" value="" />
+          <button type="submit" class="btn btn-primary">Create Ad-Hoc</button>
+        </form>
+      </article>
+    </section>
+
+    <section class="panel">
+      <h2>Primary Schedules</h2>
+      {primarySchedules.length === 0 ? (
+        <p class="empty-state">No primary schedules configured yet.</p>
+      ) : (
+        <ul class="row-list">
+          {primarySchedules.map((schedule) => (
+            <li class="row-item">
+              <div>
+                <p class="item-title">{schedule.name}</p>
+                <p class="item-meta">
+                  {weekdayLabel(schedule.weekday_utc)} {schedule.start_time_utc} - {endTimeFromDuration(schedule.start_time_utc, schedule.duration_minutes)} UTC
+                  <span aria-hidden="true"> • </span>
+                  {timeRangeInZoneLabel(schedule.weekday_utc, schedule.start_time_utc, schedule.duration_minutes, adminTimeZone)}
+                  <span aria-hidden="true"> • </span>
+                  {repeatCycleLabel(schedule.repeat_cycle)}
+                  <span aria-hidden="true"> • </span>
+                  {primaryCountMap.get(schedule.id) ?? 0} signup{(primaryCountMap.get(schedule.id) ?? 0) === 1 ? '' : 's'}
+                </p>
+              </div>
+              <div class="row-actions">
+                <details class="inline-edit">
+                  <summary class="btn btn-subtle">Edit</summary>
+                  <form method="POST" action="/api/admin/raid-signups/update-primary" class="edit-form">
+                    <input type="hidden" name="id" value={schedule.id} />
+                    {
+                      (() => {
+                        const localSlot = localSlotFromUtcSchedule(
+                          schedule.weekday_utc,
+                          schedule.start_time_utc,
+                          schedule.duration_minutes,
+                          adminTimeZone
+                        );
+                        return (
+                          <>
+                            <input type="hidden" name="weekday_utc" value={schedule.weekday_utc} />
+                            <input type="hidden" name="start_time_utc" value={schedule.start_time_utc} />
+                            <input type="hidden" name="end_time_utc" value={endTimeFromDuration(schedule.start_time_utc, schedule.duration_minutes)} />
+
+                            <label>
+                              <span>Day ({adminTimeZone})</span>
+                              <select name="local_weekday" required>
+                                {WEEKDAY_OPTIONS.map((day) => (
+                                  <option value={day.value} selected={day.value === localSlot.weekdayLocal}>{day.label}</option>
+                                ))}
+                              </select>
+                            </label>
+                            <label>
+                              <span>Start ({adminTimeZone})</span>
+                              <input type="time" name="local_start_time" required value={localSlot.startLocal} />
+                            </label>
+                            <label>
+                              <span>End ({adminTimeZone})</span>
+                              <input type="time" name="local_end_time" required value={localSlot.endLocal} />
+                            </label>
+                          </>
+                        );
+                      })()
+                    }
+                    <label>
+                      <span>Name</span>
+                      <input type="text" name="name" maxlength="80" required value={schedule.name} />
+                    </label>
+                    <label>
+                      <span>Repeat Cycle</span>
+                      <select name="repeat_cycle" required>
+                        <option value="weekly" selected={schedule.repeat_cycle === 'weekly'}>Weekly</option>
+                        <option value="biweekly" selected={schedule.repeat_cycle === 'biweekly'}>Every 2 Weeks</option>
+                      </select>
+                    </label>
+                    <p class="tz-preview" data-edit-tz-preview data-user-timezone={adminTimeZone}>
+                      {timeRangeInZoneLabel(
+                        schedule.weekday_utc,
+                        schedule.start_time_utc,
+                        schedule.duration_minutes,
+                        adminTimeZone
+                      )}
+                    </p>
+                    <button type="submit" class="btn btn-primary">Save</button>
+                  </form>
+                </details>
+                <form method="POST" action="/api/admin/raid-signups/delete-primary" onsubmit={`return confirm('Delete ${schedule.name}?')`}>
+                  <input type="hidden" name="id" value={schedule.id} />
+                  <button type="submit" class="btn btn-danger">Delete</button>
+                </form>
+              </div>
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
+
+    <section class="panel">
+      <h2>Ad-Hoc Raids</h2>
+      {adHocRaids.length === 0 ? (
+        <p class="empty-state">No ad-hoc raids configured yet.</p>
+      ) : (
+        <ul class="row-list">
+          {adHocRaids.map((raid) => (
+            <li class="row-item">
+              <div>
+                <p class="item-title">{raid.name}</p>
+                <p class="item-meta">
+                  {formatEpochInTimeZone(raid.starts_at_utc, 'UTC')} UTC
+                  <span aria-hidden="true"> • </span>
+                  {adHocCountMap.get(raid.id) ?? 0} signup{(adHocCountMap.get(raid.id) ?? 0) === 1 ? '' : 's'}
+                </p>
+                {raid.notes && <p class="item-notes">{raid.notes}</p>}
+              </div>
+              <form method="POST" action="/api/admin/raid-signups/delete-adhoc" onsubmit={`return confirm('Delete ${raid.name}?')`}>
+                <input type="hidden" name="id" value={raid.id} />
+                <button type="submit" class="btn btn-danger">Delete</button>
+              </form>
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
+
+  </div>
+</AdminLayout>
+
+<script>
+  const primaryForm = document.querySelector('#primary-form');
+  if (primaryForm instanceof HTMLFormElement) {
+    const rowsHost = primaryForm.querySelector('#primary-time-rows');
+    const addRowButton = primaryForm.querySelector('#primary-add-row');
+    const firstRowTemplate = rowsHost?.querySelector('.time-row');
+    const userTimeZone = primaryForm.dataset.userTimezone || 'UTC';
+
+    const formatRangeForTimeZone = (weekday: string, start: string, end: string, timeZone: string): string => {
+      const weekdayNumber = Number.parseInt(weekday, 10);
+      if (!Number.isInteger(weekdayNumber) || weekdayNumber < 0 || weekdayNumber > 6) {
+        return `Local: unavailable (${timeZone})`;
+      }
+
+      const parseTime = (value: string): { hour: number; minute: number } | null => {
+        const match = /^(\d{2}):(\d{2})$/.exec(value);
+        if (!match) return null;
+        const hour = Number.parseInt(match[1], 10);
+        const minute = Number.parseInt(match[2], 10);
+        if (Number.isNaN(hour) || Number.isNaN(minute) || hour < 0 || hour > 23 || minute < 0 || minute > 59) {
+          return null;
+        }
+        return { hour, minute };
+      };
+
+      const startParsed = parseTime(start);
+      const endParsed = parseTime(end);
+      if (!startParsed || !endParsed) return `Local: unavailable (${timeZone})`;
+
+      const baseSundayUtcMs = Date.UTC(2024, 0, 7, 0, 0, 0, 0);
+      const startUtcMs =
+        baseSundayUtcMs +
+        weekdayNumber * 24 * 60 * 60 * 1000 +
+        (startParsed.hour * 60 + startParsed.minute) * 60 * 1000;
+
+      let endTotalMinutes = endParsed.hour * 60 + endParsed.minute;
+      const startTotalMinutes = startParsed.hour * 60 + startParsed.minute;
+      if (endTotalMinutes <= startTotalMinutes) {
+        endTotalMinutes += 24 * 60;
+      }
+      const endUtcMs =
+        baseSundayUtcMs +
+        weekdayNumber * 24 * 60 * 60 * 1000 +
+        endTotalMinutes * 60 * 1000;
+
+      const formatter = new Intl.DateTimeFormat('en-US', {
+        timeZone,
+        weekday: 'short',
+        hour: 'numeric',
+        minute: '2-digit',
+      });
+
+      return `${formatter.format(new Date(startUtcMs))} - ${formatter.format(new Date(endUtcMs))} (${timeZone})`;
+    };
+
+    const updateCreateRowPreview = (row: Element) => {
+      if (!(row instanceof HTMLElement)) return;
+      const weekday = row.querySelector('select[name="weekday_utc[]"]');
+      const start = row.querySelector('input[name="start_time_utc[]"]');
+      const end = row.querySelector('input[name="end_time_utc[]"]');
+      const preview = row.querySelector('[data-tz-preview]');
+
+      if (!(weekday instanceof HTMLSelectElement)) return;
+      if (!(start instanceof HTMLInputElement)) return;
+      if (!(end instanceof HTMLInputElement)) return;
+      if (!(preview instanceof HTMLElement)) return;
+
+      preview.textContent = formatRangeForTimeZone(weekday.value, start.value, end.value, userTimeZone);
+    };
+
+    const wireRow = (row: Element) => {
+      if (!(row instanceof HTMLElement)) return;
+      const removeButton = row.querySelector('.row-remove');
+      const weekday = row.querySelector('select[name="weekday_utc[]"]');
+      const start = row.querySelector('input[name="start_time_utc[]"]');
+      const end = row.querySelector('input[name="end_time_utc[]"]');
+
+      const onChange = () => updateCreateRowPreview(row);
+      if (weekday instanceof HTMLSelectElement) weekday.addEventListener('change', onChange);
+      if (start instanceof HTMLInputElement) start.addEventListener('input', onChange);
+      if (end instanceof HTMLInputElement) end.addEventListener('input', onChange);
+
+      updateCreateRowPreview(row);
+
+      if (!(removeButton instanceof HTMLButtonElement)) return;
+      removeButton.addEventListener('click', () => {
+        const allRows = rowsHost?.querySelectorAll('.time-row') ?? [];
+        if (allRows.length <= 1) return;
+        row.remove();
+      });
+    };
+
+    rowsHost?.querySelectorAll('.time-row').forEach((row) => wireRow(row));
+
+    addRowButton?.addEventListener('click', () => {
+      if (!(rowsHost instanceof HTMLElement) || !(firstRowTemplate instanceof HTMLElement)) return;
+
+      const row = firstRowTemplate.cloneNode(true);
+      if (!(row instanceof HTMLElement)) return;
+
+      const daySelect = row.querySelector('select[name="weekday_utc[]"]');
+      const startInput = row.querySelector('input[name="start_time_utc[]"]');
+      const endInput = row.querySelector('input[name="end_time_utc[]"]');
+
+      if (daySelect instanceof HTMLSelectElement) daySelect.value = '5';
+      if (startInput instanceof HTMLInputElement) startInput.value = '21:00';
+      if (endInput instanceof HTMLInputElement) endInput.value = '00:00';
+
+      rowsHost.appendChild(row);
+      wireRow(row);
+    });
+  }
+
+  const editForms = document.querySelectorAll('.edit-form');
+
+  const dayNameByIndex = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+
+  const parseTime = (value: string): { hour: number; minute: number } | null => {
+    const match = /^(\d{2}):(\d{2})$/.exec(value);
+    if (!match) return null;
+    const hour = Number.parseInt(match[1], 10);
+    const minute = Number.parseInt(match[2], 10);
+    if (Number.isNaN(hour) || Number.isNaN(minute) || hour < 0 || hour > 23 || minute < 0 || minute > 59) {
+      return null;
+    }
+    return { hour, minute };
+  };
+
+  const formatHhMm = (minutesTotal: number): string => {
+    const m = ((minutesTotal % (24 * 60)) + 24 * 60) % (24 * 60);
+    const hh = String(Math.floor(m / 60)).padStart(2, '0');
+    const mm = String(m % 60).padStart(2, '0');
+    return `${hh}:${mm}`;
+  };
+
+  const partsFormatterForTz = (timeZone: string) =>
+    new Intl.DateTimeFormat('en-US', {
+      timeZone,
+      weekday: 'short',
+      hour: '2-digit',
+      minute: '2-digit',
+      hourCycle: 'h23',
+    });
+
+  const findUtcWeekMinuteForLocal = (
+    localWeekday: number,
+    localTime: string,
+    timeZone: string
+  ): number | null => {
+    const parsed = parseTime(localTime);
+    if (!parsed) return null;
+
+    const targetDay = dayNameByIndex[localWeekday] ?? 'Sun';
+    const targetTime = `${String(parsed.hour).padStart(2, '0')}:${String(parsed.minute).padStart(2, '0')}`;
+    const formatter = partsFormatterForTz(timeZone);
+    const baseSundayUtcMs = Date.UTC(2024, 0, 7, 0, 0, 0, 0);
+
+    for (let minute = 0; minute < 7 * 24 * 60; minute += 1) {
+      const date = new Date(baseSundayUtcMs + minute * 60 * 1000);
+      const parts = formatter.formatToParts(date);
+      const day = parts.find((p) => p.type === 'weekday')?.value;
+      const hh = parts.find((p) => p.type === 'hour')?.value;
+      const mm = parts.find((p) => p.type === 'minute')?.value;
+      if (!day || !hh || !mm) continue;
+
+      if (day === targetDay && `${hh.padStart(2, '0')}:${mm.padStart(2, '0')}` === targetTime) {
+        return minute;
+      }
+    }
+
+    return null;
+  };
+
+  editForms.forEach((form) => {
+    if (!(form instanceof HTMLFormElement)) return;
+    const preview = form.querySelector('[data-edit-tz-preview]');
+    const userTimeZone =
+      preview instanceof HTMLElement ? preview.dataset.userTimezone || 'UTC' : 'UTC';
+
+    const localWeekday = form.querySelector('select[name="local_weekday"]');
+    const localStart = form.querySelector('input[name="local_start_time"]');
+    const localEnd = form.querySelector('input[name="local_end_time"]');
+
+    const weekdayUtcHidden = form.querySelector('input[name="weekday_utc"]');
+    const startUtcHidden = form.querySelector('input[name="start_time_utc"]');
+    const endUtcHidden = form.querySelector('input[name="end_time_utc"]');
+
+    if (!(localWeekday instanceof HTMLSelectElement)) return;
+    if (!(localStart instanceof HTMLInputElement)) return;
+    if (!(localEnd instanceof HTMLInputElement)) return;
+    if (!(weekdayUtcHidden instanceof HTMLInputElement)) return;
+    if (!(startUtcHidden instanceof HTMLInputElement)) return;
+    if (!(endUtcHidden instanceof HTMLInputElement)) return;
+    if (!(preview instanceof HTMLElement)) return;
+
+    const update = () => {
+      const parsedStart = parseTime(localStart.value);
+      const parsedEnd = parseTime(localEnd.value);
+      const localDay = Number.parseInt(localWeekday.value, 10);
+      if (!parsedStart || !parsedEnd || !Number.isInteger(localDay) || localDay < 0 || localDay > 6) {
+        preview.textContent = `Local: unavailable (${userTimeZone})`;
+        return;
+      }
+
+      const startWeekMinute = findUtcWeekMinuteForLocal(localDay, localStart.value, userTimeZone);
+      if (startWeekMinute === null) {
+        preview.textContent = `Local: unavailable (${userTimeZone})`;
+        return;
+      }
+
+      const localStartMinutes = parsedStart.hour * 60 + parsedStart.minute;
+      let localEndMinutes = parsedEnd.hour * 60 + parsedEnd.minute;
+      if (localEndMinutes <= localStartMinutes) {
+        localEndMinutes += 24 * 60;
+      }
+      const durationMinutes = localEndMinutes - localStartMinutes;
+
+      const weekdayUtc = Math.floor(startWeekMinute / (24 * 60)) % 7;
+      const utcStartDayMinute = startWeekMinute % (24 * 60);
+      const utcEndDayMinute = (startWeekMinute + durationMinutes) % (24 * 60);
+
+      weekdayUtcHidden.value = String(weekdayUtc);
+      startUtcHidden.value = formatHhMm(utcStartDayMinute);
+      endUtcHidden.value = formatHhMm(utcEndDayMinute);
+
+      const startLabel = dayNameByIndex[localDay] ?? 'Sun';
+      const endLocalDay = Math.floor(localEndMinutes / (24 * 60)) > 0 ? (localDay + 1) % 7 : localDay;
+      const endLabel = dayNameByIndex[endLocalDay] ?? 'Sun';
+      preview.textContent = `${startLabel} ${localStart.value} - ${endLabel} ${localEnd.value} (${userTimeZone}) • Stores as ${dayNameByIndex[weekdayUtc]} ${startUtcHidden.value} - ${dayNameByIndex[(Math.floor((startWeekMinute + durationMinutes) / (24 * 60)) % 7 + 7) % 7]} ${endUtcHidden.value} UTC`;
+    };
+
+    localWeekday.addEventListener('change', update);
+    localStart.addEventListener('input', update);
+    localEnd.addEventListener('input', update);
+    update();
+  });
+
+  const adhocForm = document.querySelector('#adhoc-form');
+  if (adhocForm instanceof HTMLFormElement) {
+    adhocForm.addEventListener('submit', (event) => {
+      const dateInput = adhocForm.querySelector('input[name="starts_at_date"]');
+      const timeInput = adhocForm.querySelector('input[name="starts_at_time"]');
+      const utcHidden = adhocForm.querySelector('input[name="starts_at_utc"]');
+      if (!(dateInput instanceof HTMLInputElement) || !(timeInput instanceof HTMLInputElement) || !(utcHidden instanceof HTMLInputElement)) {
+        return;
+      }
+
+      const dateValue = dateInput.value;
+      const timeValue = timeInput.value;
+      if (!dateValue || !timeValue) {
+        event.preventDefault();
+        return;
+      }
+
+      const combined = `${dateValue}T${timeValue}`;
+      const parsed = new Date(combined);
+      if (Number.isNaN(parsed.getTime())) {
+        event.preventDefault();
+        return;
+      }
+
+      // Convert local time to UTC: the date/time inputs give us local time,
+      // but new Date() interprets it as UTC, so we need to adjust by the timezone offset
+      const utcTimestamp = parsed.getTime() - parsed.getTimezoneOffset() * 60 * 1000;
+      utcHidden.value = String(Math.floor(utcTimestamp / 1000));
+    });
+  }
+</script>
+
+<style>
+  .raid-signups-page {
+    display: flex;
+    flex-direction: column;
+    gap: 1.2rem;
+  }
+
+  .page-header {
+    display: flex;
+    justify-content: space-between;
+    gap: 1rem;
+    flex-wrap: wrap;
+    align-items: flex-start;
+  }
+
+  .page-header h1 {
+    margin: 0 0 0.35rem;
+    color: var(--gold-bright);
+  }
+
+  .page-desc {
+    margin: 0;
+    color: var(--muted);
+    max-width: 64ch;
+  }
+
+  .stats {
+    display: flex;
+    gap: 0.8rem;
+    flex-wrap: wrap;
+  }
+
+  .stat {
+    color: var(--muted);
+    font-size: 0.9rem;
+  }
+
+  .stat strong {
+    color: var(--gold);
+  }
+
+  .flash {
+    margin: 0;
+    padding: 0.55rem 0.75rem;
+    border-radius: 0.4rem;
+    font-weight: 600;
+  }
+
+  .flash-ok {
+    background: rgba(0, 180, 80, 0.12);
+    border: 1px solid rgba(0, 180, 80, 0.4);
+    color: #6fdb91;
+  }
+
+  .flash-error {
+    background: rgba(180, 30, 30, 0.12);
+    border: 1px solid rgba(180, 30, 30, 0.4);
+    color: #f47e7e;
+  }
+
+  .create-grid {
+    display: grid;
+    gap: 1rem;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    align-items: stretch;
+  }
+
+  .panel {
+    border: 1px solid var(--border);
+    border-radius: 0.5rem;
+    background: var(--bg-panel);
+    padding: 0.9rem;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .panel h2 {
+    margin: 0 0 0.4rem;
+    color: var(--gold);
+  }
+
+  .panel-desc {
+    margin: 0 0 0.8rem;
+    color: var(--muted);
+    font-size: 0.9rem;
+  }
+
+  .form-grid {
+    display: flex;
+    flex-direction: column;
+    gap: 0.6rem;
+    flex: 1;
+  }
+
+  .form-grid .btn {
+    margin-top: auto;
+  }
+
+  .form-grid label {
+    display: grid;
+    gap: 0.2rem;
+    color: var(--muted);
+    font-size: 0.9rem;
+  }
+
+  .form-grid input,
+  .form-grid select,
+  .form-grid textarea {
+    font: inherit;
+    background: rgba(7, 16, 26, 0.92);
+    color: var(--text);
+    border: 1px solid rgba(214, 176, 106, 0.35);
+    border-radius: 0.35rem;
+    padding: 0.45rem 0.55rem;
+  }
+
+  .form-grid textarea {
+    min-height: 4.5rem;
+    resize: vertical;
+  }
+
+  .times-fieldset {
+    border: 1px solid rgba(214, 176, 106, 0.32);
+    border-radius: 0.4rem;
+    padding: 0.6rem;
+    margin: 0;
+  }
+
+  .times-fieldset legend {
+    color: var(--gold);
+    font-size: 0.8rem;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    padding-inline: 0.3rem;
+  }
+
+  .time-rows {
+    display: flex;
+    flex-direction: column;
+    gap: 0.55rem;
+    margin-bottom: 0.55rem;
+  }
+
+  .time-row {
+    display: grid;
+    grid-template-columns: 1.2fr 1fr 1fr auto;
+    gap: 0.4rem;
+    align-items: end;
+  }
+
+  .tz-preview {
+    grid-column: 1 / -1;
+    margin: 0.1rem 0 0;
+    color: #8db3d6;
+    font-size: 0.74rem;
+    line-height: 1.3;
+  }
+
+  .row-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.55rem;
+  }
+
+  .row-item {
+    border: 1px solid rgba(214, 176, 106, 0.3);
+    border-radius: 0.4rem;
+    background: rgba(8, 15, 24, 0.85);
+    padding: 0.6rem;
+    display: flex;
+    justify-content: space-between;
+    gap: 0.8rem;
+    align-items: flex-start;
+  }
+
+  .row-actions {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.4rem;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+  }
+
+  .inline-edit {
+    position: relative;
+  }
+
+  .inline-edit > summary {
+    list-style: none;
+  }
+
+  .inline-edit > summary::-webkit-details-marker {
+    display: none;
+  }
+
+  .edit-form {
+    margin-top: 0.45rem;
+    padding: 0.55rem;
+    border-radius: 0.35rem;
+    border: 1px solid rgba(214, 176, 106, 0.32);
+    background: rgba(7, 16, 26, 0.93);
+    min-width: 18rem;
+    display: grid;
+    gap: 0.4rem;
+  }
+
+  .edit-form label {
+    display: grid;
+    gap: 0.16rem;
+    color: var(--muted);
+    font-size: 0.8rem;
+  }
+
+  .edit-form input,
+  .edit-form select {
+    font: inherit;
+    background: rgba(4, 12, 20, 0.95);
+    color: var(--text);
+    border: 1px solid rgba(214, 176, 106, 0.35);
+    border-radius: 0.28rem;
+    padding: 0.35rem 0.5rem;
+  }
+
+  .item-title {
+    margin: 0;
+    color: var(--gold-bright);
+    font-weight: 700;
+  }
+
+  .item-meta {
+    margin: 0.2rem 0 0;
+    color: var(--muted);
+    font-size: 0.88rem;
+  }
+
+  .item-notes {
+    margin: 0.25rem 0 0;
+    color: #adc2d2;
+    font-size: 0.84rem;
+  }
+
+  .empty-state {
+    margin: 0;
+    color: var(--muted);
+    font-style: italic;
+  }
+
+  .btn {
+    font: inherit;
+    font-size: 0.82rem;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    border-radius: 0.3rem;
+    border: 1px solid transparent;
+    padding: 0.35rem 0.65rem;
+    cursor: pointer;
+  }
+
+  .btn-primary {
+    border-color: rgba(214, 176, 106, 0.6);
+    background: rgba(214, 176, 106, 0.14);
+    color: var(--gold-bright);
+  }
+
+  .btn-danger {
+    border-color: rgba(216, 78, 78, 0.65);
+    background: rgba(216, 78, 78, 0.12);
+    color: #f3a2a2;
+  }
+
+  .btn-subtle {
+    border-color: rgba(214, 176, 106, 0.3);
+    background: rgba(214, 176, 106, 0.06);
+    color: var(--muted);
+  }
+
+  @media (max-width: 980px) {
+    .create-grid {
+      grid-template-columns: 1fr;
+    }
+
+    .time-row {
+      grid-template-columns: 1fr;
+    }
+  }
+</style>

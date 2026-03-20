@@ -15,13 +15,18 @@ const {
 
 const user = Astro.locals.user;
 const isAdmin = Astro.locals.isAdmin;
-const navItems = [
+const isGuildMember = Astro.locals.isGuildMember;
+const publicNavItems = [
 	{ href: '/', label: 'Home' },
 	{ href: '/raiding', label: 'Raiding' },
 	{ href: '/lore', label: 'Lore' },
 	{ href: '/leadership', label: 'Leadership' },
 	{ href: '/roster', label: 'Roster' },
 	{ href: '/links', label: 'Links' },
+];
+
+const memberNavItems = [
+	...(isGuildMember ? [{ href: '/signup', label: 'Signup' }] : []),
 	...(isAdmin ? [{ href: '/admin', label: 'Admin' }] : []),
 ];
 
@@ -57,15 +62,28 @@ const siteVersion = packageJson.version;
 			<div class="container shell">
 				<a class="brand" href="/">The Hidden Lodge</a>
 				<nav aria-label="Main navigation" class="nav-shell">
-					<ul>
-						{
-							navItems.map((item) => (
-								<li>
-									<a href={item.href}>{item.label}</a>
-								</li>
-							))
-						}
-					</ul>
+					<div class="main-nav-groups">
+						<ul class="public-nav" aria-label="Public navigation">
+							{
+								publicNavItems.map((item) => (
+									<li>
+										<a href={item.href}>{item.label}</a>
+									</li>
+								))
+							}
+						</ul>
+						{memberNavItems.length > 0 && (
+							<ul class="member-nav" aria-label="Member navigation">
+								{
+									memberNavItems.map((item) => (
+										<li>
+											<a href={item.href}>{item.label}</a>
+										</li>
+									))
+								}
+							</ul>
+						)}
+					</div>
 					<ul class="guild-links" aria-label="Guild external links">
 						{
 							externalLinks.map((link) => (
@@ -226,6 +244,27 @@ const siteVersion = packageJson.version;
 		min-width: 0;
 	}
 
+	.main-nav-groups {
+		display: flex;
+		align-items: center;
+		gap: 0.5rem;
+		min-width: 0;
+	}
+
+	.member-nav {
+		padding-left: 0.55rem;
+		border-left: 1px solid rgba(214, 176, 106, 0.34);
+		background: rgba(214, 176, 106, 0.06);
+		border-radius: 0.45rem;
+		padding-block: 0.1rem;
+		padding-right: 0.1rem;
+	}
+
+	.member-nav a {
+		color: var(--gold-bright);
+		font-weight: 700;
+	}
+
 	.guild-links {
 		display: flex;
 		align-items: center;
@@ -378,6 +417,17 @@ const siteVersion = packageJson.version;
 
 		nav ul {
 			flex-wrap: wrap;
+		}
+
+		.main-nav-groups {
+			flex-direction: column;
+			align-items: flex-start;
+		}
+
+		.member-nav {
+			padding-left: 0;
+			border-left: 0;
+			padding-right: 0;
 		}
 
 		.guild-links {

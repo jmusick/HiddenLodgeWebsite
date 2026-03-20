@@ -3,6 +3,7 @@ export const prerender = false;
 
 import Layout from '../layouts/Layout.astro';
 import { classColor, factionColor } from '../lib/wow';
+import { getSupportedTimeZones } from '../lib/time-zones';
 import { env } from 'cloudflare:workers';
 
 const user = Astro.locals.user;
@@ -21,14 +22,19 @@ interface CharacterRow {
 	is_main: number;
 }
 
-const result = await env.DB.prepare(
-	'SELECT id, name, realm, class_name, race_name, faction, level, is_main FROM characters WHERE user_id = ? ORDER BY level DESC, name ASC'
-)
-	.bind(user.id)
-	.all<CharacterRow>();
+const [settingsResult, charsResult] = await env.DB.batch([
+	env.DB.prepare('SELECT time_zone FROM users WHERE id = ?').bind(user.id),
+	env.DB.prepare(
+		'SELECT id, name, realm, class_name, race_name, faction, level, is_main FROM characters WHERE user_id = ? ORDER BY level DESC, name ASC'
+	).bind(user.id),
+]);
 
-const characters: CharacterRow[] = (result.results ?? []) as CharacterRow[];
+const userTimeZone = (settingsResult.results?.[0] as { time_zone?: string } | undefined)?.time_zone ?? 'UTC';
+const characters: CharacterRow[] = (charsResult.results ?? []) as CharacterRow[];
 const mainChar = characters.find((c) => c.is_main === 1) ?? null;
+const statusParam = new URL(Astro.request.url).searchParams.get('status');
+
+const timezoneOptions = getSupportedTimeZones();
 ---
 
 <Layout title="My Profile | The Hidden Lodge">
@@ -53,6 +59,42 @@ const mainChar = characters.find((c) => c.is_main === 1) ?? null;
 			</div>
 			<a href="/auth/logout" class="logout-btn">Log Out</a>
 		</header>
+
+		<section class="timezone-section" aria-labelledby="timezone-heading">
+			<div class="section-title-row">
+				<h2 id="timezone-heading">Time Zone</h2>
+			</div>
+			{statusParam === 'timezone-updated' && (
+				<p class="flash-ok" role="status">Time zone saved.</p>
+			)}
+			{statusParam === 'timezone-error' && (
+				<p class="flash-error" role="alert">Could not save time zone. Please try again.</p>
+			)}
+			<form method="POST" action="/api/profile/update-timezone" class="timezone-form">
+				<label>
+					<span>Display raid times in:</span>
+					<input
+						type="search"
+						id="timezone-search"
+						autocomplete="off"
+						spellcheck="false"
+						placeholder="Search time zones..."
+					/>
+					<input
+						type="hidden"
+						id="timezone-selected"
+						value={userTimeZone}
+					/>
+					<select id="timezone-select" name="time_zone" required>
+						{timezoneOptions.map((tz) => (
+							<option value={tz} selected={tz === userTimeZone}>{tz}</option>
+						))}
+					</select>
+				</label>
+				<button type="submit" class="set-main-btn">Save Time Zone</button>
+				<small class="timezone-help">Type to filter, then pick from the dropdown list.</small>
+			</form>
+		</section>
 
 		<section class="characters-section" aria-labelledby="chars-heading">
 			<div class="section-title-row">
@@ -213,6 +255,58 @@ const mainChar = characters.find((c) => c.is_main === 1) ?? null;
 		gap: 0.5rem;
 	}
 
+	.timezone-section {
+		background: var(--bg-panel);
+		border: 1px solid var(--border);
+		border-radius: 0.5rem;
+		padding: 1rem;
+	}
+
+	.timezone-form {
+		display: flex;
+		align-items: flex-end;
+		gap: 0.75rem;
+		flex-wrap: wrap;
+	}
+
+	.timezone-form label {
+		display: flex;
+		flex-direction: column;
+		gap: 0.25rem;
+		color: var(--muted);
+	}
+
+	.timezone-form input[type='search'],
+	.timezone-form select {
+		background: rgba(9, 18, 28, 0.92);
+		color: var(--text);
+		border: 1px solid var(--border);
+		border-radius: 0.3rem;
+		padding: 0.4rem 0.6rem;
+		min-width: 20rem;
+	}
+
+	.timezone-help {
+		flex-basis: 100%;
+		margin-top: -0.2rem;
+		color: var(--muted);
+		font-size: 0.75rem;
+	}
+
+	.timezone-form select {
+		max-height: 16rem;
+	}
+
+	.flash-ok {
+		margin: 0 0 0.6rem;
+		color: #73dd9a;
+	}
+
+	.flash-error {
+		margin: 0 0 0.6rem;
+		color: #f49797;
+	}
+
 	/* ── Character card ────────────────────────────────────────── */
 	.char-card {
 		display: flex;
@@ -323,3 +417,50 @@ const mainChar = characters.find((c) => c.is_main === 1) ?? null;
 		}
 	}
 </style>
+
+<script>
+	const tzSearch = document.getElementById('timezone-search');
+	const tzSelect = document.getElementById('timezone-select');
+	const tzSelected = document.getElementById('timezone-selected');
+
+	if (tzSearch instanceof HTMLInputElement && tzSelect instanceof HTMLSelectElement) {
+		const allTimeZones = Array.from(tzSelect.options).map((option) => option.value);
+		let currentValue = tzSelected instanceof HTMLInputElement ? tzSelected.value : 'UTC';
+
+		const renderOptions = (query: string) => {
+			const normalizedQuery = query.trim().toLowerCase();
+			const filtered = normalizedQuery
+				? allTimeZones.filter((zone) => zone.toLowerCase().includes(normalizedQuery))
+				: allTimeZones;
+
+			tzSelect.innerHTML = '';
+			for (const zone of filtered) {
+				const option = document.createElement('option');
+				option.value = zone;
+				option.textContent = zone;
+				if (zone === currentValue) {
+					option.selected = true;
+				}
+				tzSelect.appendChild(option);
+			}
+
+			if (tzSelect.options.length === 0) {
+				const emptyOption = document.createElement('option');
+				emptyOption.value = '';
+				emptyOption.textContent = 'No matches';
+				emptyOption.disabled = true;
+				emptyOption.selected = true;
+				tzSelect.appendChild(emptyOption);
+			} else if (![...tzSelect.options].some((opt) => opt.selected)) {
+				tzSelect.selectedIndex = 0;
+				currentValue = tzSelect.value;
+			}
+		};
+
+		renderOptions('');
+		tzSelect.addEventListener('change', () => {
+			currentValue = tzSelect.value;
+		});
+		tzSearch.addEventListener('input', () => renderOptions(tzSearch.value));
+	}
+</script>

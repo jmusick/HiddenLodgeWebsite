@@ -1,10 +1,11 @@
 import { defineMiddleware } from 'astro:middleware';
-import { getSessionUser, isGuildAdmin } from './lib/auth';
+import { getSessionUser, isGuildAdmin, isGuildMember } from './lib/auth';
 import { env } from 'cloudflare:workers';
 
 export const onRequest = defineMiddleware(async (context, next) => {
 	const user = await getSessionUser(env.DB, context.request);
 	context.locals.user = user;
+	context.locals.isGuildMember = user ? await isGuildMember(env.DB, user.id) : false;
 	context.locals.isAdmin = user ? await isGuildAdmin(env.DB, user.id) : false;
 
 	// Guard all /admin/* routes at the middleware level

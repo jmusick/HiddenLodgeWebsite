@@ -38,6 +38,12 @@ The site combines public guild information, Blizzard-authenticated member profil
 	- view their synced WoW characters
 	- choose their guild main character
 	- see their current main summary
+	- set a preferred time zone for raid time display (searchable IANA timezone support)
+- Guild-member-only raid signup calendar where members can:
+	- view recurring primary raids and ad-hoc raids
+	- choose a character (defaulting to their main) and sign up
+	- see raid times rendered in their selected timezone
+	- view signup history ordered by signup time with timestamps
 
 ## Admin Features
 
@@ -60,6 +66,12 @@ Admin access is granted by guild rank via middleware. Officer or higher can acce
 	- add and remove level 90 members regardless of authentication status
 	- assign and update Tank, Healer, Melee DPS, or Ranged DPS role per member
 	- review raid buff coverage, class distribution, and token split
+- Raid Signups module:
+	- create recurring primary raid schedules
+	- create ad-hoc raids with separate date and time selection
+	- monitor signup counts and view signup summaries ordered by signup time
+	- override member signup roles inline from the signup calendar
+	- remove outdated raids
 - Export module:
 	- generate character-to-label export JSON for guild addon workflows
 	- copy JSON to clipboard
@@ -83,7 +95,9 @@ Admin access is granted by guild rank via middleware. Officer or higher can acce
 | Route | Auth | Description |
 |---|---|---|
 | `/profile` | Yes | Battle.net account profile and main-character selection |
+| `/signup` | Yes + Guild Member | Raid signup calendar with timezone-aware raid times |
 | `/admin` | Yes + Admin | Redirects to the default admin module |
+| `/admin/raid-signups` | Yes + Admin | Manage primary schedules and ad-hoc raids |
 | `/admin/roster-teams` | Yes + Admin | Multi-team raid roster builder and analysis |
 | `/admin/mains` | Yes + Admin | Member overview, main/alt visibility, and nickname management |
 | `/admin/links` | Yes + Admin | Public links category/link management |
@@ -104,12 +118,20 @@ Admin access is granted by guild rank via middleware. Officer or higher can acce
 | Endpoint | Method | Description |
 |---|---|---|
 | `/api/set-main` | POST | Sets the authenticated user's main character |
+| `/api/profile/update-timezone` | POST | Sets the authenticated user's preferred timezone |
+| `/api/signup/create` | POST | Creates or updates a member signup for a raid |
+| `/api/signup/cancel` | POST | Cancels a member signup for a raid |
 
 ### Admin API
 
 | Endpoint | Method | Description |
 |---|---|---|
 | `/api/admin/update-nickname` | POST | Set or clear a guild member display nickname |
+| `/api/admin/raid-signups/create-primary` | POST | Create a recurring primary raid schedule |
+| `/api/admin/raid-signups/delete-primary` | POST | Delete a recurring primary raid schedule |
+| `/api/admin/raid-signups/create-adhoc` | POST | Create an ad-hoc raid |
+| `/api/admin/raid-signups/delete-adhoc` | POST | Delete an ad-hoc raid |
+| `/api/admin/raid-signups/update-signup-role` | POST | Override a member signup role |
 | `/api/admin/roster-teams/create-team` | POST | Create a raid team |
 | `/api/admin/roster-teams/update-team` | POST | Update team name, mode, and sort order |
 | `/api/admin/roster-teams/delete-team` | POST | Delete a raid team |
@@ -155,6 +177,9 @@ These handlers remain in the codebase as retired stubs and currently return HTTP
 | `sessions` | Session IDs and expiration timestamps |
 | `characters` | User-owned WoW characters and selected main tracking |
 | `roster_members_cache` | Cached Blizzard guild roster data plus collection stats |
+| `primary_raid_schedules` | Recurring primary raid schedule definitions |
+| `ad_hoc_raids` | One-off officer-created raids |
+| `raid_signups` | Member signups mapped to primary occurrences and ad-hoc raids |
 | `raid_teams` | Saved raid team definitions with mode and ordering |
 | `raid_team_members` | Team membership assignments and role ownership |
 | `link_categories` | Public Useful Links page categories |
@@ -177,7 +202,8 @@ These handlers remain in the codebase as retired stubs and currently return HTTP
 │   ├── 0004_nickname.sql
 │   ├── 0005_links.sql
 │   ├── 0006_raid_teams.sql
-│   └── 0007_split_dps_roles.sql
+│   ├── 0007_split_dps_roles.sql
+│   └── 0008_raid_signups.sql
 ├── public/
 │   ├── _routes.json
 │   └── images/
