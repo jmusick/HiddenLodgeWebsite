@@ -36,7 +36,9 @@ const rosterTtlCutoff = now - 24 * 60 * 60;
 const raidersTtlCutoff = now - 12 * 60 * 60;
 const CRON_INTERVAL_MINUTES = 10;
 const RAIDERS_DETAIL_BATCH_SIZE_PER_RUN = 6;
-const statusParam = new URL(Astro.request.url).searchParams.get('status');
+const pageUrl = new URL(Astro.request.url);
+const statusParam = pageUrl.searchParams.get('status');
+const failedParam = pageUrl.searchParams.get('failed') ?? '';
 
 let rosterCache: RosterCacheRow | null = null;
 let raidersCache: RaidersCacheRow | null = null;
@@ -104,6 +106,13 @@ const raidersEta = formatPendingEta(
   RAIDERS_DETAIL_BATCH_SIZE_PER_RUN,
   CRON_INTERVAL_MINUTES
 );
+
+const failedTargets = failedParam
+  .split(',')
+  .map((part) => part.trim().toLowerCase())
+  .filter((part) => part === 'roster' || part === 'raiders')
+  .map((part) => (part === 'roster' ? 'Roster cache' : 'Raiders cache'));
+const failedTargetsLabel = failedTargets.length > 0 ? failedTargets.join(' + ') : 'cache refresh';
 ---
 
 <AdminLayout title="Settings | Admin | The Hidden Lodge">
@@ -120,8 +129,11 @@ const raidersEta = formatPendingEta(
     {statusParam === 'refresh-ok' && (
       <div class="flash flash-ok" role="status">Cache refresh triggered successfully.</div>
     )}
+    {statusParam === 'refresh-partial' && (
+      <div class="flash flash-error" role="alert">Cache refresh partially failed ({failedTargetsLabel}). Check logs and try again.</div>
+    )}
     {statusParam === 'refresh-error' && (
-      <div class="flash flash-error" role="alert">Cache refresh failed. Check logs and try again.</div>
+      <div class="flash flash-error" role="alert">Cache refresh failed ({failedTargetsLabel}). Check logs and try again.</div>
     )}
     {statusParam === 'raid-target-updated' && (
       <div class="flash flash-ok" role="status">Tracked raid updated.</div>

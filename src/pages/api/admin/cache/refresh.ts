@@ -9,20 +9,31 @@ export async function POST(context: APIContext): Promise<Response> {
     return new Response('Forbidden', { status: 403 });
   }
 
-  try {
-    await Promise.all([
-      refreshRosterCache(),
-      refreshRaidersCache(),
-    ]);
+  const [rosterResult, raidersResult] = await Promise.allSettled([
+    refreshRosterCache(),
+    refreshRaidersCache(),
+  ]);
 
-    return new Response(null, {
-      status: 302,
-      headers: { Location: '/admin/settings?status=refresh-ok' },
-    });
-  } catch {
-    return new Response(null, {
-      status: 302,
-      headers: { Location: '/admin/settings?status=refresh-error' },
-    });
+  const failed: string[] = [];
+  if (rosterResult.status === 'rejected') {
+    console.error('Admin cache refresh: roster refresh failed', rosterResult.reason);
+    failed.push('roster');
   }
+  if (raidersResult.status === 'rejected') {
+    console.error('Admin cache refresh: raiders refresh failed', raidersResult.reason);
+    failed.push('raiders');
+  }
+
+  const status =
+    failed.length === 0 ? 'refresh-ok' : failed.length === 1 ? 'refresh-partial' : 'refresh-error';
+
+  const params = new URLSearchParams({ status });
+  if (failed.length > 0) {
+    params.set('failed', failed.join(','));
+  }
+
+  return new Response(null, {
+    status: 302,
+    headers: { Location: `/admin/settings?${params.toString()}` },
+  });
 }
