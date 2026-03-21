@@ -1,13 +1,12 @@
 import type { D1Database } from '@cloudflare/workers-types';
 import { env } from 'cloudflare:workers';
 import { resolveRaidProgressTier } from '../data/raidProgressTargets';
-import { fallbackClassIconUrl, loadBlizzardClassIconMap, normalizeWowClassName } from './class-icons';
+import { fallbackClassIconUrl } from './class-icons';
 import { getBlizzardAppAccessToken as getSharedBlizzardAppAccessToken } from './blizzard-app-token';
 import { fetchBlizzardJsonWithRetry } from './blizzard-fetch';
 
 const API_BASE = 'https://us.api.blizzard.com';
 const PROFILE_NAMESPACE = 'profile-us';
-const STATIC_NAMESPACE = 'static-us';
 const LOCALE = 'en_US';
 const REQUEST_CONCURRENCY = 3;
 const DETAILS_TTL_SECONDS = 12 * 60 * 60;
@@ -226,22 +225,6 @@ function buildCharacterUrl(realmSlug: string, characterName: string, suffix = ''
 
 async function getBlizzardAppAccessToken(): Promise<string | null> {
   return getSharedBlizzardAppAccessToken(env.BLIZZARD_CLIENT_ID, env.BLIZZARD_CLIENT_SECRET);
-}
-
-async function ensureClassIconCache(): Promise<Map<string, string>> {
-  const accessToken = await getBlizzardAppAccessToken();
-  if (!accessToken) {
-    return new Map<string, string>();
-  }
-
-  return loadBlizzardClassIconMap({
-    accessToken,
-    apiBase: API_BASE,
-    staticNamespace: STATIC_NAMESPACE,
-    locale: LOCALE,
-    requestConcurrency: REQUEST_CONCURRENCY,
-    fetchJsonWithRetry: fetchBlizzardJsonWithRetry,
-  });
 }
 
 function normalizeTeamNames(value: string | null): string[] {
@@ -986,78 +969,10 @@ export async function loadRaidersViewData(dbInput?: D1Database): Promise<Raiders
     errorMessage = error instanceof Error ? error.message : 'Unable to refresh Raiders cache summary.';
   }
 
-  if (raiders.length === 0) {
-    try {
-      status = await refreshRaidersCache(db, { batchSize: DETAIL_BATCH_SIZE });
-      raiders = await listCachedRaiders(db);
-    } catch (error) {
-      errorMessage = error instanceof Error ? error.message : 'Unable to refresh Raiders cache.';
-    }
-  }
-
-  // Backfill legacy single-raid progress labels into tier-bundle matrix format.
-  const needsRaidProgressBackfill = raiders.some(
-    (raider) =>
-      raider.authState === 'ready' &&
-      Boolean(raider.raidProgressLabel) &&
-      !raider.raidProgressLabel!.trimStart().startsWith('{')
-  );
-
-  const needsCrestBackfill = raiders.some(
-    (raider) =>
-      raider.authState === 'ready' &&
-      [
-        raider.adventurerCrests,
-        raider.veteranCrests,
-        raider.championCrests,
-        raider.heroCrests,
-        raider.mythCrests,
-      ].some((value) => value === null)
-  );
-
-  const needsMissingUpgradesBackfill = raiders.some(
-    (raider) => raider.authState === 'ready' && raider.totalUpgradesMissing === null
-  );
-
-  if (needsRaidProgressBackfill) {
-    try {
-      status = await refreshRaidersCache(db, { batchSize: 2 });
-      raiders = await listCachedRaiders(db);
-    } catch (error) {
-      errorMessage = error instanceof Error ? error.message : 'Unable to backfill Raiders raid progress.';
-    }
-  }
-
-  if (needsCrestBackfill) {
-    try {
-      status = await refreshRaidersCache(db, { batchSize: DETAIL_BATCH_SIZE });
-      raiders = await listCachedRaiders(db);
-    } catch (error) {
-      errorMessage = error instanceof Error ? error.message : 'Unable to backfill Raiders crest data.';
-    }
-  }
-
-  if (needsMissingUpgradesBackfill) {
-    try {
-      status = await refreshRaidersCache(db, { batchSize: DETAIL_BATCH_SIZE });
-      raiders = await listCachedRaiders(db);
-    } catch (error) {
-      errorMessage = error instanceof Error ? error.message : 'Unable to backfill Raiders missing-upgrade data.';
-    }
-  }
-
-  let classIcons = new Map<string, string>();
-  try {
-    classIcons = await ensureClassIconCache();
-  } catch {
-    // Non-fatal: if Blizzard media lookup fails, we still apply static fallback class icons.
-  }
-
+  // Keep page requests cheap: rely on cron/admin refresh for detail backfills.
   raiders = raiders.map((raider) => ({
     ...raider,
-    classIconUrl:
-      classIcons.get(normalizeWowClassName(raider.className)) ??
-      fallbackClassIconUrl(raider.className),
+    classIconUrl: fallbackClassIconUrl(raider.className),
   }));
 
   return {
