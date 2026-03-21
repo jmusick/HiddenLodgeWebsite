@@ -27,6 +27,30 @@ interface GuildRosterMember {
   rank: number;
 }
 
+interface CharacterProfileResponse {
+  realm?: { name?: string };
+  character_class?: { name?: string };
+  playable_class?: { name?: string };
+  race?: { name?: string };
+  playable_race?: { name?: string };
+  level?: number;
+  achievement_points?: number;
+}
+
+interface CharacterMountsResponse {
+  mounts?: unknown[];
+}
+
+interface CharacterPetsResponse {
+  pets?: unknown[];
+}
+
+interface CharacterToysResponse {
+  toys?: unknown[];
+}
+
+let rosterQuestColumnState: boolean | null = null;
+
 interface CacheRow {
   blizzard_char_id: number;
   name: string;
@@ -37,6 +61,7 @@ interface CacheRow {
   level: number;
   rank: number;
   achievement_points: number;
+  quest_count: number;
   mount_count: number;
   pet_count: number;
   toy_count: number;
@@ -53,6 +78,7 @@ export interface CachedRosterMember {
   level: number;
   rank: number;
   achievementPoints: number;
+  questCount: number;
   mountCount: number;
   petCount: number;
   toyCount: number;
@@ -80,6 +106,63 @@ function nowInSeconds(): number {
 
 function getDatabase(db?: D1Database): D1Database {
   return db ?? env.DB;
+}
+
+async function hasQuestCountColumn(db: D1Database): Promise<boolean> {
+  if (rosterQuestColumnState !== null) {
+    return rosterQuestColumnState;
+  }
+
+  try {
+    const pragma = await db.prepare('PRAGMA table_info(roster_members_cache)').all<{ name: string }>();
+    const columns = (pragma.results ?? []) as Array<{ name?: string }>;
+    rosterQuestColumnState = columns.some((column) => column.name === 'quest_count');
+  } catch {
+    rosterQuestColumnState = false;
+  }
+
+  return rosterQuestColumnState;
+}
+
+function wait(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function extractQuestCount(statsPayload: any): number {
+  if (!statsPayload || typeof statsPayload !== 'object') return 0;
+
+  const direct = Number(statsPayload.quests_completed ?? statsPayload.quest_count ?? 0);
+  if (direct > 0) return direct;
+
+  const visit = (node: any): number | null => {
+    if (!node || typeof node !== 'object') return null;
+
+    const name = String(node.name ?? '').toLowerCase();
+    const type = String(node.type ?? '').toLowerCase();
+    const quantity = Number(node.quantity ?? node.value ?? NaN);
+    if (Number.isFinite(quantity) && quantity >= 0) {
+      if (name.includes('quests completed') || type.includes('quests_completed')) {
+        return quantity;
+      }
+    }
+
+    for (const value of Object.values(node)) {
+      if (!value) continue;
+      if (Array.isArray(value)) {
+        for (const entry of value) {
+          const found = visit(entry);
+          if (found !== null) return found;
+        }
+      } else if (typeof value === 'object') {
+        const found = visit(value);
+        if (found !== null) return found;
+      }
+    }
+
+    return null;
+  };
+
+  return visit(statsPayload) ?? 0;
 }
 
 async function getMeta(db: D1Database): Promise<RosterCacheStatus> {
@@ -136,7 +219,7 @@ async function fetchGuildRoster(accessToken: string): Promise<GuildRosterMember[
     const retryAfterHeader = rosterResponse.headers.get('retry-after');
     const retryAfterSeconds = retryAfterHeader ? Number(retryAfterHeader) : 0;
     const backoff = retryAfterSeconds > 0 ? retryAfterSeconds * 1000 : attempt * 1500;
-    await delay(backoff);
+    await wait(backoff);
   }
 
   if (!rosterResponse?.ok) {
@@ -164,6 +247,7 @@ async function pruneMissingMembers(db: D1Database, summarySyncTime: number): Pro
 }
 
 async function listCachedMembers(db: D1Database): Promise<CachedRosterMember[]> {
+  const hasQuestColumn = await hasQuestCountColumn(db);
   const result = await db
     .prepare(
       `SELECT
@@ -176,6 +260,7 @@ async function listCachedMembers(db: D1Database): Promise<CachedRosterMember[]> 
           level,
           rank,
           achievement_points,
+           ${hasQuestColumn ? 'quest_count' : '0 AS quest_count'},
           mount_count,
           pet_count,
           toy_count,
@@ -195,6 +280,7 @@ async function listCachedMembers(db: D1Database): Promise<CachedRosterMember[]> 
     level: row.level,
     rank: row.rank,
     achievementPoints: row.achievement_points,
+    questCount: row.quest_count,
     mountCount: row.mount_count,
     petCount: row.pet_count,
     toyCount: row.toy_count,
@@ -208,6 +294,7 @@ export async function refreshRosterCache(
   options?: { batchSize?: number }
 ): Promise<RosterCacheStatus> {
   const db = getDatabase(dbInput);
+  const hasQuestColumn = await hasQuestCountColumn(db);
   const accessToken = await fetchAccessToken();
   const rosterMembers = await fetchGuildRoster(accessToken);
   const now = nowInSeconds();
@@ -326,12 +413,14 @@ export async function refreshRosterCache(
       const profileBase = `${profileHref.origin}${profileHref.pathname}`;
       const profileUrl = `${profileBase}?namespace=${namespace}&locale=en_US`;
       const collectionBase = `${profileBase}/collections`;
+      const statisticsUrl = `${profileBase}/statistics?namespace=${namespace}&locale=en_US`;
 
-      const [profile, mounts, pets, toys] = await Promise.all([
-        fetchBlizzardJsonWithRetry(profileUrl, accessToken),
-        fetchBlizzardJsonWithRetry(`${collectionBase}/mounts?namespace=${namespace}&locale=en_US`, accessToken),
-        fetchBlizzardJsonWithRetry(`${collectionBase}/pets?namespace=${namespace}&locale=en_US`, accessToken),
-        fetchBlizzardJsonWithRetry(`${collectionBase}/toys?namespace=${namespace}&locale=en_US`, accessToken),
+      const [profile, stats, mounts, pets, toys] = await Promise.all([
+        fetchBlizzardJsonWithRetry<CharacterProfileResponse>(profileUrl, accessToken),
+        fetchBlizzardJsonWithRetry<any>(statisticsUrl, accessToken),
+        fetchBlizzardJsonWithRetry<CharacterMountsResponse>(`${collectionBase}/mounts?namespace=${namespace}&locale=en_US`, accessToken),
+        fetchBlizzardJsonWithRetry<CharacterPetsResponse>(`${collectionBase}/pets?namespace=${namespace}&locale=en_US`, accessToken),
+        fetchBlizzardJsonWithRetry<CharacterToysResponse>(`${collectionBase}/toys?namespace=${namespace}&locale=en_US`, accessToken),
       ]);
 
       if (!profile || !mounts || !pets || !toys) {
@@ -346,6 +435,7 @@ export async function refreshRosterCache(
                race_name = ?,
                level = ?,
                achievement_points = ?,
+               ${hasQuestColumn ? 'quest_count = ?,' : ''}
                mount_count = ?,
                pet_count = ?,
                toy_count = ?,
@@ -359,6 +449,7 @@ export async function refreshRosterCache(
           profile.race?.name ?? profile.playable_race?.name ?? 'Unknown',
           Number(profile.level ?? 0),
           Number(profile.achievement_points ?? 0),
+          ...(hasQuestColumn ? [extractQuestCount(stats)] : []),
           Array.isArray(mounts.mounts) ? mounts.mounts.length : 0,
           Array.isArray(pets.pets) ? pets.pets.length : 0,
           Array.isArray(toys.toys) ? toys.toys.length : 0,

@@ -345,6 +345,7 @@ async function enrichRaider(row: RaiderSourceRow, now: number, raidProgressTarge
     realm: row.realm,
     realmSlug: row.realm_slug,
     className: row.class_name,
+    classIconUrl: null,
     teamNames: normalizeTeamNames(row.team_names),
     authState: 'missing',
     lastCheckedAt: null,

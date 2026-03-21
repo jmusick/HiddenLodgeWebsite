@@ -13,6 +13,7 @@ interface EnrichedMember {
   level: number;
   rank: number;
   achievementPoints: number;
+  questCount: number;
   mountCount: number;
   petCount: number;
   toyCount: number;
@@ -81,7 +82,7 @@ function classAbbrev(className: string): string {
   return map[normalized] ?? className.slice(0, 2).toUpperCase();
 }
 
-function topBy(field: keyof Pick<EnrichedMember, 'achievementPoints' | 'mountCount' | 'petCount' | 'toyCount'>) {
+function topBy(field: keyof Pick<EnrichedMember, 'achievementPoints' | 'questCount' | 'mountCount' | 'petCount' | 'toyCount'>) {
   return sortedMembers.reduce(
     (best, member) =>
       member[field] > (best?.value ?? -1)
@@ -93,6 +94,7 @@ function topBy(field: keyof Pick<EnrichedMember, 'achievementPoints' | 'mountCou
 
 const spotlights = [
   { label: 'Achievements', icon: 'lucide:trophy', field: 'achievementPoints' as const, format: (n: number) => n.toLocaleString() },
+  { label: 'Quests', icon: 'lucide:scroll-text', field: 'questCount' as const, format: (n: number) => n.toLocaleString() },
   { label: 'Mounts', icon: 'lucide:dog', field: 'mountCount' as const, format: (n: number) => String(n) },
   { label: 'Pets', icon: 'lucide:paw-print', field: 'petCount' as const, format: (n: number) => String(n) },
   { label: 'Toys', icon: 'lucide:puzzle', field: 'toyCount' as const, format: (n: number) => String(n) },
@@ -201,6 +203,7 @@ const spotlights = [
                 <th><button class="sort-btn" type="button" data-sort-key="level">Level</button></th>
                 <th><button class="sort-btn" type="button" data-sort-key="rank">Rank</button></th>
                 <th><button class="sort-btn" type="button" data-sort-key="achievementPoints">Achieves</button></th>
+                <th><button class="sort-btn" type="button" data-sort-key="questCount">Quests</button></th>
                 <th><button class="sort-btn" type="button" data-sort-key="mountCount">Mounts</button></th>
                 <th><button class="sort-btn" type="button" data-sort-key="petCount">Pets</button></th>
                 <th><button class="sort-btn" type="button" data-sort-key="toyCount">Toys</button></th>
@@ -219,6 +222,7 @@ const spotlights = [
                       data-level={String(member.level)}
                       data-rank={String(member.rank)}
                       data-achievement-points={String(member.achievementPoints)}
+                      data-quest-count={String(member.questCount)}
                       data-mount-count={String(member.mountCount)}
                       data-pet-count={String(member.petCount)}
                       data-toy-count={String(member.toyCount)}
@@ -252,6 +256,7 @@ const spotlights = [
                       <td>{member.level}</td>
                       <td>{rankLabel(member.rank)}</td>
                       <td>{member.achievementPoints > 0 ? member.achievementPoints.toLocaleString() : '—'}</td>
+                      <td>{member.questCount > 0 ? member.questCount.toLocaleString() : '—'}</td>
                       <td>{member.mountCount > 0 ? member.mountCount : '—'}</td>
                       <td>{member.petCount > 0 ? member.petCount : '—'}</td>
                       <td>{member.toyCount > 0 ? member.toyCount : '—'}</td>
@@ -335,6 +340,7 @@ const spotlights = [
       sortKey === 'level' ||
       sortKey === 'rank' ||
       sortKey === 'achievementPoints' ||
+      sortKey === 'questCount' ||
       sortKey === 'mountCount' ||
       sortKey === 'petCount' ||
       sortKey === 'toyCount';
@@ -508,7 +514,7 @@ const spotlights = [
 
   .spotlights {
     display: grid;
-    grid-template-columns: repeat(4, minmax(0, 1fr));
+    grid-template-columns: repeat(5, minmax(0, 1fr));
     gap: 0.75rem;
     margin-top: 1rem;
   }

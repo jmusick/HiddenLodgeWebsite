@@ -31,7 +31,7 @@ The site combines public guild information, Blizzard-authenticated member profil
 	- search and class/rank/level filters
 	- sortable columns
 	- pagination controls
-	- collection stat spotlights for achievements, mounts, pets, and toys
+	- collection stat spotlights for achievements, quests completed, mounts, pets, and toys
 	- Raider.IO shortcuts per character
 - Raiders analytics page backed by D1 cache with:
 	- team-scoped character list for active roster teams
@@ -217,6 +217,7 @@ These handlers remain in the codebase as retired stubs and currently return HTTP
 
 - Roster summary data uses a short TTL for quick refreshes
 - Character detail data uses a longer TTL and refreshes in batches to avoid Blizzard and platform limits
+- Character detail sync includes quest-completion totals (when available from Blizzard character statistics)
 - The roster page can render from cached data while the cache warms additional members in the background
 - Raiders cache separates summary sync and detail sync to avoid heavy Blizzard fan-out on every request
 - Raiders detail/media calls use app-level client-credentials access so details are not blocked on per-user Battle.net login
@@ -242,7 +243,8 @@ These handlers remain in the codebase as retired stubs and currently return HTTP
 │   ├── 0013_raiders_cache.sql
 │   ├── 0014_raid_progress.sql
 │   ├── 0015_raid_progress_target.sql
-│   └── 0016_site_settings.sql
+│   ├── 0016_site_settings.sql
+│   └── 0017_quest_count.sql
 ├── public/
 │   ├── _routes.json
 │   └── images/
@@ -265,7 +267,10 @@ These handlers remain in the codebase as retired stubs and currently return HTTP
 │   │   └── Layout.astro
 │   ├── lib/
 │   │   ├── auth.ts
+│   │   ├── blizzard-app-token.ts
+│   │   ├── blizzard-fetch.ts
 │   │   ├── blizzard.ts
+│   │   ├── class-icons.ts
 │   │   ├── debug-shim.ts
 │   │   ├── raiders.ts
 │   │   ├── roster-cache.ts
