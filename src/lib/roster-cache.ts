@@ -10,6 +10,7 @@ const REGION = 'us';
 const SUMMARY_TTL_SECONDS = 15 * 60;
 const DETAILS_TTL_SECONDS = 24 * 60 * 60;
 const DETAIL_BATCH_SIZE = 8;
+const QUEST_BACKFILL_BATCH_SIZE = 24;
 const API_BASE = `https://${REGION}.api.blizzard.com`;
 const STATIC_NAMESPACE = `static-${REGION}`;
 const LOCALE = 'en_US';
@@ -50,6 +51,7 @@ interface CharacterToysResponse {
 }
 
 let rosterQuestColumnState: boolean | null = null;
+let rosterQuestCheckedColumnState: boolean | null = null;
 
 interface CacheRow {
   blizzard_char_id: number;
@@ -124,6 +126,22 @@ async function hasQuestCountColumn(db: D1Database): Promise<boolean> {
   return rosterQuestColumnState;
 }
 
+async function hasQuestCountCheckedColumn(db: D1Database): Promise<boolean> {
+  if (rosterQuestCheckedColumnState !== null) {
+    return rosterQuestCheckedColumnState;
+  }
+
+  try {
+    const pragma = await db.prepare('PRAGMA table_info(roster_members_cache)').all<{ name: string }>();
+    const columns = (pragma.results ?? []) as Array<{ name?: string }>;
+    rosterQuestCheckedColumnState = columns.some((column) => column.name === 'quest_count_checked');
+  } catch {
+    rosterQuestCheckedColumnState = false;
+  }
+
+  return rosterQuestCheckedColumnState;
+}
+
 function wait(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -165,14 +183,58 @@ function extractQuestCount(statsPayload: any): number {
   return visit(statsPayload) ?? 0;
 }
 
+function normalizeHrefToUrl(href: string): URL | null {
+  const trimmed = href.trim();
+  if (!trimmed) return null;
+
+  try {
+    return new URL(trimmed);
+  } catch {
+    if (trimmed.startsWith('/')) {
+      try {
+        return new URL(`${API_BASE}${trimmed}`);
+      } catch {
+        return null;
+      }
+    }
+    return null;
+  }
+}
+
+function buildCharacterApiUrls(
+  href: string
+): { profileUrl: string; collectionBase: string; statisticsUrl: string; namespace: string } | null {
+  const profileHref = normalizeHrefToUrl(href);
+  if (!profileHref) {
+    return null;
+  }
+
+  const namespace = profileHref.searchParams.get('namespace') ?? `profile-${REGION}`;
+  const profileBase = `${profileHref.origin}${profileHref.pathname}`;
+
+  return {
+    profileUrl: `${profileBase}?namespace=${namespace}&locale=en_US`,
+    collectionBase: `${profileBase}/collections`,
+    statisticsUrl: `${profileBase}/achievements/statistics?namespace=${namespace}&locale=en_US`,
+    namespace,
+  };
+}
+
 async function getMeta(db: D1Database): Promise<RosterCacheStatus> {
   const now = nowInSeconds();
+  const hasQuestCheckedColumn = await hasQuestCountCheckedColumn(db);
   const row = await db
     .prepare(
       `SELECT
           MAX(summary_synced_at) AS last_summary_sync,
           MAX(details_synced_at) AS last_detail_sync,
-          SUM(CASE WHEN details_synced_at IS NULL OR details_synced_at < ? THEN 1 ELSE 0 END) AS pending_detail_count
+          SUM(
+            CASE
+              WHEN details_synced_at IS NULL OR details_synced_at < ?${hasQuestCheckedColumn ? ' OR quest_count_checked = 0' : ''}
+              THEN 1
+              ELSE 0
+            END
+          ) AS pending_detail_count
        FROM roster_members_cache`
     )
     .bind(now - DETAILS_TTL_SECONDS)
@@ -291,10 +353,11 @@ async function listCachedMembers(db: D1Database): Promise<CachedRosterMember[]> 
 
 export async function refreshRosterCache(
   dbInput?: D1Database,
-  options?: { batchSize?: number }
+  options?: { batchSize?: number; questBackfillBatchSize?: number }
 ): Promise<RosterCacheStatus> {
   const db = getDatabase(dbInput);
   const hasQuestColumn = await hasQuestCountColumn(db);
+  const hasQuestCheckedColumn = hasQuestColumn ? await hasQuestCountCheckedColumn(db) : false;
   const accessToken = await fetchAccessToken();
   const rosterMembers = await fetchGuildRoster(accessToken);
   const now = nowInSeconds();
@@ -373,24 +436,6 @@ export async function refreshRosterCache(
 
   const rosterById = new Map(rosterMembers.map((member) => [member.character.id, member]));
 
-  const normalizeHrefToUrl = (href: string): URL | null => {
-    const trimmed = href.trim();
-    if (!trimmed) return null;
-
-    try {
-      return new URL(trimmed);
-    } catch {
-      if (trimmed.startsWith('/')) {
-        try {
-          return new URL(`${API_BASE}${trimmed}`);
-        } catch {
-          return null;
-        }
-      }
-      return null;
-    }
-  };
-
   for (const candidate of detailCandidates) {
     try {
       const candidateId = Number(candidate.blizzard_char_id);
@@ -400,8 +445,8 @@ export async function refreshRosterCache(
         continue;
       }
 
-      const profileHref = normalizeHrefToUrl(href);
-      if (!profileHref) {
+      const apiUrls = buildCharacterApiUrls(href);
+      if (!apiUrls) {
         console.error('Roster detail refresh skipped: invalid profile href', {
           candidateId,
           href,
@@ -409,23 +454,19 @@ export async function refreshRosterCache(
         continue;
       }
 
-      const namespace = profileHref.searchParams.get('namespace') ?? `profile-${REGION}`;
-      const profileBase = `${profileHref.origin}${profileHref.pathname}`;
-      const profileUrl = `${profileBase}?namespace=${namespace}&locale=en_US`;
-      const collectionBase = `${profileBase}/collections`;
-      const statisticsUrl = `${profileBase}/achievements/statistics?namespace=${namespace}&locale=en_US`;
-
       const [profile, stats, mounts, pets, toys] = await Promise.all([
-        fetchBlizzardJsonWithRetry<CharacterProfileResponse>(profileUrl, accessToken),
-        fetchBlizzardJsonWithRetry<any>(statisticsUrl, accessToken),
-        fetchBlizzardJsonWithRetry<CharacterMountsResponse>(`${collectionBase}/mounts?namespace=${namespace}&locale=en_US`, accessToken),
-        fetchBlizzardJsonWithRetry<CharacterPetsResponse>(`${collectionBase}/pets?namespace=${namespace}&locale=en_US`, accessToken),
-        fetchBlizzardJsonWithRetry<CharacterToysResponse>(`${collectionBase}/toys?namespace=${namespace}&locale=en_US`, accessToken),
+        fetchBlizzardJsonWithRetry<CharacterProfileResponse>(apiUrls.profileUrl, accessToken),
+        fetchBlizzardJsonWithRetry<any>(apiUrls.statisticsUrl, accessToken),
+        fetchBlizzardJsonWithRetry<CharacterMountsResponse>(`${apiUrls.collectionBase}/mounts?namespace=${apiUrls.namespace}&locale=en_US`, accessToken),
+        fetchBlizzardJsonWithRetry<CharacterPetsResponse>(`${apiUrls.collectionBase}/pets?namespace=${apiUrls.namespace}&locale=en_US`, accessToken),
+        fetchBlizzardJsonWithRetry<CharacterToysResponse>(`${apiUrls.collectionBase}/toys?namespace=${apiUrls.namespace}&locale=en_US`, accessToken),
       ]);
 
-      if (!profile || !mounts || !pets || !toys) {
+      if (!profile || !stats || !mounts || !pets || !toys) {
         continue;
       }
+
+      const extractedQuestCount = hasQuestColumn ? extractQuestCount(stats) : 0;
 
       await db
         .prepare(
@@ -436,6 +477,7 @@ export async function refreshRosterCache(
                level = ?,
                achievement_points = ?,
                ${hasQuestColumn ? 'quest_count = ?,' : ''}
+               ${hasQuestCheckedColumn ? 'quest_count_checked = ?,' : ''}
                mount_count = ?,
                pet_count = ?,
                toy_count = ?,
@@ -449,7 +491,8 @@ export async function refreshRosterCache(
           profile.race?.name ?? profile.playable_race?.name ?? 'Unknown',
           Number(profile.level ?? 0),
           Number(profile.achievement_points ?? 0),
-          ...(hasQuestColumn ? [extractQuestCount(stats)] : []),
+          ...(hasQuestColumn ? [extractedQuestCount] : []),
+          ...(hasQuestCheckedColumn ? [1] : []),
           Array.isArray(mounts.mounts) ? mounts.mounts.length : 0,
           Array.isArray(pets.pets) ? pets.pets.length : 0,
           Array.isArray(toys.toys) ? toys.toys.length : 0,
@@ -468,6 +511,74 @@ export async function refreshRosterCache(
       continue;
     }
   }
+
+  if (hasQuestCheckedColumn) {
+    const questBackfillCandidatesResult = await db
+      .prepare(
+        `SELECT
+            blizzard_char_id,
+            name,
+            realm_slug
+         FROM roster_members_cache
+         WHERE quest_count_checked = 0
+         ORDER BY rank ASC, name ASC`
+      )
+      .all<{
+        blizzard_char_id: number;
+        name: string;
+        realm_slug: string;
+      }>();
+
+    const questBackfillCandidates = ((questBackfillCandidatesResult.results ?? []) as Array<{
+      blizzard_char_id: number;
+      name: string;
+      realm_slug: string;
+    }>).slice(0, Math.max(1, options?.questBackfillBatchSize ?? QUEST_BACKFILL_BATCH_SIZE));
+
+    for (const candidate of questBackfillCandidates) {
+      try {
+        const candidateId = Number(candidate.blizzard_char_id);
+        const rosterMember = rosterById.get(candidateId);
+        const href = rosterMember?.character.key?.href;
+        if (!href) {
+          continue;
+        }
+
+        const apiUrls = buildCharacterApiUrls(href);
+        if (!apiUrls) {
+          console.error('Roster quest backfill skipped: invalid profile href', {
+            candidateId,
+            href,
+          });
+          continue;
+        }
+
+        const stats = await fetchBlizzardJsonWithRetry<any>(apiUrls.statisticsUrl, accessToken);
+        if (!stats) {
+          continue;
+        }
+
+        await db
+          .prepare(
+            `UPDATE roster_members_cache
+             SET quest_count = ?,
+                 quest_count_checked = 1,
+                 updated_at = ?
+             WHERE blizzard_char_id = ?`
+          )
+          .bind(extractQuestCount(stats), now, candidateId)
+          .run();
+      } catch (error) {
+        console.error('Roster quest backfill failed for candidate', {
+          candidateId: candidate.blizzard_char_id,
+          name: candidate.name,
+          realmSlug: candidate.realm_slug,
+          error,
+        });
+      }
+    }
+  }
+
   return getMeta(db);
 }
 
