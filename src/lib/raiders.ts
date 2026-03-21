@@ -1,16 +1,17 @@
 import type { D1Database } from '@cloudflare/workers-types';
 import { env } from 'cloudflare:workers';
 import { resolveRaidProgressTier } from '../data/raidProgressTargets';
+import { loadBlizzardClassIconMap, normalizeWowClassName } from './class-icons';
+import { getBlizzardAppAccessToken as getSharedBlizzardAppAccessToken } from './blizzard-app-token';
+import { fetchBlizzardJsonWithRetry } from './blizzard-fetch';
 
 const API_BASE = 'https://us.api.blizzard.com';
-const OAUTH_BASE = 'https://oauth.battle.net';
 const PROFILE_NAMESPACE = 'profile-us';
 const STATIC_NAMESPACE = 'static-us';
 const LOCALE = 'en_US';
 const REQUEST_CONCURRENCY = 3;
 const DETAILS_TTL_SECONDS = 12 * 60 * 60;
 const DETAIL_BATCH_SIZE = 6;
-const CLASS_ICON_CACHE_TTL_SECONDS = 6 * 60 * 60;
 
 const ENCHANTABLE_SLOTS = new Set([
   'BACK',
@@ -62,22 +63,6 @@ interface CachedRaiderRow {
 interface BlizzardSummaryResponse {
   equipped_item_level?: number;
   average_item_level?: number;
-}
-
-interface BlizzardClientCredentialsTokenResponse {
-  access_token?: string;
-  expires_in?: number;
-}
-
-interface BlizzardPlayableClassIndexResponse {
-  classes?: Array<{
-    id?: number;
-    name?: string;
-  }>;
-}
-
-interface BlizzardPlayableClassMediaResponse {
-  assets?: Array<{ key?: string; value?: string }>;
 }
 
 interface BlizzardMediaResponse {
@@ -176,20 +161,6 @@ export interface RaidersViewData {
   errorMessage: string;
 }
 
-let classIconCache:
-  | {
-      expiresAt: number;
-      byClassName: Map<string, string>;
-    }
-  | null = null;
-
-let appAccessTokenCache:
-  | {
-      accessToken: string;
-      expiresAt: number;
-    }
-  | null = null;
-
 function getDatabase(db?: D1Database): D1Database {
   return db ?? env.DB;
 }
@@ -198,136 +169,30 @@ function nowInSeconds(): number {
   return Math.floor(Date.now() / 1000);
 }
 
-function normalizeClassName(value: string): string {
-  return value.trim().toLowerCase();
-}
-
 function buildCharacterUrl(realmSlug: string, characterName: string, suffix = ''): string {
   const encodedName = encodeURIComponent(characterName.toLowerCase());
   const path = `/profile/wow/character/${realmSlug}/${encodedName}${suffix}`;
   return `${API_BASE}${path}?namespace=${PROFILE_NAMESPACE}&locale=${LOCALE}`;
 }
 
-const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
-
-async function fetchJsonWithRetry<T>(url: string, accessToken: string, attempts = 3): Promise<T | null> {
-  for (let attempt = 1; attempt <= attempts; attempt += 1) {
-    const response = await fetch(url, {
-      headers: { Authorization: `Bearer ${accessToken}` },
-    });
-
-    if (response.ok) {
-      return (await response.json()) as T;
-    }
-
-    const retryable = response.status === 429 || response.status >= 500;
-    if (!retryable || attempt === attempts) {
-      return null;
-    }
-
-    const retryAfterHeader = response.headers.get('retry-after');
-    const retryAfterSeconds = retryAfterHeader ? Number(retryAfterHeader) : 0;
-    const backoff = retryAfterSeconds > 0 ? retryAfterSeconds * 1000 : attempt * 500;
-    await delay(backoff);
-  }
-
-  return null;
-}
-
-async function fetchBlizzardClientAccessToken(): Promise<{ accessToken: string; expiresAt: number } | null> {
-  if (!env.BLIZZARD_CLIENT_ID || !env.BLIZZARD_CLIENT_SECRET) {
-    return null;
-  }
-
-  const credentials = btoa(`${env.BLIZZARD_CLIENT_ID}:${env.BLIZZARD_CLIENT_SECRET}`);
-  const response = await fetch(`${OAUTH_BASE}/token`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/x-www-form-urlencoded',
-      Authorization: `Basic ${credentials}`,
-    },
-    body: 'grant_type=client_credentials',
-  });
-
-  if (!response.ok) {
-    return null;
-  }
-
-  const data = (await response.json()) as BlizzardClientCredentialsTokenResponse;
-  if (!data.access_token) {
-    return null;
-  }
-
-  const ttlSeconds = Math.max(60, Number(data.expires_in ?? 0) || 0);
-  return {
-    accessToken: data.access_token,
-    expiresAt: nowInSeconds() + Math.max(60, ttlSeconds - 60),
-  };
-}
-
 async function getBlizzardAppAccessToken(): Promise<string | null> {
-  const now = nowInSeconds();
-  if (appAccessTokenCache && appAccessTokenCache.expiresAt > now) {
-    return appAccessTokenCache.accessToken;
-  }
-
-  const nextToken = await fetchBlizzardClientAccessToken();
-  if (!nextToken) {
-    appAccessTokenCache = null;
-    return null;
-  }
-
-  appAccessTokenCache = nextToken;
-  return nextToken.accessToken;
+  return getSharedBlizzardAppAccessToken(env.BLIZZARD_CLIENT_ID, env.BLIZZARD_CLIENT_SECRET);
 }
 
 async function ensureClassIconCache(): Promise<Map<string, string>> {
-  const now = nowInSeconds();
-  if (classIconCache && classIconCache.expiresAt > now) {
-    return classIconCache.byClassName;
-  }
-
   const accessToken = await getBlizzardAppAccessToken();
   if (!accessToken) {
-    classIconCache = {
-      expiresAt: now + 5 * 60,
-      byClassName: new Map<string, string>(),
-    };
-    return classIconCache.byClassName;
+    return new Map<string, string>();
   }
 
-  const indexUrl = `${API_BASE}/data/wow/playable-class/index?namespace=${STATIC_NAMESPACE}&locale=${LOCALE}`;
-  const playableClassIndex = await fetchJsonWithRetry<BlizzardPlayableClassIndexResponse>(indexUrl, accessToken);
-  const classes = playableClassIndex?.classes ?? [];
-
-  const mediaRows = await mapWithConcurrency(classes, REQUEST_CONCURRENCY, async (entry) => {
-    const classId = Number(entry.id ?? 0);
-    const className = (entry.name ?? '').trim();
-    if (!classId || !className) {
-      return { className, iconUrl: null as string | null };
-    }
-
-    const mediaUrl = `${API_BASE}/data/wow/media/playable-class/${classId}?namespace=${STATIC_NAMESPACE}&locale=${LOCALE}`;
-    const media = await fetchJsonWithRetry<BlizzardPlayableClassMediaResponse>(mediaUrl, accessToken);
-    const iconAsset = media?.assets?.find((asset) => (asset.key ?? '').toLowerCase() === 'icon');
-    return {
-      className,
-      iconUrl: iconAsset?.value ?? null,
-    };
+  return loadBlizzardClassIconMap({
+    accessToken,
+    apiBase: API_BASE,
+    staticNamespace: STATIC_NAMESPACE,
+    locale: LOCALE,
+    requestConcurrency: REQUEST_CONCURRENCY,
+    fetchJsonWithRetry: fetchBlizzardJsonWithRetry,
   });
-
-  const byClassName = new Map<string, string>();
-  for (const row of mediaRows) {
-    if (!row.className || !row.iconUrl) continue;
-    byClassName.set(normalizeClassName(row.className), row.iconUrl);
-  }
-
-  classIconCache = {
-    expiresAt: now + CLASS_ICON_CACHE_TTL_SECONDS,
-    byClassName,
-  };
-
-  return byClassName;
 }
 
 function normalizeTeamNames(value: string | null): string[] {
@@ -503,13 +368,13 @@ async function enrichRaider(row: RaiderSourceRow, now: number, raidProgressTarge
   }
 
   const [summary, equipment, mythicProfile, raidEncounters] = await Promise.all([
-    fetchJsonWithRetry<BlizzardSummaryResponse>(buildCharacterUrl(row.realm_slug, row.name), accessToken),
-    fetchJsonWithRetry<BlizzardEquipmentResponse>(buildCharacterUrl(row.realm_slug, row.name, '/equipment'), accessToken),
-    fetchJsonWithRetry<BlizzardMythicProfileResponse>(
+    fetchBlizzardJsonWithRetry<BlizzardSummaryResponse>(buildCharacterUrl(row.realm_slug, row.name), accessToken),
+    fetchBlizzardJsonWithRetry<BlizzardEquipmentResponse>(buildCharacterUrl(row.realm_slug, row.name, '/equipment'), accessToken),
+    fetchBlizzardJsonWithRetry<BlizzardMythicProfileResponse>(
       buildCharacterUrl(row.realm_slug, row.name, '/mythic-keystone-profile'),
       accessToken
     ),
-    fetchJsonWithRetry<BlizzardRaidEncountersResponse>(
+    fetchBlizzardJsonWithRetry<BlizzardRaidEncountersResponse>(
       buildCharacterUrl(row.realm_slug, row.name, '/encounters/raids'),
       accessToken
     ),
@@ -880,7 +745,7 @@ export async function getRaiderMedia(charId: number, dbInput?: D1Database): Prom
   }
 
   const url = buildCharacterUrl(row.realm_slug, row.name, '/character-media');
-  const media = await fetchJsonWithRetry<BlizzardMediaResponse>(url, accessToken);
+  const media = await fetchBlizzardJsonWithRetry<BlizzardMediaResponse>(url, accessToken);
   if (!media?.assets) return { portrait: null, fullBody: null };
 
   const find = (keys: string[]) => {
@@ -1005,7 +870,7 @@ export async function loadRaidersViewData(dbInput?: D1Database): Promise<Raiders
     const classIcons = await ensureClassIconCache();
     raiders = raiders.map((raider) => ({
       ...raider,
-      classIconUrl: classIcons.get(normalizeClassName(raider.className)) ?? null,
+      classIconUrl: classIcons.get(normalizeWowClassName(raider.className)) ?? null,
     }));
   } catch {
     // Non-fatal: class icons are decorative.

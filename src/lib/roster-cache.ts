@@ -1,5 +1,8 @@
 import type { D1Database } from '@cloudflare/workers-types';
 import { env } from 'cloudflare:workers';
+import { loadBlizzardClassIconMap, normalizeWowClassName } from './class-icons';
+import { getBlizzardAppAccessToken } from './blizzard-app-token';
+import { fetchBlizzardJsonWithRetry } from './blizzard-fetch';
 
 const GUILD_REALM_SLUG = 'illidan';
 const GUILD_NAME_SLUG = 'hidden-lodge';
@@ -8,6 +11,8 @@ const SUMMARY_TTL_SECONDS = 15 * 60;
 const DETAILS_TTL_SECONDS = 24 * 60 * 60;
 const DETAIL_BATCH_SIZE = 8;
 const API_BASE = `https://${REGION}.api.blizzard.com`;
+const STATIC_NAMESPACE = `static-${REGION}`;
+const LOCALE = 'en_US';
 
 interface GuildRosterMember {
   character: {
@@ -52,6 +57,7 @@ export interface CachedRosterMember {
   petCount: number;
   toyCount: number;
   detailsSyncedAt: number | null;
+  classIconUrl: string | null;
 }
 
 export interface RosterCacheStatus {
@@ -101,48 +107,12 @@ async function fetchAccessToken(): Promise<string> {
     throw new Error('Blizzard API credentials are not configured.');
   }
 
-  const credentials = btoa(`${env.BLIZZARD_CLIENT_ID}:${env.BLIZZARD_CLIENT_SECRET}`);
-  const response = await fetch('https://oauth.battle.net/token', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/x-www-form-urlencoded',
-      Authorization: `Basic ${credentials}`,
-    },
-    body: 'grant_type=client_credentials',
-  });
-
-  if (!response.ok) {
-    throw new Error(`Failed to obtain Blizzard access token (HTTP ${response.status})`);
+  const accessToken = await getBlizzardAppAccessToken(env.BLIZZARD_CLIENT_ID, env.BLIZZARD_CLIENT_SECRET);
+  if (!accessToken) {
+    throw new Error('Failed to obtain Blizzard access token.');
   }
 
-  const data = (await response.json()) as { access_token: string };
-  return data.access_token;
-}
-
-const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
-
-async function fetchJsonWithRetry(url: string, accessToken: string, attempts = 3): Promise<any | null> {
-  for (let attempt = 1; attempt <= attempts; attempt += 1) {
-    const response = await fetch(url, {
-      headers: { Authorization: `Bearer ${accessToken}` },
-    });
-
-    if (response.ok) {
-      return await response.json();
-    }
-
-    const retryable = response.status === 429 || response.status >= 500;
-    if (!retryable || attempt === attempts) {
-      return null;
-    }
-
-    const retryAfterHeader = response.headers.get('retry-after');
-    const retryAfterSeconds = retryAfterHeader ? Number(retryAfterHeader) : 0;
-    const backoff = retryAfterSeconds > 0 ? retryAfterSeconds * 1000 : attempt * 500;
-    await delay(backoff);
-  }
-
-  return null;
+  return accessToken;
 }
 
 async function fetchGuildRoster(accessToken: string): Promise<GuildRosterMember[]> {
@@ -229,6 +199,7 @@ async function listCachedMembers(db: D1Database): Promise<CachedRosterMember[]> 
     petCount: row.pet_count,
     toyCount: row.toy_count,
     detailsSyncedAt: row.details_synced_at,
+    classIconUrl: null,
   }));
 }
 
@@ -357,10 +328,10 @@ export async function refreshRosterCache(
       const collectionBase = `${profileBase}/collections`;
 
       const [profile, mounts, pets, toys] = await Promise.all([
-        fetchJsonWithRetry(profileUrl, accessToken),
-        fetchJsonWithRetry(`${collectionBase}/mounts?namespace=${namespace}&locale=en_US`, accessToken),
-        fetchJsonWithRetry(`${collectionBase}/pets?namespace=${namespace}&locale=en_US`, accessToken),
-        fetchJsonWithRetry(`${collectionBase}/toys?namespace=${namespace}&locale=en_US`, accessToken),
+        fetchBlizzardJsonWithRetry(profileUrl, accessToken),
+        fetchBlizzardJsonWithRetry(`${collectionBase}/mounts?namespace=${namespace}&locale=en_US`, accessToken),
+        fetchBlizzardJsonWithRetry(`${collectionBase}/pets?namespace=${namespace}&locale=en_US`, accessToken),
+        fetchBlizzardJsonWithRetry(`${collectionBase}/toys?namespace=${namespace}&locale=en_US`, accessToken),
       ]);
 
       if (!profile || !mounts || !pets || !toys) {
@@ -433,6 +404,24 @@ export async function loadRosterWithCache(
         console.error('Roster cache refresh failed:', error);
       }
     }
+  }
+
+  try {
+    const accessToken = await fetchAccessToken();
+    const classIcons = await loadBlizzardClassIconMap({
+      accessToken,
+      apiBase: API_BASE,
+      staticNamespace: STATIC_NAMESPACE,
+      locale: LOCALE,
+      fetchJsonWithRetry: fetchBlizzardJsonWithRetry,
+    });
+    members = members.map((member) => ({
+      ...member,
+      classIconUrl: classIcons.get(normalizeWowClassName(member.className)) ?? null,
+    }));
+  } catch (error) {
+    // Non-fatal: class icons are decorative.
+    console.error('Roster class icon load failed:', error);
   }
 
   return { members, status, errorMessage };

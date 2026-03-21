@@ -60,6 +60,27 @@ function rankLabel(rank: number): string {
   return RANK_NAMES[rank] ?? String(rank);
 }
 
+function classAbbrev(className: string): string {
+  const normalized = className.trim().toLowerCase();
+  const map: Record<string, string> = {
+    'death knight': 'DK',
+    'demon hunter': 'DH',
+    druid: 'DR',
+    evoker: 'EV',
+    hunter: 'HU',
+    mage: 'MA',
+    monk: 'MO',
+    paladin: 'PA',
+    priest: 'PR',
+    rogue: 'RO',
+    shaman: 'SH',
+    warlock: 'WL',
+    warrior: 'WR',
+  };
+
+  return map[normalized] ?? className.slice(0, 2).toUpperCase();
+}
+
 function topBy(field: keyof Pick<EnrichedMember, 'achievementPoints' | 'mountCount' | 'petCount' | 'toyCount'>) {
   return sortedMembers.reduce(
     (best, member) =>
@@ -190,6 +211,7 @@ const spotlights = [
               {
                 sortedMembers.map((member) => {
                   const classColor = CLASS_COLORS[member.className] ?? '#d8e2e8';
+                  const isUnknownClass = member.className.trim().toLowerCase() === 'unknown';
                   return (
                     <tr
                       data-name={member.name.toLowerCase()}
@@ -202,7 +224,31 @@ const spotlights = [
                       data-toy-count={String(member.toyCount)}
                     >
                       <td><span class="name-pill" style={`--class-color: ${classColor}`}>{member.name}</span></td>
-                      <td>{member.className}</td>
+                      <td>
+                        {isUnknownClass ? (
+                          <span class="class-icon-wrap" aria-hidden="true"></span>
+                        ) : (
+                          <span class="class-icon-wrap" title={member.className} aria-label={member.className}>
+                            {member.classIconUrl ? (
+                              <img
+                                src={member.classIconUrl}
+                                alt={member.className}
+                                loading="lazy"
+                                decoding="async"
+                                class="class-icon-img"
+                              />
+                            ) : (
+                              <span
+                                class="class-icon"
+                                style={`--class-color: ${classColor}`}
+                                aria-hidden="true"
+                              >
+                                {classAbbrev(member.className)}
+                              </span>
+                            )}
+                          </span>
+                        )}
+                      </td>
                       <td>{member.level}</td>
                       <td>{rankLabel(member.rank)}</td>
                       <td>{member.achievementPoints > 0 ? member.achievementPoints.toLocaleString() : '—'}</td>
@@ -629,6 +675,43 @@ const spotlights = [
   .name-pill {
     color: var(--class-color, #d8e2e8);
     font-weight: 700;
+  }
+
+  .class-icon {
+    display: inline-flex;
+    justify-content: center;
+    align-items: center;
+    min-width: 2rem;
+    height: 1.4rem;
+    padding: 0 0.34rem;
+    border-radius: 999px;
+    border: 1px solid color-mix(in srgb, var(--class-color, #9fb0bf) 55%, transparent);
+    background: color-mix(in srgb, var(--class-color, #9fb0bf) 15%, rgba(7, 14, 22, 0.9));
+    color: var(--class-color, #d8e2e8);
+    font-size: 0.66rem;
+    font-weight: 800;
+    letter-spacing: 0.03em;
+    text-transform: uppercase;
+    line-height: 1;
+    vertical-align: middle;
+  }
+
+  .class-icon-wrap {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 1.4rem;
+    height: 1.4rem;
+  }
+
+  .class-icon-img {
+    width: 1.3rem;
+    height: 1.3rem;
+    border-radius: 50%;
+    border: 1px solid rgba(214, 176, 106, 0.35);
+    background: rgba(4, 10, 16, 0.85);
+    object-fit: cover;
+    display: block;
   }
 
 
