@@ -172,11 +172,14 @@ function formatPublishedLabel(startTimeMs: number | null | undefined): string | 
 async function loadRecentGuildLogs(limit = 5): Promise<RecentLogsResult> {
   const sanitizedLimit = Math.max(1, limit);
   const config = getWclAuthConfig();
+  let metadataNotice = 'Add WCL_CLIENT_ID and WCL_CLIENT_SECRET to show uploader and publish time.';
 
   if (config) {
     try {
       const accessToken = await getWclAccessToken(config);
-      if (accessToken) {
+      if (!accessToken) {
+        metadataNotice = 'Warcraft Logs authentication failed. Verify WCL_CLIENT_ID/WCL_CLIENT_SECRET in Cloudflare production secrets.';
+      } else {
         const response = await fetch(WCL_GRAPHQL_URL, {
           method: 'POST',
           headers: {
@@ -207,29 +210,37 @@ async function loadRecentGuildLogs(limit = 5): Promise<RecentLogsResult> {
           }),
         });
 
-        if (response.ok) {
+        if (!response.ok) {
+          metadataNotice = `Warcraft Logs API request failed (${response.status}).`;
+        } else {
           const payload = (await response.json()) as WclReportsResponse;
-          const rows = payload.data?.reportData?.reports?.data ?? [];
-          const logs = rows
-            .map((row) => {
-              const code = row.code?.trim() ?? '';
-              if (!code) return null;
-              return {
-                title: row.title?.trim() || 'Untitled Report',
-                url: `https://www.warcraftlogs.com/reports/${code}`,
-                owner: row.owner?.name?.trim() || null,
-                publishedLabel: formatPublishedLabel(row.startTime),
-              } as RecentGuildLog;
-            })
-            .filter((row): row is RecentGuildLog => row !== null);
+          if ((payload.errors?.length ?? 0) > 0) {
+            metadataNotice = 'Warcraft Logs API returned an error for guild reports metadata.';
+          } else {
+            const rows = payload.data?.reportData?.reports?.data ?? [];
+            const logs = rows
+              .map((row) => {
+                const code = row.code?.trim() ?? '';
+                if (!code) return null;
+                return {
+                  title: row.title?.trim() || 'Untitled Report',
+                  url: `https://www.warcraftlogs.com/reports/${code}`,
+                  owner: row.owner?.name?.trim() || null,
+                  publishedLabel: formatPublishedLabel(row.startTime),
+                } as RecentGuildLog;
+              })
+              .filter((row): row is RecentGuildLog => row !== null);
 
-          if (logs.length > 0) {
-            return { logs, hasMetadata: true, metadataNotice: null };
+            if (logs.length > 0) {
+              return { logs, hasMetadata: true, metadataNotice: null };
+            }
+
+            metadataNotice = 'Warcraft Logs API returned no reports for this guild.';
           }
         }
       }
     } catch {
-      // Fall back to public list parsing below.
+      metadataNotice = 'Warcraft Logs metadata lookup failed unexpectedly.';
     }
   }
 
@@ -257,7 +268,7 @@ async function loadRecentGuildLogs(limit = 5): Promise<RecentLogsResult> {
     return {
       logs: reports,
       hasMetadata: false,
-      metadataNotice: 'Add WCL_CLIENT_ID and WCL_CLIENT_SECRET to show uploader and publish time.',
+      metadataNotice,
     };
   } catch {
     return {
