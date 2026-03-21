@@ -1046,17 +1046,19 @@ export async function loadRaidersViewData(dbInput?: D1Database): Promise<Raiders
     }
   }
 
+  let classIcons = new Map<string, string>();
   try {
-    const classIcons = await ensureClassIconCache();
-    raiders = raiders.map((raider) => ({
-      ...raider,
-      classIconUrl:
-        classIcons.get(normalizeWowClassName(raider.className)) ??
-        fallbackClassIconUrl(raider.className),
-    }));
+    classIcons = await ensureClassIconCache();
   } catch {
-    // Non-fatal: class icons are decorative.
+    // Non-fatal: if Blizzard media lookup fails, we still apply static fallback class icons.
   }
+
+  raiders = raiders.map((raider) => ({
+    ...raider,
+    classIconUrl:
+      classIcons.get(normalizeWowClassName(raider.className)) ??
+      fallbackClassIconUrl(raider.className),
+  }));
 
   return {
     raiders,
