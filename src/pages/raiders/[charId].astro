@@ -44,6 +44,22 @@ function formatScore(filled: number | null, total: number | null): string {
   return `${Math.round((filled / total) * 100)}% (${filled}/${total})`;
 }
 
+function crestColor(label: string): string {
+  if (label === 'Myth') return '#ff8000';
+  if (label === 'Hero') return '#a335ee';
+  if (label === 'Champion') return '#0070dd';
+  if (label === 'Veteran') return '#1eff00';
+  return '#ffffff';
+}
+
+const crestCards = [
+  { label: 'Adventurer', value: raider.adventurerCrests },
+  { label: 'Veteran', value: raider.veteranCrests },
+  { label: 'Champion', value: raider.championCrests },
+  { label: 'Hero', value: raider.heroCrests },
+  { label: 'Myth', value: raider.mythCrests },
+].filter((entry) => entry.value !== null);
+
 interface RaidProgressMatrixRow {
   mode: 'L' | 'N' | 'H' | 'M';
   cells: string[];
@@ -202,6 +218,14 @@ const raiderIoUrl = raider.realmSlug
 
         <div class="stat-card">
           <div class="stat-label">
+            <Icon name="lucide:arrow-up-circle" class="stat-icon" aria-hidden="true" />
+            Missing Upgrades
+          </div>
+          <div class="stat-value">{raider.totalUpgradesMissing ?? '—'}</div>
+        </div>
+
+        <div class="stat-card">
+          <div class="stat-label">
             <Icon name="lucide:gem" class="stat-icon" aria-hidden="true" />
             Gems
           </div>
@@ -243,6 +267,25 @@ const raiderIoUrl = raider.realmSlug
           </div>
         ) : (
           <p class="raid-progress-empty">No tracked raid progress available yet.</p>
+        )}
+      </section>
+
+      <section class="raid-progress-panel panel" aria-label="Crests earned">
+        <h2 class="raid-progress-title">
+          <Icon name="lucide:coins" class="raid-progress-icon" aria-hidden="true" />
+          Crests Earned
+        </h2>
+        {crestCards.length > 0 ? (
+          <div class="crest-grid">
+            {crestCards.map((crest) => (
+              <div class="crest-cell">
+                <span class="crest-name" style={`color: ${crestColor(crest.label)}`}>{crest.label}</span>
+                <strong class="crest-value" style={`color: ${crestColor(crest.label)}`}>{crest.value}</strong>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <p class="raid-progress-empty">No crest data available yet.</p>
         )}
       </section>
 
@@ -588,6 +631,35 @@ const raiderIoUrl = raider.realmSlug
     margin: 0;
     color: #b0c4d0;
     font-size: 0.95rem;
+  }
+
+  .crest-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(8.5rem, 1fr));
+    gap: 0.5rem;
+  }
+
+  .crest-cell {
+    border: 1px solid rgba(214, 176, 106, 0.22);
+    border-radius: 0.55rem;
+    padding: 0.65rem 0.75rem;
+    background: rgba(214, 176, 106, 0.08);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+  }
+
+  .crest-name {
+    color: #d8e2e8;
+    font-size: 0.88rem;
+    font-weight: 600;
+  }
+
+  .crest-value {
+    color: #f3ddb0;
+    font-family: 'Cinzel', serif;
+    font-size: 1rem;
   }
 
   /* ── Sync info ── */

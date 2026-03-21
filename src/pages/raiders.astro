@@ -49,6 +49,68 @@ function formatLastChecked(epochSeconds: number | null): string {
   return new Date(epochSeconds * 1000).toLocaleString();
 }
 
+function crestSortValue(raider: (typeof sortedRaiders)[number]): number {
+  const adventurer = Math.max(0, raider.adventurerCrests ?? 0);
+  const veteran = Math.max(0, raider.veteranCrests ?? 0);
+  const champion = Math.max(0, raider.championCrests ?? 0);
+  const hero = Math.max(0, raider.heroCrests ?? 0);
+  const myth = Math.max(0, raider.mythCrests ?? 0);
+
+  const highestTier =
+    myth > 0 ? 5 :
+    hero > 0 ? 4 :
+    champion > 0 ? 3 :
+    veteran > 0 ? 2 :
+    adventurer > 0 ? 1 :
+    0;
+
+  // Sort by best tier first, then use per-tier counts as deterministic tie breakers.
+  return (
+    highestTier * 1_000_000 +
+    myth * 10_000 +
+    hero * 1_000 +
+    champion * 100 +
+    veteran * 10 +
+    adventurer
+  );
+}
+
+function formatCrestSummary(raider: (typeof sortedRaiders)[number]): string {
+  const parts = [
+    ['A', raider.adventurerCrests],
+    ['V', raider.veteranCrests],
+    ['C', raider.championCrests],
+    ['H', raider.heroCrests],
+    ['M', raider.mythCrests],
+  ].filter(([, value]) => value !== null) as Array<[string, number]>;
+
+  if (parts.length === 0) return '—';
+
+  return parts.map(([label, value]) => `${label}:${value}`).join(' ');
+}
+
+function crestColor(label: string): string {
+  if (label === 'M') return '#ff8000';
+  if (label === 'H') return '#a335ee';
+  if (label === 'C') return '#0070dd';
+  if (label === 'V') return '#1eff00';
+  return '#ffffff';
+}
+
+function crestSummaryParts(raider: (typeof sortedRaiders)[number]): Array<{ label: string; value: number }> {
+  const parts: Array<{ label: string; value: number | null }> = [
+    { label: 'A', value: raider.adventurerCrests },
+    { label: 'V', value: raider.veteranCrests },
+    { label: 'C', value: raider.championCrests },
+    { label: 'H', value: raider.heroCrests },
+    { label: 'M', value: raider.mythCrests },
+  ];
+
+  return parts
+    .filter((part) => part.value !== null)
+    .map((part) => ({ label: part.label, value: part.value as number }));
+}
+
 function classAbbrev(className: string): string {
   const normalized = className.trim().toLowerCase();
   const map: Record<string, string> = {
@@ -206,6 +268,8 @@ const spotlightCards = [
             <th><button class="sort-btn" type="button" data-sort-key="equippedItemLevel">iLvl</button></th>
             <th><button class="sort-btn" type="button" data-sort-key="mythicScore">M+ Score</button></th>
             <th><button class="sort-btn" type="button" data-sort-key="tierPiecesEquipped">Tier</button></th>
+            <th><button class="sort-btn" type="button" data-sort-key="crestSort">Crests Earned</button></th>
+            <th><button class="sort-btn" type="button" data-sort-key="totalUpgradesMissing">Missing Upgrades</button></th>
             <th>Gems</th>
             <th>Enchants</th>
             <th><button class="sort-btn" type="button" data-sort-key="authState">Status</button></th>
@@ -227,6 +291,8 @@ const spotlightCards = [
                 data-raid-progress-kills={String(raider.raidProgressKills ?? -1)}
                 data-mythic-score={String(raider.mythicScore ?? -1)}
                 data-tier-pieces-equipped={String(raider.tierPiecesEquipped ?? -1)}
+                data-crest-sort={String(crestSortValue(raider))}
+                data-total-upgrades-missing={String(raider.totalUpgradesMissing ?? -1)}
                 data-last-checked-at={String(raider.lastCheckedAt ?? 0)}
               >
                 <td><a href={`/raiders/${raider.blizzardCharId}`} class="name-link"><span class="name-pill" style={`--class-color: ${color}`}>{raider.name}</span></a></td>
@@ -264,6 +330,20 @@ const spotlightCards = [
                 </td>
                 <td>{raider.mythicScore ? raider.mythicScore.toLocaleString(undefined, { maximumFractionDigits: 0 }) : '—'}</td>
                 <td>{raider.tierPiecesEquipped ?? '—'}</td>
+                <td>
+                  <span class="crest-summary" title={`Adventurer ${raider.adventurerCrests ?? '—'}, Veteran ${raider.veteranCrests ?? '—'}, Champion ${raider.championCrests ?? '—'}, Hero ${raider.heroCrests ?? '—'}, Myth ${raider.mythCrests ?? '—'}`}>
+                    {crestSummaryParts(raider).length > 0 ? (
+                      crestSummaryParts(raider).map((part) => (
+                        <span class="crest-token" style={`color: ${crestColor(part.label)}`}>
+                          {part.label}:{part.value}
+                        </span>
+                      ))
+                    ) : (
+                      '—'
+                    )}
+                  </span>
+                </td>
+                <td>{raider.totalUpgradesMissing ?? '—'}</td>
                 <td><span class="score-val" style={`color: ${scoreColor(raider.socketedGems, raider.totalSockets)}`}>{formatScore(raider.socketedGems, raider.totalSockets)}</span></td>
                 <td><span class="score-val" style={`color: ${scoreColor(raider.enchantedSlots, raider.enchantableSlots)}`}>{formatScore(raider.enchantedSlots, raider.enchantableSlots)}</span></td>
                 <td>
@@ -297,7 +377,7 @@ const spotlightCards = [
   const tableBody = table?.querySelector('tbody');
   const sortButtons = [...document.querySelectorAll<HTMLButtonElement>('.sort-btn')];
 
-  let sortKey = 'mythicScore';
+  let sortKey = 'equippedItemLevel';
   let sortDirection = 'desc';
 
   const compareText = (a: string, b: string) => a.localeCompare(b, undefined, { sensitivity: 'base' });
@@ -325,7 +405,7 @@ const spotlightCards = [
       return matchesSearch && matchesClass && matchesTeam && matchesAuth;
     });
 
-    const numericKeys = new Set(['equippedItemLevel', 'raidProgressKills', 'mythicScore', 'tierPiecesEquipped', 'lastCheckedAt']);
+    const numericKeys = new Set(['equippedItemLevel', 'raidProgressKills', 'mythicScore', 'tierPiecesEquipped', 'crestSort', 'totalUpgradesMissing', 'lastCheckedAt']);
 
     visibleRows.sort((rowA, rowB) => {
       const toAttr = (key: string) => key.replace(/[A-Z]/g, (char) => `-${char.toLowerCase()}`);
@@ -751,6 +831,18 @@ const spotlightCards = [
 
   .score-val {
     font-weight: 600;
+  }
+
+  .crest-summary {
+    display: inline-flex;
+    flex-wrap: wrap;
+    gap: 0.35rem;
+    font-size: 0.88rem;
+    white-space: nowrap;
+  }
+
+  .crest-token {
+    font-weight: 700;
   }
 
   .ilvl-cell {

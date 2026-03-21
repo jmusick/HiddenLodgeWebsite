@@ -6,6 +6,15 @@ Official guild website for The Hidden Lodge, a semi-hardcore AOTC/Mythic raiding
 
 The site combines public guild information, Blizzard-authenticated member profiles, cached roster and raider analytics views, curated resource links, a lore archive, and a guild officer admin area for day-to-day operations.
 
+## Release Notes
+
+### 1.4.0
+
+- Added crest tracking to Raiders metrics (Adventurer, Veteran, Champion, Hero, Myth) sourced from Blizzard character statistics.
+- Added missing-upgrades tracking to Raiders metrics as a single total count from equipped-item upgrade-track bonus IDs.
+- Expanded Raiders table and detail views to surface crest and missing-upgrades metrics.
+- Added DB migrations for the new Raiders cache fields: `0019_raider_crests.sql` and `0020_missing_upgrades.sql`.
+
 ## Quick Start
 
 Run the normal dev command to start both the Astro site and the local cron refresher together:
@@ -59,10 +68,12 @@ http://localhost:4321
 	- class/status/search filters and sortable columns
 	- Blizzard class icons in the class column
 	- color-coded equipped iLvl values using WoW quality colors
+	- crest totals by track and total missing upgrades
 	- direct links to per-character raider detail pages
 - Raider detail profile page (`/raiders/:charId`) with:
 	- character portrait and full-body render
-	- status, team tags, and equipment/score/tier/gems/enchants summary
+	- status, team tags, and equipment/score/tier/gems/enchants/missing-upgrades summary
+	- crest-earned panel by track
 	- full raid-progress matrix (difficulty rows and raid-name columns)
 - Authenticated profile page where users can:
 	- log in with Battle.net
@@ -260,7 +271,7 @@ These handlers remain in the codebase as retired stubs and currently return HTTP
 | `sessions` | Session IDs and expiration timestamps |
 | `characters` | User-owned WoW characters and selected main tracking |
 | `roster_members_cache` | Cached Blizzard guild roster data plus collection stats |
-| `raider_metrics_cache` | Cached team-scoped raider metrics including iLvl, M+, tier, gems/enchants, and raid progress |
+| `raider_metrics_cache` | Cached team-scoped raider metrics including iLvl, M+, tier, gems/enchants, crest totals, missing upgrades, and raid progress |
 | `primary_raid_schedules` | Recurring primary raid schedule definitions |
 | `ad_hoc_raids` | One-off officer-created raids |
 | `raid_signups` | Member signups mapped to primary occurrences and ad-hoc raids |
@@ -278,6 +289,7 @@ These handlers remain in the codebase as retired stubs and currently return HTTP
 - The roster page can render from cached data while the cache warms additional members in the background
 - Raiders cache separates summary sync and detail sync to avoid heavy Blizzard fan-out on every request
 - Raiders detail/media calls use app-level client-credentials access so details are not blocked on per-user Battle.net login
+- Raiders detail sync now stores crest totals and total missing upgrades for roster-team members
 - Raid progress is stored as structured JSON labels for reliable table/profile rendering
 
 ## Project Structure
@@ -301,7 +313,10 @@ These handlers remain in the codebase as retired stubs and currently return HTTP
 │   ├── 0014_raid_progress.sql
 │   ├── 0015_raid_progress_target.sql
 │   ├── 0016_site_settings.sql
-│   └── 0017_quest_count.sql
+│   ├── 0017_quest_count.sql
+│   ├── 0018_quest_count_backfill.sql
+│   ├── 0019_raider_crests.sql
+│   └── 0020_missing_upgrades.sql
 ├── public/
 │   ├── _routes.json
 │   └── images/

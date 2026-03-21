@@ -13,6 +13,28 @@ const REQUEST_CONCURRENCY = 3;
 const DETAILS_TTL_SECONDS = 12 * 60 * 60;
 const DETAIL_BATCH_SIZE = 6;
 
+const CREST_STAT_IDS = {
+  adventurer: 62292,
+  veteran: 62293,
+  champion: 62294,
+  hero: 62295,
+  myth: 62296,
+} as const;
+
+const UPGRADE_TRACK_IDS = {
+  mythic: [12801, 12802, 12803, 12804, 12805, 12806],
+  heroic: [12793, 12794, 12795, 12796, 12797, 12798],
+  normal: [12785, 12786, 12787, 12788, 12789, 12790],
+  raidFinder: [12777, 12778, 12779, 12780, 12781, 12782],
+  worldAdvanced: [12769, 12770, 12771, 12772, 12773, 12774],
+} as const;
+
+const UPGRADE_STEPS_BY_BONUS_ID = new Map<number, { current: number; max: number }>(
+  Object.values(UPGRADE_TRACK_IDS).flatMap((ids) =>
+    ids.map((id, index) => [id, { current: index + 1, max: ids.length }] as const)
+  )
+);
+
 const ENCHANTABLE_SLOTS = new Set([
   'BACK',
   'CHEST',
@@ -53,6 +75,12 @@ interface CachedRaiderRow {
   total_sockets: number | null;
   enchanted_slots: number | null;
   enchantable_slots: number | null;
+  adventurer_crests: number | null;
+  veteran_crests: number | null;
+  champion_crests: number | null;
+  hero_crests: number | null;
+  myth_crests: number | null;
+  total_upgrades_missing: number | null;
   raid_progress_raid_name: string | null;
   raid_progress_label: string | null;
   raid_progress_kills: number | null;
@@ -73,6 +101,20 @@ interface BlizzardMythicProfileResponse {
   current_mythic_rating?: {
     rating?: number;
   };
+}
+
+interface BlizzardAchievementStatisticsResponse {
+  categories?: BlizzardAchievementStatisticsCategory[];
+}
+
+interface BlizzardAchievementStatisticsCategory {
+  name?: string;
+  statistics?: BlizzardAchievementStatistic[];
+}
+
+interface BlizzardAchievementStatistic {
+  id?: number;
+  quantity?: number;
 }
 
 interface BlizzardRaidEncountersResponse {
@@ -118,6 +160,7 @@ interface BlizzardEquippedItem {
     display_string?: string;
   }>;
   enchantments?: Array<unknown>;
+  bonus_list?: number[];
   item_set?: unknown;
   set?: unknown;
 }
@@ -140,6 +183,12 @@ export interface RaiderRecord {
   totalSockets: number | null;
   enchantedSlots: number | null;
   enchantableSlots: number | null;
+  adventurerCrests: number | null;
+  veteranCrests: number | null;
+  championCrests: number | null;
+  heroCrests: number | null;
+  mythCrests: number | null;
+  totalUpgradesMissing: number | null;
   raidProgressRaidName: string | null;
   raidProgressLabel: string | null;
   raidProgressKills: number | null;
@@ -202,6 +251,26 @@ function normalizeTeamNames(value: string | null): string[] {
   );
 }
 
+function extractCrestCounts(stats: BlizzardAchievementStatisticsResponse | null): {
+  adventurerCrests: number | null;
+  veteranCrests: number | null;
+  championCrests: number | null;
+  heroCrests: number | null;
+  mythCrests: number | null;
+} {
+  const characterStats = stats?.categories?.find((category) => category.name === 'Character')?.statistics ?? [];
+  const byId = new Map(characterStats.map((stat) => [Number(stat.id ?? -1), Number(stat.quantity ?? 0)]));
+  const read = (id: number) => (byId.has(id) ? byId.get(id) ?? 0 : null);
+
+  return {
+    adventurerCrests: read(CREST_STAT_IDS.adventurer),
+    veteranCrests: read(CREST_STAT_IDS.veteran),
+    championCrests: read(CREST_STAT_IDS.champion),
+    heroCrests: read(CREST_STAT_IDS.hero),
+    mythCrests: read(CREST_STAT_IDS.myth),
+  };
+}
+
 function countTierPieces(items: BlizzardEquippedItem[]): number {
   return items.reduce((count, item) => (item.item_set || item.set ? count + 1 : count), 0);
 }
@@ -237,6 +306,22 @@ function countEnchants(items: BlizzardEquippedItem[]): { filled: number; total: 
   }
 
   return { filled, total };
+}
+
+function computeTotalUpgradesMissing(items: BlizzardEquippedItem[]): number {
+  let totalMissing = 0;
+
+  for (const item of items) {
+    const bonusIds = item.bonus_list ?? [];
+    const matchedUpgradeStep = bonusIds
+      .map((id) => UPGRADE_STEPS_BY_BONUS_ID.get(id))
+      .find((entry): entry is { current: number; max: number } => Boolean(entry));
+
+    if (!matchedUpgradeStep) continue;
+    totalMissing += Math.max(0, matchedUpgradeStep.max - matchedUpgradeStep.current);
+  }
+
+  return totalMissing;
 }
 
 function normalizeRaidName(value: string | null | undefined): string {
@@ -357,6 +442,12 @@ async function enrichRaider(row: RaiderSourceRow, now: number, raidProgressTarge
     totalSockets: null,
     enchantedSlots: null,
     enchantableSlots: null,
+    adventurerCrests: null,
+    veteranCrests: null,
+    championCrests: null,
+    heroCrests: null,
+    mythCrests: null,
+    totalUpgradesMissing: null,
     raidProgressRaidName: null,
     raidProgressLabel: null,
     raidProgressKills: null,
@@ -368,11 +459,15 @@ async function enrichRaider(row: RaiderSourceRow, now: number, raidProgressTarge
     return { ...baseRecord, authState: 'unavailable' };
   }
 
-  const [summary, equipment, mythicProfile, raidEncounters] = await Promise.all([
+  const [summary, equipment, mythicProfile, achievementStatistics, raidEncounters] = await Promise.all([
     fetchBlizzardJsonWithRetry<BlizzardSummaryResponse>(buildCharacterUrl(row.realm_slug, row.name), accessToken),
     fetchBlizzardJsonWithRetry<BlizzardEquipmentResponse>(buildCharacterUrl(row.realm_slug, row.name, '/equipment'), accessToken),
     fetchBlizzardJsonWithRetry<BlizzardMythicProfileResponse>(
       buildCharacterUrl(row.realm_slug, row.name, '/mythic-keystone-profile'),
+      accessToken
+    ),
+    fetchBlizzardJsonWithRetry<BlizzardAchievementStatisticsResponse>(
+      buildCharacterUrl(row.realm_slug, row.name, '/achievements/statistics'),
       accessToken
     ),
     fetchBlizzardJsonWithRetry<BlizzardRaidEncountersResponse>(
@@ -388,7 +483,9 @@ async function enrichRaider(row: RaiderSourceRow, now: number, raidProgressTarge
   const equippedItems = equipment.equipped_items ?? [];
   const socketCounts = countSockets(equippedItems);
   const enchantCounts = countEnchants(equippedItems);
+  const crestCounts = extractCrestCounts(achievementStatistics);
   const raidProgress = extractRaidProgress(raidEncounters, raidProgressTarget);
+  const totalUpgradesMissing = computeTotalUpgradesMissing(equippedItems);
 
   return {
     ...baseRecord,
@@ -402,6 +499,12 @@ async function enrichRaider(row: RaiderSourceRow, now: number, raidProgressTarge
     totalSockets: socketCounts.total,
     enchantedSlots: enchantCounts.filled,
     enchantableSlots: enchantCounts.total,
+    adventurerCrests: crestCounts.adventurerCrests,
+    veteranCrests: crestCounts.veteranCrests,
+    championCrests: crestCounts.championCrests,
+    heroCrests: crestCounts.heroCrests,
+    mythCrests: crestCounts.mythCrests,
+    totalUpgradesMissing,
     raidProgressRaidName: raidProgress.raidName,
     raidProgressLabel: raidProgress.label,
     raidProgressKills: raidProgress.kills,
@@ -474,12 +577,18 @@ async function listCachedRaiders(db: D1Database): Promise<RaiderRecord[]> {
           socketed_gems,
           total_sockets,
           enchanted_slots,
-            enchantable_slots,
+          enchantable_slots,
+          adventurer_crests,
+          veteran_crests,
+          champion_crests,
+          hero_crests,
+          myth_crests,
+          total_upgrades_missing,
           raid_progress_raid_name,
-            raid_progress_label,
-            raid_progress_kills,
-            raid_progress_total,
-            details_synced_at
+          raid_progress_label,
+          raid_progress_kills,
+          raid_progress_total,
+          details_synced_at
        FROM raider_metrics_cache
        ORDER BY class_name ASC, name ASC`
     )
@@ -503,6 +612,12 @@ async function listCachedRaiders(db: D1Database): Promise<RaiderRecord[]> {
     totalSockets: row.total_sockets,
     enchantedSlots: row.enchanted_slots,
     enchantableSlots: row.enchantable_slots,
+    adventurerCrests: row.adventurer_crests,
+    veteranCrests: row.veteran_crests,
+    championCrests: row.champion_crests,
+    heroCrests: row.hero_crests,
+    mythCrests: row.myth_crests,
+    totalUpgradesMissing: row.total_upgrades_missing,
     raidProgressRaidName: row.raid_progress_raid_name,
     raidProgressLabel: row.raid_progress_label,
     raidProgressKills: row.raid_progress_kills,
@@ -606,6 +721,12 @@ async function listDetailCandidates(
        FROM raider_metrics_cache rmc
        WHERE (
            rmc.raid_progress_label IS NULL
+           OR rmc.adventurer_crests IS NULL
+           OR rmc.veteran_crests IS NULL
+           OR rmc.champion_crests IS NULL
+           OR rmc.hero_crests IS NULL
+           OR rmc.myth_crests IS NULL
+           OR rmc.total_upgrades_missing IS NULL
            OR (
                ? <> ''
                AND (rmc.raid_progress_raid_name IS NULL OR LOWER(rmc.raid_progress_raid_name) <> LOWER(?))
@@ -694,6 +815,12 @@ export async function refreshRaidersCache(
              total_sockets = ?,
              enchanted_slots = ?,
              enchantable_slots = ?,
+             adventurer_crests = ?,
+             veteran_crests = ?,
+             champion_crests = ?,
+             hero_crests = ?,
+             myth_crests = ?,
+             total_upgrades_missing = ?,
              raid_progress_raid_name = ?,
              raid_progress_label = ?,
              raid_progress_kills = ?,
@@ -713,6 +840,12 @@ export async function refreshRaidersCache(
         detailed.totalSockets,
         detailed.enchantedSlots,
         detailed.enchantableSlots,
+        detailed.adventurerCrests,
+        detailed.veteranCrests,
+        detailed.championCrests,
+        detailed.heroCrests,
+        detailed.mythCrests,
+        detailed.totalUpgradesMissing,
         detailed.raidProgressRaidName,
         detailed.raidProgressLabel,
         detailed.raidProgressKills,
@@ -789,6 +922,12 @@ export async function getRaiderByCharId(charId: number, dbInput?: D1Database): P
           total_sockets,
           enchanted_slots,
           enchantable_slots,
+           adventurer_crests,
+           veteran_crests,
+           champion_crests,
+           hero_crests,
+           myth_crests,
+          total_upgrades_missing,
           raid_progress_raid_name,
            raid_progress_label,
            raid_progress_kills,
@@ -820,6 +959,12 @@ export async function getRaiderByCharId(charId: number, dbInput?: D1Database): P
     totalSockets: row.total_sockets,
     enchantedSlots: row.enchanted_slots,
     enchantableSlots: row.enchantable_slots,
+    adventurerCrests: row.adventurer_crests,
+    veteranCrests: row.veteran_crests,
+    championCrests: row.champion_crests,
+    heroCrests: row.hero_crests,
+    mythCrests: row.myth_crests,
+    totalUpgradesMissing: row.total_upgrades_missing,
     raidProgressRaidName: row.raid_progress_raid_name,
     raidProgressLabel: row.raid_progress_label,
     raidProgressKills: row.raid_progress_kills,
@@ -858,12 +1003,46 @@ export async function loadRaidersViewData(dbInput?: D1Database): Promise<Raiders
       !raider.raidProgressLabel!.trimStart().startsWith('{')
   );
 
+  const needsCrestBackfill = raiders.some(
+    (raider) =>
+      raider.authState === 'ready' &&
+      [
+        raider.adventurerCrests,
+        raider.veteranCrests,
+        raider.championCrests,
+        raider.heroCrests,
+        raider.mythCrests,
+      ].some((value) => value === null)
+  );
+
+  const needsMissingUpgradesBackfill = raiders.some(
+    (raider) => raider.authState === 'ready' && raider.totalUpgradesMissing === null
+  );
+
   if (needsRaidProgressBackfill) {
     try {
       status = await refreshRaidersCache(db, { batchSize: 2 });
       raiders = await listCachedRaiders(db);
     } catch (error) {
       errorMessage = error instanceof Error ? error.message : 'Unable to backfill Raiders raid progress.';
+    }
+  }
+
+  if (needsCrestBackfill) {
+    try {
+      status = await refreshRaidersCache(db, { batchSize: DETAIL_BATCH_SIZE });
+      raiders = await listCachedRaiders(db);
+    } catch (error) {
+      errorMessage = error instanceof Error ? error.message : 'Unable to backfill Raiders crest data.';
+    }
+  }
+
+  if (needsMissingUpgradesBackfill) {
+    try {
+      status = await refreshRaidersCache(db, { batchSize: DETAIL_BATCH_SIZE });
+      raiders = await listCachedRaiders(db);
+    } catch (error) {
+      errorMessage = error instanceof Error ? error.message : 'Unable to backfill Raiders missing-upgrade data.';
     }
   }
 
