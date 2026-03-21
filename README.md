@@ -6,6 +6,26 @@ Official guild website for The Hidden Lodge, a semi-hardcore AOTC/Mythic raiding
 
 The site combines public guild information, Blizzard-authenticated member profiles, cached roster and raider analytics views, curated resource links, a lore archive, and a guild officer admin area for day-to-day operations.
 
+## Quick Start
+
+Run the normal dev command to start both the Astro site and the local cron refresher together:
+
+```bash
+npm run dev
+```
+
+If you need the site without the refresher, use:
+
+```bash
+npm run dev:site
+```
+
+Default local URL:
+
+```text
+http://localhost:4321
+```
+
 ## Tech Stack
 
 - Astro 6 SSR
@@ -177,6 +197,43 @@ Admin access is granted by guild rank via middleware. Officer or higher can acce
 |---|---|---|
 | `/api/cron/refresh-roster` | GET | Refreshes both roster and raiders caches; requires `X-Cron-Secret` |
 
+### Local Dev Cron Refresher
+
+Use the built-in local refresher script when running dev locally (for cases where cron-job.org cannot reach localhost).
+
+1. Ensure your local dev env has `CRON_SECRET` set (for Astro/Cloudflare runtime auth).
+2. Optionally set `LOCAL_CRON_SECRET` for the refresher process (if omitted, the script falls back to `CRON_SECRET` from process env, then `.dev.vars`).
+3. Start local development with `npm run dev`.
+
+Example `.dev.vars` values (used by local dev runtime):
+
+```env
+CRON_SECRET=replace-with-a-local-secret
+```
+
+Example shell env values for the refresher process:
+
+```bash
+# optional: defaults shown
+LOCAL_CRON_URL=http://localhost:4321/api/cron/refresh-roster
+LOCAL_CRON_INTERVAL_SECONDS=300
+LOCAL_CRON_RUN_ON_START=true
+LOCAL_CRON_STARTUP_WAIT_SECONDS=30
+LOCAL_CRON_SECRET=replace-with-a-local-secret
+```
+
+Notes:
+
+1. `npm run dev` starts both the site and the refresher.
+2. The refresher waits briefly for the local site to be reachable before attempting its first refresh.
+3. Use `npm run dev:site` if you want Astro without the refresher.
+
+Run only the local refresher:
+
+```bash
+npm run cron:local
+```
+
 ### Retired API Endpoints
 
 These handlers remain in the codebase as retired stubs and currently return HTTP 410:
@@ -336,19 +393,19 @@ These handlers remain in the codebase as retired stubs and currently return HTTP
 └── wrangler.toml
 ```
 
-## Local Development
+## Development Details
 
-Install dependencies and start the dev server:
+Install dependencies and start local development:
 
 ```sh
 npm install
 npm run dev
 ```
 
-Default local URL:
+To run only the Astro site without the local refresher:
 
-```text
-http://localhost:4321
+```sh
+npm run dev:site
 ```
 
 Build and preview locally:

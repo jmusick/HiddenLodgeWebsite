@@ -107,6 +107,10 @@ function fullDifficultyName(mode: 'L' | 'N' | 'H' | 'M'): string {
 const color = classColor(raider.className);
 const pageTitle = `${raider.name} — ${raider.realm} | The Hidden Lodge`;
 const raidProgressMatrix = parseRaidProgressMatrix(raider.raidProgressLabel);
+const warcraftLogsUrl = `https://www.warcraftlogs.com/character/id/${raider.blizzardCharId}`;
+const raiderIoUrl = raider.realmSlug
+  ? `https://raider.io/characters/us/${encodeURIComponent(raider.realmSlug)}/${encodeURIComponent(raider.name)}`
+  : null;
 ---
 
 <Layout title={pageTitle}>
@@ -137,9 +141,27 @@ const raidProgressMatrix = parseRaidProgressMatrix(raider.raidProgressLabel);
   </section>
 
   <section class="body-layout" aria-label="Raider detail">
-    {fullBody && (
-      <div class="full-body-col">
-        <img src={fullBody} alt={`${raider.name} character render`} class="full-body-img" />
+    {(fullBody || warcraftLogsUrl || raiderIoUrl) && (
+      <div class="character-col">
+        {fullBody && (
+          <div class="full-body-col">
+            <img src={fullBody} alt={`${raider.name} character render`} class="full-body-img" />
+          </div>
+        )}
+        <div class="external-profile-panel" aria-label="External profiles">
+          <div class="external-profile-links">
+            <a href={warcraftLogsUrl} target="_blank" rel="noopener noreferrer" class="external-profile-link">
+              <Icon name="lucide:external-link" aria-hidden="true" />
+              Warcraft Logs
+            </a>
+            {raiderIoUrl && (
+              <a href={raiderIoUrl} target="_blank" rel="noopener noreferrer" class="external-profile-link">
+                <Icon name="lucide:external-link" aria-hidden="true" />
+                Raider.IO
+              </a>
+            )}
+          </div>
+        </div>
       </div>
     )}
     <div class="stats-col">
@@ -379,9 +401,16 @@ const raidProgressMatrix = parseRaidProgressMatrix(raider.raidProgressLabel);
     gap: 1.25rem;
   }
 
-  .full-body-col {
+  .character-col {
     flex-shrink: 0;
     width: 18rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+  }
+
+  .full-body-col {
+    width: 100%;
     height: 32rem;
     border-radius: 0.75rem;
     overflow: hidden;
@@ -393,10 +422,53 @@ const raidProgressMatrix = parseRaidProgressMatrix(raider.raidProgressLabel);
     width: 100%;
     height: 100%;
     object-fit: cover;
-    object-position: 45% top;
+    object-position: center top;
     transform: translateY(-6%) scale(1.08);
     transform-origin: center top;
     display: block;
+  }
+
+  .external-profile-panel {
+    border: 1px solid rgba(214, 176, 106, 0.32);
+    border-radius: 0.75rem;
+    background:
+      linear-gradient(155deg, rgba(214, 176, 106, 0.07), transparent 50%),
+      rgba(11, 21, 32, 0.78);
+    padding: 0.65rem;
+  }
+
+  .external-profile-links {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(0, 1fr));
+    gap: 0.45rem;
+  }
+
+  .external-profile-link {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.32rem;
+    padding: 0.2rem 0.5rem;
+    border-radius: 999px;
+    border: 1px solid rgba(109, 172, 229, 0.3);
+    background: rgba(60, 119, 172, 0.16);
+    color: #cfe3f4;
+    font-size: 0.76rem;
+    text-decoration: none;
+    letter-spacing: 0.02em;
+    transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+  }
+
+  .external-profile-link:hover {
+    background: rgba(109, 172, 229, 0.24);
+    border-color: rgba(145, 198, 245, 0.48);
+    color: #e4f3ff;
+  }
+
+  .external-profile-link svg {
+    width: 0.78rem;
+    height: 0.78rem;
+    flex-shrink: 0;
   }
 
   .stats-col {
@@ -548,11 +620,15 @@ const raidProgressMatrix = parseRaidProgressMatrix(raider.raidProgressLabel);
       flex-direction: column;
     }
 
-    .full-body-col {
+    .character-col {
       width: 100%;
       max-width: 22rem;
-      height: 28rem;
       margin: 0 auto;
+    }
+
+    .full-body-col {
+      width: 100%;
+      height: 28rem;
     }
 
     .stats-grid {
@@ -573,10 +649,6 @@ const raidProgressMatrix = parseRaidProgressMatrix(raider.raidProgressLabel);
   @media (max-width: 440px) {
     .stats-grid {
       grid-template-columns: 1fr;
-    }
-
-    .raider-status {
-      display: none;
     }
   }
 </style>
