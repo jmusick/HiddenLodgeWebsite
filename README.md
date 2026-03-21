@@ -19,7 +19,7 @@ The site combines public guild information, Blizzard-authenticated member profil
 
 - Public home page with guild identity, raiding summary, and external guild links
 - Leadership page with officer bios, portrait lightbox, and rotating dad-joke flavor text
-- Raiding page with schedule, expectations, loot notes, addons, and recruitment guidance
+- Raiding page with schedule, expectations, loot notes, addons, recruitment guidance, and a Recent Logs card
 - Lore archive with:
 	- story preview cards and thumbnails
 	- story-first navigation via URL query selection
@@ -105,7 +105,7 @@ Admin access is granted by guild rank via middleware. Officer or higher can acce
 |---|---|---|
 | `/` | No | Home page with guild overview and external guild profile links |
 | `/leadership` | No | Leadership bios, portraits, and portrait lightbox |
-| `/raiding` | No | Raid schedule, expectations, loot, addons, and recruitment info |
+| `/raiding` | No | Raid schedule, expectations, loot, addons, recruitment info, and recent Warcraft Logs reports |
 | `/lore` | No | Lore archive with story picker, story reader, and artwork lightbox |
 | `/links` | No | Curated useful links grouped by configurable categories |
 | `/roster` | No | Cached guild roster with filters, sorting, pagination, and collection stats |
@@ -376,6 +376,8 @@ Migrations are stored in `migrations/` and should be applied in order.
 | `BLIZZARD_CLIENT_ID` | Yes | Blizzard OAuth client ID |
 | `BLIZZARD_CLIENT_SECRET` | Yes | Blizzard OAuth client secret |
 | `BLIZZARD_REDIRECT_URI` | Yes | OAuth callback URL |
+| `WCL_CLIENT_ID` | No | Warcraft Logs OAuth client ID (enables Recent Logs uploader and publish time metadata) |
+| `WCL_CLIENT_SECRET` | No | Warcraft Logs OAuth client secret (enables Recent Logs uploader and publish time metadata) |
 | `CRON_SECRET` | Yes | Shared secret for roster refresh requests |
 | `SESSION_SECRET` | Yes | Session signing and validation secret |
 

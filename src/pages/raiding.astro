@@ -1,6 +1,277 @@
 ---
 import Layout from '../layouts/Layout.astro';
 import { Icon } from 'astro-icon/components';
+import { env } from 'cloudflare:workers';
+
+interface RecentGuildLog {
+  title: string;
+  url: string;
+  owner: string | null;
+  publishedLabel: string | null;
+}
+
+interface RecentLogsResult {
+  logs: RecentGuildLog[];
+  hasMetadata: boolean;
+  metadataNotice: string | null;
+}
+
+interface WclAuthConfig {
+  clientId: string;
+  clientSecret: string;
+}
+
+interface WclReportsResponse {
+  data?: {
+    reportData?: {
+      reports?: {
+        data?: Array<{
+          code?: string;
+          title?: string;
+          startTime?: number;
+          owner?: {
+            name?: string;
+          } | null;
+        }>;
+      };
+    };
+  };
+  errors?: Array<{ message?: string }>;
+}
+
+const GUILD_REPORTS_LIST_URL = 'https://www.warcraftlogs.com/guild/reports-list/781707';
+const REPORT_LINK_REGEX = /<a[^>]+href="(\/reports\/[A-Za-z0-9]+)"[^>]*>([\s\S]*?)<\/a>/gi;
+const WCL_OAUTH_URL = 'https://www.warcraftlogs.com/oauth/token';
+const WCL_GRAPHQL_URL = 'https://www.warcraftlogs.com/api/v2/client';
+const WCL_GUILD_ID = 781707;
+
+let wclTokenCache: { accessToken: string; expiresAt: number } | null = null;
+
+function nowInSeconds(): number {
+  return Math.floor(Date.now() / 1000);
+}
+
+function readEnv(key: string): string | undefined {
+  const runtimeValue = (env as unknown as Record<string, string | undefined>)[key];
+  if (runtimeValue && runtimeValue.trim()) {
+    return runtimeValue;
+  }
+
+  const viteValue = (import.meta.env as Record<string, string | undefined>)[key];
+  if (viteValue && viteValue.trim()) {
+    return viteValue;
+  }
+
+  return undefined;
+}
+
+function getWclAuthConfig(): WclAuthConfig | null {
+  const clientId = readEnv('WCL_CLIENT_ID');
+  const clientSecret = readEnv('WCL_CLIENT_SECRET');
+
+  if (!clientId || !clientSecret) {
+    return null;
+  }
+
+  return { clientId, clientSecret };
+}
+
+async function getWclAccessToken(config: WclAuthConfig): Promise<string | null> {
+  const now = nowInSeconds();
+  if (wclTokenCache && wclTokenCache.expiresAt > now) {
+    return wclTokenCache.accessToken;
+  }
+
+  const response = await fetch(WCL_OAUTH_URL, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/x-www-form-urlencoded',
+      Authorization: `Basic ${btoa(`${config.clientId}:${config.clientSecret}`)}`,
+    },
+    body: 'grant_type=client_credentials',
+  });
+
+  if (!response.ok) {
+    return null;
+  }
+
+  const data = (await response.json()) as { access_token?: string; expires_in?: number };
+  if (!data.access_token) {
+    return null;
+  }
+
+  const ttl = Math.max(60, Number(data.expires_in ?? 0) || 0);
+  wclTokenCache = {
+    accessToken: data.access_token,
+    expiresAt: now + Math.max(60, ttl - 60),
+  };
+  return data.access_token;
+}
+
+function stripHtml(value: string): string {
+  return value.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
+}
+
+function decodeHtmlEntities(value: string): string {
+  return value
+    .replace(/&amp;/g, '&')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>');
+}
+
+function parseRecentGuildLogs(html: string, limit: number): RecentGuildLog[] {
+  const reports: RecentGuildLog[] = [];
+  const seen = new Set<string>();
+
+  for (const match of html.matchAll(REPORT_LINK_REGEX)) {
+    const href = match[1]?.trim() ?? '';
+    if (!href || seen.has(href)) continue;
+
+    const rawTitle = match[2] ?? '';
+    const title = decodeHtmlEntities(stripHtml(rawTitle));
+    if (!title) continue;
+
+    seen.add(href);
+    reports.push({
+      title,
+      url: `https://www.warcraftlogs.com${href}`,
+      owner: null,
+      publishedLabel: null,
+    });
+
+    if (reports.length >= limit) {
+      break;
+    }
+  }
+
+  return reports;
+}
+
+function formatPublishedLabel(startTimeMs: number | null | undefined): string | null {
+  if (!startTimeMs || !Number.isFinite(startTimeMs)) {
+    return null;
+  }
+
+  const date = new Date(startTimeMs);
+  if (Number.isNaN(date.getTime())) {
+    return null;
+  }
+
+  return new Intl.DateTimeFormat('en-US', {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+  }).format(date);
+}
+
+async function loadRecentGuildLogs(limit = 5): Promise<RecentLogsResult> {
+  const sanitizedLimit = Math.max(1, limit);
+  const config = getWclAuthConfig();
+
+  if (config) {
+    try {
+      const accessToken = await getWclAccessToken(config);
+      if (accessToken) {
+        const response = await fetch(WCL_GRAPHQL_URL, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${accessToken}`,
+          },
+          body: JSON.stringify({
+            query: `
+              query RecentGuildReports($guildID: Int!, $limit: Int!) {
+                reportData {
+                  reports(guildID: $guildID, limit: $limit, page: 1) {
+                    data {
+                      code
+                      title
+                      startTime
+                      owner {
+                        name
+                      }
+                    }
+                  }
+                }
+              }
+            `,
+            variables: {
+              guildID: WCL_GUILD_ID,
+              limit: sanitizedLimit,
+            },
+          }),
+        });
+
+        if (response.ok) {
+          const payload = (await response.json()) as WclReportsResponse;
+          const rows = payload.data?.reportData?.reports?.data ?? [];
+          const logs = rows
+            .map((row) => {
+              const code = row.code?.trim() ?? '';
+              if (!code) return null;
+              return {
+                title: row.title?.trim() || 'Untitled Report',
+                url: `https://www.warcraftlogs.com/reports/${code}`,
+                owner: row.owner?.name?.trim() || null,
+                publishedLabel: formatPublishedLabel(row.startTime),
+              } as RecentGuildLog;
+            })
+            .filter((row): row is RecentGuildLog => row !== null);
+
+          if (logs.length > 0) {
+            return { logs, hasMetadata: true, metadataNotice: null };
+          }
+        }
+      }
+    } catch {
+      // Fall back to public list parsing below.
+    }
+  }
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 7000);
+
+  try {
+    const response = await fetch(GUILD_REPORTS_LIST_URL, {
+      signal: controller.signal,
+      headers: {
+        'user-agent': 'HiddenLodgeWebsite/1.0 (+https://www.thehiddenlodge.com)',
+      },
+    });
+
+    if (!response.ok) {
+      return {
+        logs: [],
+        hasMetadata: false,
+        metadataNotice: 'Uploader and publish time are unavailable right now.',
+      };
+    }
+
+    const html = await response.text();
+    const reports = parseRecentGuildLogs(html, sanitizedLimit);
+    return {
+      logs: reports,
+      hasMetadata: false,
+      metadataNotice: 'Add WCL_CLIENT_ID and WCL_CLIENT_SECRET to show uploader and publish time.',
+    };
+  } catch {
+    return {
+      logs: [],
+      hasMetadata: false,
+      metadataNotice: 'Recent logs are temporarily unavailable.',
+    };
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+const recentLogsResult = await loadRecentGuildLogs(5);
+const recentLogs = recentLogsResult.logs;
 ---
 
 <Layout title="The Hidden Lodge | Raiding" description="Raid schedule and expectations for The Hidden Lodge.">
@@ -110,6 +381,36 @@ import { Icon } from 'astro-icon/components';
         <h2 class="title-row"><Icon name="lucide:scroll-text" class="title-icon" aria-hidden="true" />How to Apply</h2>
         <p class="panel-text">Head to our <a href="https://raider.io/guilds/us/illidan/Hidden%20Lodge/" target="_blank" rel="noopener noreferrer">Raider.IO guild page</a> and submit an application through there.</p>
       </section>
+
+      <section class="panel recent-logs-panel">
+        <h2 class="title-row"><Icon name="lucide:scroll" class="title-icon" aria-hidden="true" />Recent Logs</h2>
+        {recentLogs.length === 0 ? (
+          <p class="panel-text">
+            Recent logs are temporarily unavailable.
+            <a href="https://www.warcraftlogs.com/guild/reports-list/781707" target="_blank" rel="noopener noreferrer"> View all reports.</a>
+          </p>
+        ) : (
+          <>
+            <ul class="recent-logs-list">
+              {recentLogs.map((log) => (
+                <li>
+                  <a href={log.url} target="_blank" rel="noopener noreferrer">{log.title}</a>
+                  {recentLogsResult.hasMetadata && (log.owner || log.publishedLabel) && (
+                    <p class="recent-log-meta">
+                      {log.owner && <span>By {log.owner}</span>}
+                      {log.owner && log.publishedLabel && <span aria-hidden="true"> • </span>}
+                      {log.publishedLabel && <span>Published {log.publishedLabel}</span>}
+                    </p>
+                  )}
+                </li>
+              ))}
+            </ul>
+            {!recentLogsResult.hasMetadata && recentLogsResult.metadataNotice && (
+              <p class="recent-logs-note">{recentLogsResult.metadataNotice}</p>
+            )}
+          </>
+        )}
+      </section>
     </div>
   </div>
 </Layout>
@@ -190,6 +491,38 @@ import { Icon } from 'astro-icon/components';
   .addon-links a:hover,
   .addon-links a:focus-visible {
     color: #ffe6b5;
+  }
+
+  .recent-logs-list {
+    margin: 0.75rem 0 0;
+    padding-left: 1.1rem;
+    line-height: 1.55;
+  }
+
+  .recent-logs-list a {
+    color: #f0d39d;
+    text-decoration: underline;
+    text-decoration-color: rgba(240, 211, 157, 0.55);
+    text-underline-offset: 0.14em;
+  }
+
+  .recent-logs-list a:hover,
+  .recent-logs-list a:focus-visible {
+    color: #ffe6b5;
+  }
+
+  .recent-log-meta {
+    margin: 0.2rem 0 0;
+    color: #b9c9d4;
+    font-size: 0.88rem;
+    line-height: 1.35;
+  }
+
+  .recent-logs-note {
+    margin: 0.65rem 0 0;
+    color: #9ab0bf;
+    font-size: 0.85rem;
+    line-height: 1.35;
   }
 
   .panel-text {

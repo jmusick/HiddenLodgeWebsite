@@ -5,6 +5,8 @@ interface CloudflareEnv {
 	BLIZZARD_CLIENT_ID: string;
 	BLIZZARD_CLIENT_SECRET: string;
 	BLIZZARD_REDIRECT_URI: string;
+	WCL_CLIENT_ID?: string;
+	WCL_CLIENT_SECRET?: string;
 	CRON_SECRET?: string;
 	RAID_PROGRESS_TARGET?: string;
 }

@@ -10,3 +10,8 @@ BLIZZARD_CLIENT_SECRET=your_client_secret_here
 # For local dev use: http://localhost:4321/auth/callback
 # For production use your Pages domain: https://yourdomain.pages.dev/auth/callback
 BLIZZARD_REDIRECT_URI=http://localhost:4321/auth/callback
+
+# From https://www.warcraftlogs.com/api/clients/
+# Required for Recent Logs uploader/time metadata on the Raiding page.
+WCL_CLIENT_ID=your_wcl_client_id_here
+WCL_CLIENT_SECRET=your_wcl_client_secret_here
