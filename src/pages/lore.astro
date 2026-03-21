@@ -2,6 +2,15 @@
 import Layout from '../layouts/Layout.astro';
 import { Icon } from 'astro-icon/components';
 
+type StoryInlineImage = {
+  src: string;
+  alt: string;
+  afterParagraph: number;
+  caption?: string;
+};
+
+type StoryBlock = { type: 'paragraph'; paragraph: string } | { type: 'image'; image: StoryInlineImage };
+
 const stories = [
   {
     id: 'three-capybaras-and-a-very-bad-pull',
@@ -43,6 +52,68 @@ const stories = [
     ]
   },
   {
+    id: 'disengage-protocol',
+    title: 'Disengage Protocol',
+    lead: 'Rhox is certain Silver is an international assassin hiding behind hot dogs, public Wi-Fi, and suspiciously bad hunter movement.',
+    imageSrc: '/images/lore/disengage-protocol-hawaii-library.png',
+    imageAlt: 'A hooded player games from a Hawaii public library while a news broadcast reports Chuck Norris died under mysterious circumstances.',
+    imageLayout: 'inline',
+    characters: ['Rhox', 'Silver', 'Chuck Norris'],
+    inlineImages: [
+      {
+        src: '/images/lore/disengage-protocol-hawaii-library.png',
+        alt: 'A hooded player games from a Hawaii public library while a news broadcast reports Chuck Norris died under mysterious circumstances.',
+        afterParagraph: 4,
+        caption: 'Public library. Hawaii. Breaking news. Rhox considered the timeline airtight.'
+      },
+      {
+        src: '/images/lore/disengage-protocol-corkboard.png',
+        alt: 'Rhox studies a corkboard of red-string theories about Silver while wearing a foil hat and a pink floral nightgown.',
+        afterParagraph: 8,
+        caption: 'By this point the corkboard had evolved from concern into infrastructure.'
+      }
+    ],
+    paragraphs: [
+      "Rhox didn't think he was crazy. That part mattered. Misunderstood, sure. Surrounded by people with the observational skills of wet cardboard, absolutely. But not crazy. Because if you actually looked at the facts-objectively-there was only one reasonable conclusion: Silver was a CIA assassin, and The Hidden Lodge was either too blind or too comfortable to admit it.",
+      'Silver talked in Discord, which somehow made it worse. He sounded normal. Easygoing. He laughed at the right moments, made casual conversation, even complained about things like a regular player. But that was exactly the problem. It felt practiced. Controlled. Like someone who had spent years perfecting the art of sounding like nothing was wrong.',
+      'And then there was Hawaii.',
+      'Silver had mentioned, offhandedly, that he was "playing from a public library." Not his home. Not a hotel. A public library. In Hawaii. Rhox had immediately written it down. Public access. Multiple exits. Civilian noise. Perfect cover. The rest of the guild had responded with, "that sounds nice," which Rhox considered deeply irresponsible.',
+      'They ran a dungeon that night. Everything seemed normal, at least on the surface, until the news broke. Chuck Norris-dead. Mysterious circumstances. Same day Silver just happened to be in Hawaii. Same day he just happened to be operating out of a public location. Same day he made a passing comment during a boss fight about "clean execution."',
+      '"Coincidence," the guild said.',
+      '"Operation," Rhox corrected.',
+      "The most damning evidence, though, was Silver's gameplay. He was a hunter, allegedly, but he played like someone actively trying to look incompetent. The Disengages were the giveaway. Not occasional mistakes-no, these were deliberate, repeated launches into immediate danger. Off edges. Into mechanics. Straight into death like it was part of a routine. People laughed it off. \"Classic hunter,\" they said. \"Dude just launched himself into orbit again.\"",
+      'But Rhox saw the pattern. You do not maintain perfect awareness one second and then catastrophically misplay the next without intent. It was a mask. A layer. A way to stay under the radar while still being present.',
+      '"Cover," Rhox muttered, adding another note to the corkboard. "Weaponized incompetence."',
+      'Silver laughed.',
+      'Not defensive. Not confused. Just... amused.',
+      'That was worse.',
+      'And then there were the hot dogs.',
+      'No one else thought it was weird. Silver just... always had hot dogs. He would mention it casually. "BRB grabbing a hot dog." "Back, had two hot dogs." "Library had surprisingly good hot dogs." A library. Serving hot dogs. In Hawaii. No one questioned it. No one asked follow-ups. But Rhox did.',
+      'Portable food. Easy to carry. Disposable packaging. No utensils. No trace.',
+      'He added another note.',
+      '"Uses hot dogs as operational sustenance."',
+      'The others told him to take a break.',
+      'What really shook things, though, was the slip.',
+      'It came out of nowhere. Rhox was mid-rant-something about positioning, something about "clearly coordinated global eliminations"-and then he just said it: "If I could do it over, I\'d probably just be a little girl."',
+      'The silence that followed was immediate and suffocating. Someone awkwardly cleared their throat. Someone else muttered "uh..." under their breath. And then Silver laughed. Quiet. Short. Controlled.',
+      'Rhox sat up straight.',
+      '"He\'s logging that," he said instantly. "That\'s profiling. He\'s collecting personal vulnerabilities."',
+      '"Or," someone said carefully, "you just said something weird again."',
+      'But Rhox was not listening anymore. He was already writing.',
+      '"Subject gathers leverage through psychological observation."',
+      'Behind him, through Discord, Silver spoke in that same calm, casual tone. "You\'re overthinking it, man."',
+      'Rhox slowly turned toward his monitor.',
+      '"...that\'s exactly what you\'d say."',
+      'There was a pause. Not long. Just enough to feel intentional.',
+      'Then, lightly-',
+      '"...hehe."',
+      'For a moment-a brief, dangerous moment-Rhox hesitated. He looked at the corkboard. At the web of notes and red yarn and connections that no one else seemed to understand. He wondered, just for a second, if maybe they were right. Maybe Silver was just some guy. A slightly questionable hunter with terrible Disengage timing, a normal voice, and an inexplicable love of hot dogs.',
+      'Then Silver went quiet mid-dungeon. No goodbye. No disconnect message. Just gone.',
+      'Rhox reached for his marker.',
+      '"...he\'s working."'
+    ]
+  },
+  {
     id: 'the-hidden-lodge-a-safe-space-away-from-the-floor',
     title: 'The Hidden Lodge: A Safe Space Away From the Floor',
     lead: 'Some guilds are forged in conquest. This one was forged in survival, shared disbelief, and one unforgettable horizontal shot-caller.',
@@ -67,8 +138,19 @@ const orderedStories = [...stories].sort((a, b) => {
 
 const selectedStoryId = Astro.url.searchParams.get('story');
 const selectedStory = stories.find((story) => story.id === selectedStoryId);
-const usesAsideStoryImage = selectedStory?.id === featuredStoryId;
-const usesTopStoryImage = Boolean(selectedStory) && !usesAsideStoryImage;
+const selectedStoryImageLayout = selectedStory?.imageLayout ?? (selectedStory?.id === featuredStoryId ? 'aside' : 'top');
+const usesAsideStoryImage = Boolean(selectedStory) && selectedStoryImageLayout === 'aside';
+const usesTopStoryImage = Boolean(selectedStory) && selectedStoryImageLayout === 'top';
+const selectedStoryBlocks: StoryBlock[] = selectedStory
+  ? selectedStory.paragraphs.flatMap((paragraph, index) => {
+      const inlineImages = (selectedStory.inlineImages ?? []).filter((image) => image.afterParagraph === index);
+
+      return [
+        { type: 'paragraph' as const, paragraph },
+        ...inlineImages.map((image) => ({ type: 'image' as const, image }))
+      ];
+    })
+  : [];
 ---
 
 <Layout title="The Hidden Lodge | Lore" description="Fictional stories from The Hidden Lodge featuring guild characters and dungeon chaos.">
@@ -203,9 +285,24 @@ const usesTopStoryImage = Boolean(selectedStory) && !usesAsideStoryImage;
               )
             }
             {
-              selectedStory.paragraphs.map((paragraph) => (
-                <p>{paragraph}</p>
-              ))
+              selectedStoryBlocks.map((block) =>
+                block.type === 'paragraph' ? (
+                  <p>{block.paragraph}</p>
+                ) : (
+                  <figure class="story-inline-figure">
+                    <button
+                      class="story-image-button story-image-button--inline"
+                      data-lightbox-src={block.image.src}
+                      data-lightbox-alt={block.image.alt}
+                      aria-label={`View full image for ${selectedStory.title}`}
+                      type="button"
+                    >
+                      <img class="story-image story-image--inline" src={block.image.src} alt={block.image.alt} loading="lazy" />
+                    </button>
+                    {block.image.caption && <figcaption>{block.image.caption}</figcaption>}
+                  </figure>
+                )
+              )
             }
           </div>
         </article>
@@ -549,10 +646,21 @@ const usesTopStoryImage = Boolean(selectedStory) && !usesAsideStoryImage;
     max-width: 22rem;
   }
 
+  .story-image-button--inline {
+    width: 100%;
+  }
+
   .story-image--aside {
     width: 100%;
     max-width: 22rem;
     margin: 0;
+    border: 1px solid rgba(214, 176, 106, 0.24);
+    border-radius: 0.7rem;
+    overflow: hidden;
+  }
+
+  .story-image--inline {
+    width: 100%;
     border: 1px solid rgba(214, 176, 106, 0.24);
     border-radius: 0.7rem;
     overflow: hidden;
@@ -617,6 +725,20 @@ const usesTopStoryImage = Boolean(selectedStory) && !usesAsideStoryImage;
     line-height: 1.65;
     font-size: 1.02rem;
     color: #d4dfe6;
+  }
+
+  .story-inline-figure {
+    margin: 0.2rem 0 0.35rem;
+    display: grid;
+    gap: 0.45rem;
+  }
+
+  .story-inline-figure figcaption {
+    margin: 0;
+    color: #c9d5dc;
+    font-size: 0.92rem;
+    font-style: italic;
+    text-align: center;
   }
 
   .lightbox {
