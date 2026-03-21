@@ -413,7 +413,7 @@ export async function refreshRosterCache(
       const profileBase = `${profileHref.origin}${profileHref.pathname}`;
       const profileUrl = `${profileBase}?namespace=${namespace}&locale=en_US`;
       const collectionBase = `${profileBase}/collections`;
-      const statisticsUrl = `${profileBase}/statistics?namespace=${namespace}&locale=en_US`;
+      const statisticsUrl = `${profileBase}/achievements/statistics?namespace=${namespace}&locale=en_US`;
 
       const [profile, stats, mounts, pets, toys] = await Promise.all([
         fetchBlizzardJsonWithRetry<CharacterProfileResponse>(profileUrl, accessToken),
