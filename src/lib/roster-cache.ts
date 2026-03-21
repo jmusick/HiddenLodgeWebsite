@@ -1,6 +1,6 @@
 import type { D1Database } from '@cloudflare/workers-types';
 import { env } from 'cloudflare:workers';
-import { loadBlizzardClassIconMap, normalizeWowClassName } from './class-icons';
+import { fallbackClassIconUrl, loadBlizzardClassIconMap, normalizeWowClassName } from './class-icons';
 import { getBlizzardAppAccessToken } from './blizzard-app-token';
 import { fetchBlizzardJsonWithRetry } from './blizzard-fetch';
 
@@ -508,7 +508,9 @@ export async function loadRosterWithCache(
     });
     members = members.map((member) => ({
       ...member,
-      classIconUrl: classIcons.get(normalizeWowClassName(member.className)) ?? null,
+      classIconUrl:
+        classIcons.get(normalizeWowClassName(member.className)) ??
+        fallbackClassIconUrl(member.className),
     }));
   } catch (error) {
     // Non-fatal: class icons are decorative.

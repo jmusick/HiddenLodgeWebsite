@@ -1,7 +1,7 @@
 import type { D1Database } from '@cloudflare/workers-types';
 import { env } from 'cloudflare:workers';
 import { resolveRaidProgressTier } from '../data/raidProgressTargets';
-import { loadBlizzardClassIconMap, normalizeWowClassName } from './class-icons';
+import { fallbackClassIconUrl, loadBlizzardClassIconMap, normalizeWowClassName } from './class-icons';
 import { getBlizzardAppAccessToken as getSharedBlizzardAppAccessToken } from './blizzard-app-token';
 import { fetchBlizzardJsonWithRetry } from './blizzard-fetch';
 
@@ -871,7 +871,9 @@ export async function loadRaidersViewData(dbInput?: D1Database): Promise<Raiders
     const classIcons = await ensureClassIconCache();
     raiders = raiders.map((raider) => ({
       ...raider,
-      classIconUrl: classIcons.get(normalizeWowClassName(raider.className)) ?? null,
+      classIconUrl:
+        classIcons.get(normalizeWowClassName(raider.className)) ??
+        fallbackClassIconUrl(raider.className),
     }));
   } catch {
     // Non-fatal: class icons are decorative.

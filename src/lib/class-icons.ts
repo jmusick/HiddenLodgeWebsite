@@ -1,6 +1,22 @@
 const DEFAULT_CACHE_TTL_SECONDS = 6 * 60 * 60;
 const EMPTY_CACHE_TTL_SECONDS = 5 * 60;
 
+const FALLBACK_ICON_URLS: Record<string, string> = {
+  'death knight': 'https://render.worldofwarcraft.com/us/icons/56/classicon_deathknight.jpg',
+  'demon hunter': 'https://render.worldofwarcraft.com/us/icons/56/classicon_demonhunter.jpg',
+  druid: 'https://render.worldofwarcraft.com/us/icons/56/classicon_druid.jpg',
+  evoker: 'https://render.worldofwarcraft.com/us/icons/56/classicon_evoker.jpg',
+  hunter: 'https://render.worldofwarcraft.com/us/icons/56/classicon_hunter.jpg',
+  mage: 'https://render.worldofwarcraft.com/us/icons/56/classicon_mage.jpg',
+  monk: 'https://render.worldofwarcraft.com/us/icons/56/classicon_monk.jpg',
+  paladin: 'https://render.worldofwarcraft.com/us/icons/56/classicon_paladin.jpg',
+  priest: 'https://render.worldofwarcraft.com/us/icons/56/classicon_priest.jpg',
+  rogue: 'https://render.worldofwarcraft.com/us/icons/56/classicon_rogue.jpg',
+  shaman: 'https://render.worldofwarcraft.com/us/icons/56/classicon_shaman.jpg',
+  warlock: 'https://render.worldofwarcraft.com/us/icons/56/classicon_warlock.jpg',
+  warrior: 'https://render.worldofwarcraft.com/us/icons/56/classicon_warrior.jpg',
+};
+
 interface BlizzardPlayableClassIndexResponse {
   classes?: Array<{
     id?: number;
@@ -38,6 +54,10 @@ function nowInSeconds(): number {
 
 export function normalizeWowClassName(value: string): string {
   return value.trim().toLowerCase();
+}
+
+export function fallbackClassIconUrl(className: string): string | null {
+  return FALLBACK_ICON_URLS[normalizeWowClassName(className)] ?? null;
 }
 
 async function mapWithConcurrency<T, R>(
