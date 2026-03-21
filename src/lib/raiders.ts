@@ -47,6 +47,11 @@ const ENCHANTABLE_SLOTS = new Set([
   'OFF_HAND',
 ]);
 
+// Class tier sets only ever occupy these five armor slots.
+// Other item sets (e.g. ring pairs like "Voidlight Bindings") use non-tier slots
+// and must not be counted as tier pieces.
+const TIER_SET_SLOTS = new Set(['HEAD', 'SHOULDER', 'CHEST', 'HANDS', 'LEGS']);
+
 type RaiderAuthState = 'ready' | 'missing' | 'expired' | 'unavailable';
 
 interface RaiderSourceRow {
@@ -255,7 +260,10 @@ function extractCrestCounts(stats: BlizzardAchievementStatisticsResponse | null)
 }
 
 function countTierPieces(items: BlizzardEquippedItem[]): number {
-  return items.reduce((count, item) => (item.item_set || item.set ? count + 1 : count), 0);
+  return items.reduce((count, item) => {
+    const slotType = item.slot?.type ?? '';
+    return TIER_SET_SLOTS.has(slotType) && (item.item_set || item.set) ? count + 1 : count;
+  }, 0);
 }
 
 function countSockets(items: BlizzardEquippedItem[]): { socketed: number; total: number } {
