@@ -76,8 +76,12 @@ interface CharacterToysResponse {
   toys?: unknown[];
 }
 
-let rosterQuestColumnState: boolean | null = null;
-let rosterQuestCheckedColumnState: boolean | null = null;
+const rosterColumnState: Record<string, boolean | null> = {
+  quest_count: null,
+  quest_count_checked: null,
+  deaths_count: null,
+  deaths_checked: null,
+};
 
 interface CacheRow {
   blizzard_char_id: number;
@@ -90,6 +94,7 @@ interface CacheRow {
   rank: number;
   achievement_points: number;
   quest_count: number;
+  deaths_count: number;
   mount_count: number;
   pet_count: number;
   toy_count: number;
@@ -107,6 +112,7 @@ export interface CachedRosterMember {
   rank: number;
   achievementPoints: number;
   questCount: number;
+  deathsCount: number;
   mountCount: number;
   petCount: number;
   toyCount: number;
@@ -136,47 +142,58 @@ function getDatabase(db?: D1Database): D1Database {
   return db ?? env.DB;
 }
 
-async function hasQuestCountColumn(db: D1Database): Promise<boolean> {
-  if (rosterQuestColumnState !== null) {
-    return rosterQuestColumnState;
+async function hasRosterColumn(db: D1Database, columnName: keyof typeof rosterColumnState): Promise<boolean> {
+  const cachedState = rosterColumnState[columnName];
+  if (cachedState === true) {
+    return cachedState;
   }
 
   try {
     const pragma = await db.prepare('PRAGMA table_info(roster_members_cache)').all<{ name: string }>();
     const columns = (pragma.results ?? []) as Array<{ name?: string }>;
-    rosterQuestColumnState = columns.some((column) => column.name === 'quest_count');
+    rosterColumnState[columnName] = columns.some((column) => column.name === columnName);
   } catch {
-    rosterQuestColumnState = false;
+    if (cachedState === null) {
+      rosterColumnState[columnName] = false;
+    }
   }
 
-  return rosterQuestColumnState;
+  return rosterColumnState[columnName] ?? false;
+}
+
+async function hasQuestCountColumn(db: D1Database): Promise<boolean> {
+  return hasRosterColumn(db, 'quest_count');
 }
 
 async function hasQuestCountCheckedColumn(db: D1Database): Promise<boolean> {
-  if (rosterQuestCheckedColumnState !== null) {
-    return rosterQuestCheckedColumnState;
-  }
+  return hasRosterColumn(db, 'quest_count_checked');
+}
 
-  try {
-    const pragma = await db.prepare('PRAGMA table_info(roster_members_cache)').all<{ name: string }>();
-    const columns = (pragma.results ?? []) as Array<{ name?: string }>;
-    rosterQuestCheckedColumnState = columns.some((column) => column.name === 'quest_count_checked');
-  } catch {
-    rosterQuestCheckedColumnState = false;
-  }
+async function hasDeathsCountColumn(db: D1Database): Promise<boolean> {
+  return hasRosterColumn(db, 'deaths_count');
+}
 
-  return rosterQuestCheckedColumnState;
+async function hasDeathsCountCheckedColumn(db: D1Database): Promise<boolean> {
+  return hasRosterColumn(db, 'deaths_checked');
 }
 
 function wait(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function extractQuestCount(statsPayload: any): number {
+function extractStatisticCount(
+  statsPayload: any,
+  directKeys: string[],
+  matcher: (name: string, type: string) => boolean
+): number {
   if (!statsPayload || typeof statsPayload !== 'object') return 0;
 
-  const direct = Number(statsPayload.quests_completed ?? statsPayload.quest_count ?? 0);
-  if (direct > 0) return direct;
+  for (const key of directKeys) {
+    const direct = Number(statsPayload[key] ?? NaN);
+    if (Number.isFinite(direct) && direct >= 0) {
+      return direct;
+    }
+  }
 
   const visit = (node: any): number | null => {
     if (!node || typeof node !== 'object') return null;
@@ -184,10 +201,8 @@ function extractQuestCount(statsPayload: any): number {
     const name = String(node.name ?? '').toLowerCase();
     const type = String(node.type ?? '').toLowerCase();
     const quantity = Number(node.quantity ?? node.value ?? NaN);
-    if (Number.isFinite(quantity) && quantity >= 0) {
-      if (name.includes('quests completed') || type.includes('quests_completed')) {
-        return quantity;
-      }
+    if (Number.isFinite(quantity) && quantity >= 0 && matcher(name, type)) {
+      return quantity;
     }
 
     for (const value of Object.values(node)) {
@@ -207,6 +222,26 @@ function extractQuestCount(statsPayload: any): number {
   };
 
   return visit(statsPayload) ?? 0;
+}
+
+function extractQuestCount(statsPayload: any): number {
+  return extractStatisticCount(
+    statsPayload,
+    ['quests_completed', 'quest_count'],
+    (name, type) => name.includes('quests completed') || type.includes('quests_completed')
+  );
+}
+
+function extractDeathsCount(statsPayload: any): number {
+  return extractStatisticCount(
+    statsPayload,
+    ['deaths_count', 'total_deaths', 'deaths'],
+    (name, type) => {
+      const mentionsDeaths = name.includes('deaths') || type.includes('deaths');
+      const mentionsDeath = name.includes('total deaths') || type.includes('total_death');
+      return mentionsDeaths || mentionsDeath;
+    }
+  );
 }
 
 function normalizeHrefToUrl(href: string): URL | null {
@@ -249,6 +284,7 @@ function buildCharacterApiUrls(
 async function getMeta(db: D1Database): Promise<RosterCacheStatus> {
   const now = nowInSeconds();
   const hasQuestCheckedColumn = await hasQuestCountCheckedColumn(db);
+  const hasDeathsCheckedColumn = await hasDeathsCountCheckedColumn(db);
   const row = await db
     .prepare(
       `SELECT
@@ -256,7 +292,7 @@ async function getMeta(db: D1Database): Promise<RosterCacheStatus> {
           MAX(details_synced_at) AS last_detail_sync,
           SUM(
             CASE
-              WHEN details_synced_at IS NULL OR details_synced_at < ?${hasQuestCheckedColumn ? ' OR quest_count_checked = 0' : ''}
+              WHEN details_synced_at IS NULL OR details_synced_at < ?${hasQuestCheckedColumn ? ' OR quest_count_checked = 0' : ''}${hasDeathsCheckedColumn ? ' OR deaths_checked = 0' : ''}
               THEN 1
               ELSE 0
             END
@@ -336,6 +372,7 @@ async function pruneMissingMembers(db: D1Database, summarySyncTime: number): Pro
 
 async function listCachedMembers(db: D1Database): Promise<CachedRosterMember[]> {
   const hasQuestColumn = await hasQuestCountColumn(db);
+  const hasDeathsColumn = await hasDeathsCountColumn(db);
   const result = await db
     .prepare(
       `SELECT
@@ -348,7 +385,8 @@ async function listCachedMembers(db: D1Database): Promise<CachedRosterMember[]> 
           level,
           rank,
           achievement_points,
-           ${hasQuestColumn ? 'quest_count' : '0 AS quest_count'},
+          ${hasQuestColumn ? 'quest_count' : '0 AS quest_count'},
+          ${hasDeathsColumn ? 'deaths_count' : '0 AS deaths_count'},
           mount_count,
           pet_count,
           toy_count,
@@ -369,6 +407,7 @@ async function listCachedMembers(db: D1Database): Promise<CachedRosterMember[]> 
     rank: row.rank,
     achievementPoints: row.achievement_points,
     questCount: row.quest_count,
+    deathsCount: row.deaths_count,
     mountCount: row.mount_count,
     petCount: row.pet_count,
     toyCount: row.toy_count,
@@ -384,6 +423,8 @@ export async function refreshRosterCache(
   const db = getDatabase(dbInput);
   const hasQuestColumn = await hasQuestCountColumn(db);
   const hasQuestCheckedColumn = hasQuestColumn ? await hasQuestCountCheckedColumn(db) : false;
+  const hasDeathsColumn = await hasDeathsCountColumn(db);
+  const hasDeathsCheckedColumn = hasDeathsColumn ? await hasDeathsCountCheckedColumn(db) : false;
   const accessToken = await fetchAccessToken();
   const rosterMembers = await fetchGuildRoster(accessToken);
   const now = nowInSeconds();
@@ -493,6 +534,7 @@ export async function refreshRosterCache(
       }
 
       const extractedQuestCount = hasQuestColumn ? extractQuestCount(stats) : 0;
+      const extractedDeathsCount = hasDeathsColumn ? extractDeathsCount(stats) : 0;
 
       await db
         .prepare(
@@ -504,6 +546,8 @@ export async function refreshRosterCache(
                achievement_points = ?,
                ${hasQuestColumn ? 'quest_count = ?,' : ''}
                ${hasQuestCheckedColumn ? 'quest_count_checked = ?,' : ''}
+               ${hasDeathsColumn ? 'deaths_count = ?,' : ''}
+               ${hasDeathsCheckedColumn ? 'deaths_checked = ?,' : ''}
                mount_count = ?,
                pet_count = ?,
                toy_count = ?,
@@ -519,6 +563,8 @@ export async function refreshRosterCache(
           Number(profile.achievement_points ?? 0),
           ...(hasQuestColumn ? [extractedQuestCount] : []),
           ...(hasQuestCheckedColumn ? [1] : []),
+          ...(hasDeathsColumn ? [extractedDeathsCount] : []),
+          ...(hasDeathsCheckedColumn ? [1] : []),
           Array.isArray(mounts.mounts) ? mounts.mounts.length : 0,
           Array.isArray(pets.pets) ? pets.pets.length : 0,
           Array.isArray(toys.toys) ? toys.toys.length : 0,
@@ -596,6 +642,73 @@ export async function refreshRosterCache(
           .run();
       } catch (error) {
         console.error('Roster quest backfill failed for candidate', {
+          candidateId: candidate.blizzard_char_id,
+          name: candidate.name,
+          realmSlug: candidate.realm_slug,
+          error,
+        });
+      }
+    }
+  }
+
+  if (hasDeathsCheckedColumn) {
+    const deathsBackfillCandidatesResult = await db
+      .prepare(
+        `SELECT
+            blizzard_char_id,
+            name,
+            realm_slug
+         FROM roster_members_cache
+         WHERE deaths_checked = 0
+         ORDER BY rank ASC, name ASC`
+      )
+      .all<{
+        blizzard_char_id: number;
+        name: string;
+        realm_slug: string;
+      }>();
+
+    const deathsBackfillCandidates = ((deathsBackfillCandidatesResult.results ?? []) as Array<{
+      blizzard_char_id: number;
+      name: string;
+      realm_slug: string;
+    }>).slice(0, Math.max(1, options?.questBackfillBatchSize ?? QUEST_BACKFILL_BATCH_SIZE));
+
+    for (const candidate of deathsBackfillCandidates) {
+      try {
+        const candidateId = Number(candidate.blizzard_char_id);
+        const rosterMember = rosterById.get(candidateId);
+        const href = rosterMember?.character.key?.href;
+        if (!href) {
+          continue;
+        }
+
+        const apiUrls = buildCharacterApiUrls(href);
+        if (!apiUrls) {
+          console.error('Roster deaths backfill skipped: invalid profile href', {
+            candidateId,
+            href,
+          });
+          continue;
+        }
+
+        const stats = await fetchBlizzardJsonWithRetry<any>(apiUrls.statisticsUrl, accessToken);
+        if (!stats) {
+          continue;
+        }
+
+        await db
+          .prepare(
+            `UPDATE roster_members_cache
+             SET deaths_count = ?,
+                 deaths_checked = 1,
+                 updated_at = ?
+             WHERE blizzard_char_id = ?`
+          )
+          .bind(extractDeathsCount(stats), now, candidateId)
+          .run();
+      } catch (error) {
+        console.error('Roster deaths backfill failed for candidate', {
           candidateId: candidate.blizzard_char_id,
           name: candidate.name,
           realmSlug: candidate.realm_slug,

@@ -60,7 +60,7 @@ http://localhost:4321
 	- search and class/rank/level filters
 	- sortable columns
 	- pagination controls
-	- collection stat spotlights for achievements, quests completed, mounts, pets, and toys
+	- stat spotlights for achievements, quests completed, deaths, mounts, pets, and toys
 	- Raider.IO shortcuts per character
 - Raiders analytics page backed by D1 cache with:
 	- team-scoped character list for active roster teams
@@ -285,8 +285,9 @@ These handlers remain in the codebase as retired stubs and currently return HTTP
 
 - Roster summary data uses a short TTL for quick refreshes
 - Character detail data uses a longer TTL and refreshes in batches to avoid Blizzard and platform limits
-- Character detail sync includes quest-completion totals (when available from Blizzard character statistics)
+- Character detail sync includes quest-completion and death totals (when available from Blizzard character statistics)
 - The roster page can render from cached data while the cache warms additional members in the background
+- New cache columns that default to `0` use companion backfill flags so existing rows continue warming until each member has been revalidated
 - Raiders cache separates summary sync and detail sync to avoid heavy Blizzard fan-out on every request
 - Raiders detail/media calls use app-level client-credentials access so details are not blocked on per-user Battle.net login
 - Raiders detail sync now stores crest totals and total missing upgrades for roster-team members
@@ -316,7 +317,9 @@ These handlers remain in the codebase as retired stubs and currently return HTTP
 │   ├── 0017_quest_count.sql
 │   ├── 0018_quest_count_backfill.sql
 │   ├── 0019_raider_crests.sql
-│   └── 0020_missing_upgrades.sql
+│   ├── 0020_missing_upgrades.sql
+│   ├── 0021_deaths_count.sql
+│   └── 0022_deaths_count_backfill.sql
 ├── public/
 │   ├── _routes.json
 │   └── images/
