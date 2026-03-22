@@ -1,4 +1,5 @@
 const DEFAULT_URL = 'http://localhost:4321/api/cron/refresh-roster';
+const DEFAULT_READY_URL = 'http://localhost:4321/';
 const DEFAULT_INTERVAL_SECONDS = 300;
 const DEFAULT_STARTUP_WAIT_SECONDS = 30;
 
@@ -46,12 +47,10 @@ async function waitForUrl(url, timeoutSeconds) {
     try {
       const response = await fetch(url, {
         method: 'GET',
-        headers: {
-          'X-Cron-Secret': cronSecret,
-        },
       });
 
-      if (response.ok || response.status === 401 || response.status === 500) {
+      // Treat any non-5xx response as "server is up".
+      if (response.status < 500) {
         return true;
       }
     } catch {
@@ -65,6 +64,7 @@ async function waitForUrl(url, timeoutSeconds) {
 }
 
 const cronUrl = process.env.LOCAL_CRON_URL ?? DEFAULT_URL;
+const readyUrl = process.env.LOCAL_CRON_READY_URL ?? DEFAULT_READY_URL;
 const fallbackDevVarsSecret = await readDevVarsSecret();
 const cronSecret = process.env.LOCAL_CRON_SECRET ?? process.env.CRON_SECRET ?? fallbackDevVarsSecret;
 const intervalSeconds = parsePositiveInteger(process.env.LOCAL_CRON_INTERVAL_SECONDS, DEFAULT_INTERVAL_SECONDS);
@@ -118,13 +118,16 @@ async function triggerRefresh() {
 
 console.log('Local cron refresher started.');
 console.log(`- URL: ${cronUrl}`);
+console.log(`- Ready URL: ${readyUrl}`);
 console.log(`- Interval: ${intervalSeconds}s`);
 console.log(`- Run immediately: ${runOnStart ? 'yes' : 'no'}`);
 
 if (runOnStart) {
-  const ready = await waitForUrl(cronUrl, startupWaitSeconds);
+  const ready = await waitForUrl(readyUrl, startupWaitSeconds);
   if (!ready) {
-    console.warn(`[${new Date().toISOString()}] Local server was not ready within ${startupWaitSeconds}s; waiting for scheduled retries.`);
+    console.warn(
+      `[${new Date().toISOString()}] Local server was not ready at ${readyUrl} within ${startupWaitSeconds}s; waiting for scheduled retries.`
+    );
   } else {
     await triggerRefresh();
   }

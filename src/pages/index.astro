@@ -2,6 +2,7 @@
 import Layout from '../layouts/Layout.astro';
 import SectionCard from '../components/SectionCard.astro';
 import { externalLinks } from '../data/externalLinks';
+import { Icon } from 'astro-icon/components';
 ---
 
 <Layout title="The Hidden Lodge | Home" description="A semi hardcore WoW raiding guild focused on AOTC and Mythic progression.">
@@ -27,33 +28,36 @@ import { externalLinks } from '../data/externalLinks';
 		<SectionCard title="Culture" body="We like having fun together, joking around, and keeping raid nights enjoyable, but when the pull starts we lock in and handle business." icon="lucide:shield" />
 	</section>
 
-	<section class="rules-panel" aria-labelledby="guild-rules-title">
-		<h2 id="guild-rules-title">Guild Rules</h2>
-		<ul class="rules-list">
-			<li>Respect the guild. Do not harass people, do not start drama, and do not make things weird for no reason.</li>
-			<li>This is a 21+ guild. If you still need permission to stay up late, this is not the roster for you.</li>
-			<li>No slurs. That includes the N-word and anything adjacent to it.</li>
-			<li>Do not spam. Use the right Discord and guild channels so useful information does not get buried under nonsense.</li>
-			<li>Guild leadership will handle disputes, and their call is final. Court is adjourned.</li>
-			<li>Your main character must be in the guild if you want to raid with the guild.</li>
-		</ul>
-	</section>
+	<section class="bottom-row">
+		<section class="rules-panel" aria-labelledby="guild-rules-title">
+			<h2 id="guild-rules-title">Guild Rules</h2>
+			<ul class="rules-list">
+				<li>Respect the guild. Do not harass people, do not start drama, and do not make things weird for no reason.</li>
+				<li>This is a 21+ guild. If you still need permission to stay up late, this is not the roster for you.</li>
+				<li>No slurs. That includes the N-word and anything adjacent to it.</li>
+				<li>Do not spam. Use the right Discord and guild channels so useful information does not get buried under nonsense.</li>
+				<li>Guild leadership will handle disputes, and their call is final. Court is adjourned.</li>
+				<li>Your main character must be in the guild if you want to raid with the guild.</li>
+			</ul>
+		</section>
 
-	<section class="resource-panel" id="guild-links">
-		<h2>Guild Links</h2>
-		<div class="resource-grid">
-			{
-				externalLinks.map((link) => (
-					<a class="resource-card" href={link.href} target="_blank" rel="noopener noreferrer">
-						<img src={link.favicon} alt="" loading="lazy" />
-						<div>
-							<h3>{link.name}</h3>
-							<p>{link.description}</p>
-						</div>
-					</a>
-				))
-			}
-		</div>
+		<section class="resource-panel" id="guild-links">
+			<h2>Guild Links</h2>
+			<div class="resource-grid">
+				{
+					externalLinks.map((link) => (
+						<a class="resource-card" href={link.href} target="_blank" rel="noopener noreferrer">
+							<img src={link.favicon} alt="" loading="lazy" />
+							<div class="resource-copy">
+								<h3>{link.name}</h3>
+								<p>{link.description}</p>
+								<span class="resource-action" aria-hidden="true"><Icon name="lucide:external-link" /></span>
+							</div>
+						</a>
+					))
+				}
+			</div>
+		</section>
 	</section>
 </Layout>
 
@@ -128,8 +132,14 @@ import { externalLinks } from '../data/externalLinks';
 		}
 	}
 
-	.resource-panel {
+	.bottom-row {
+		display: grid;
+		grid-template-columns: repeat(2, minmax(0, 1fr));
+		gap: 1rem;
 		margin-top: 1.3rem;
+	}
+
+	.resource-panel {
 		padding: 1rem;
 		border-radius: 0.8rem;
 		border: 1px solid rgba(214, 176, 106, 0.35);
@@ -137,7 +147,6 @@ import { externalLinks } from '../data/externalLinks';
 	}
 
 	.rules-panel {
-		margin-top: 1.3rem;
 		padding: 1rem;
 		border-radius: 0.8rem;
 		border: 1px solid rgba(214, 176, 106, 0.35);
@@ -167,7 +176,7 @@ import { externalLinks } from '../data/externalLinks';
 
 	.resource-grid {
 		display: grid;
-		grid-template-columns: repeat(3, minmax(0, 1fr));
+		grid-template-columns: 1fr;
 		gap: 0.8rem;
 	}
 
@@ -180,6 +189,12 @@ import { externalLinks } from '../data/externalLinks';
 		border-radius: 0.6rem;
 		border: 1px solid rgba(214, 176, 106, 0.35);
 		background: linear-gradient(160deg, rgba(214, 176, 106, 0.08), transparent 45%), rgba(9, 18, 28, 0.72);
+		text-decoration: none;
+	}
+
+	.resource-card:hover,
+	.resource-card:focus-visible {
+		text-decoration: none;
 	}
 
 	.resource-card img {
@@ -195,14 +210,48 @@ import { externalLinks } from '../data/externalLinks';
 		color: #f0d39d;
 	}
 
+	.resource-copy {
+		display: grid;
+		grid-template-columns: 1fr auto;
+		grid-template-areas:
+			'title action'
+			'desc desc';
+		column-gap: 0.45rem;
+		align-items: start;
+	}
+
+	.resource-copy h3 {
+		grid-area: title;
+	}
+
 	.resource-card p {
+		grid-area: desc;
 		margin: 0.28rem 0 0;
 		font-size: 0.96rem;
 		color: #d4dfe6;
 	}
 
+	.resource-action {
+		grid-area: action;
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		margin-top: 0.12rem;
+		color: #f0d39d;
+		opacity: 0.9;
+		font-size: 0.95rem;
+		transition: transform 140ms ease, color 140ms ease, opacity 140ms ease;
+	}
+
+	.resource-card:hover .resource-action,
+	.resource-card:focus-visible .resource-action {
+		color: #ffe3aa;
+		opacity: 1;
+		transform: translateX(2px);
+	}
+
 	@media (max-width: 900px) {
-		.resource-grid {
+		.bottom-row {
 			grid-template-columns: 1fr;
 		}
 	}

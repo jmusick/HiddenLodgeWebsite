@@ -317,7 +317,7 @@ for (const row of selectedDaySummaryRows) {
     <header class="signup-header">
       <div>
         <h1>Raid Signup</h1>
-        <p>Choose your character and sign up directly from the calendar. Times are shown in <strong>{userTimeZone}</strong>.</p>
+        <p class="signup-intro">Choose your character and sign up directly from the calendar. Times are shown in <strong>{userTimeZone}</strong>.</p>
         <p class="summary-hint">Click any date number in the calendar to load that day&apos;s raid summary.</p>
       </div>
       <nav class="month-nav" aria-label="Calendar month navigation">
@@ -641,6 +641,11 @@ for (const row of selectedDaySummaryRows) {
     margin: 0;
     color: var(--muted);
     max-width: 72ch;
+  }
+
+  .signup-intro {
+    white-space: nowrap;
+    max-width: none;
   }
 
   .summary-hint {
@@ -1217,6 +1222,11 @@ for (const row of selectedDaySummaryRows) {
 
     .weekday-head {
       display: none;
+    }
+
+    .signup-intro {
+      white-space: normal;
+      max-width: 72ch;
     }
   }
 
