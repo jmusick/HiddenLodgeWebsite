@@ -22,13 +22,6 @@ const teamOptions = [...new Set(sortedRaiders.flatMap((raider) => raider.teamNam
   a.localeCompare(b)
 );
 
-function authLabel(state: string): string {
-  if (state === 'ready') return 'Loaded';
-  if (state === 'expired') return 'Stale';
-  if (state === 'unavailable') return 'Unavailable';
-  return 'Pending';
-}
-
 function scoreColor(filled: number | null, total: number | null): string {
   if (filled === null || total === null || total === 0) return '';
   const pct = filled / total;
@@ -44,9 +37,38 @@ function formatScore(filled: number | null, total: number | null): string {
   return `${Math.round((filled / total) * 100)}% (${filled}/${total})`;
 }
 
-function formatLastChecked(epochSeconds: number | null): string {
-  if (!epochSeconds) return 'Never';
-  return new Date(epochSeconds * 1000).toLocaleString();
+function preparednessTotals(raider: (typeof sortedRaiders)[number]): { filled: number | null; total: number | null } {
+  if (
+    raider.socketedGems === null ||
+    raider.totalSockets === null ||
+    raider.enchantedSlots === null ||
+    raider.enchantableSlots === null
+  ) {
+    return { filled: null, total: null };
+  }
+
+  return {
+    filled: raider.socketedGems + raider.enchantedSlots,
+    total: raider.totalSockets + raider.enchantableSlots,
+  };
+}
+
+function preparednessSortValue(raider: (typeof sortedRaiders)[number]): number {
+  const totals = preparednessTotals(raider);
+  if (totals.filled === null || totals.total === null || totals.total === 0) return -1;
+  return totals.filled / totals.total;
+}
+
+function preparednessTierDisplay(filled: number | null, total: number | null): { label: string; color: string } {
+  if (filled === null || total === null) return { label: '—', color: '#ffffff' };
+  if (total === 0) return { label: 'N/A', color: '#ffffff' };
+
+  const pct = filled / total;
+  if (pct >= 1) return { label: 'S Tier', color: '#ff8000' }; // Blizzard orange
+  if (pct >= 0.9) return { label: 'A Tier', color: '#a335ee' };
+  if (pct >= 0.75) return { label: 'B Tier', color: '#0070dd' };
+  if (pct >= 0.5) return { label: 'C Tier', color: '#1eff00' };
+  return { label: 'D Tier', color: '#ffffff' };
 }
 
 function crestSortValue(raider: (typeof sortedRaiders)[number]): number {
@@ -232,16 +254,6 @@ const spotlightCards = [
           {teamOptions.map((teamName) => <option value={teamName}>{teamName}</option>)}
         </select>
       </label>
-      <label>
-        Data Status
-        <select id="raiders-auth-filter">
-          <option value="all">All Statuses</option>
-          <option value="ready">Loaded</option>
-          <option value="expired">Stale</option>
-          <option value="missing">Pending</option>
-          <option value="unavailable">Unavailable</option>
-        </select>
-      </label>
     </div>
 
     <div class="table-wrap">
@@ -271,8 +283,7 @@ const spotlightCards = [
             <th><button class="sort-btn" type="button" data-sort-key="totalUpgradesMissing">Missing Upgrades</button></th>
             <th>Gems</th>
             <th>Enchants</th>
-            <th><button class="sort-btn" type="button" data-sort-key="authState">Status</button></th>
-            <th><button class="sort-btn" type="button" data-sort-key="lastCheckedAt">Last Checked</button></th>
+            <th><button class="sort-btn" type="button" data-sort-key="preparednessScore" data-tooltip="Preparedness = (Socketed Gems + Enchanted Slots) / (Total Sockets + Enchantable Slots). Tiers: S = 100%, A >= 90%, B >= 75%, C >= 50%, D < 50%." aria-label="Preparedness. Formula: (Socketed Gems + Enchanted Slots) / (Total Sockets + Enchantable Slots). Tiers: S equals 100 percent, A 90 percent or higher, B 75 percent or higher, C 50 percent or higher, D below 50 percent.">Preparedness</button></th>
           </tr>
         </thead>
         <tbody>
@@ -280,19 +291,20 @@ const spotlightCards = [
             const color = classColor(raider.className);
             const teamList = raider.teamNames.join(', ');
             const isUnknownClass = raider.className.trim().toLowerCase() === 'unknown';
+            const preparedness = preparednessTotals(raider);
+            const preparednessTier = preparednessTierDisplay(preparedness.filled, preparedness.total);
             return (
               <tr
                 data-name={raider.name.toLowerCase()}
                 data-class={raider.className}
                 data-team={teamList}
-                data-auth-state={raider.authState}
                 data-equipped-item-level={String(raider.equippedItemLevel ?? -1)}
                 data-raid-progress-kills={String(raider.raidProgressKills ?? -1)}
                 data-mythic-score={String(raider.mythicScore ?? -1)}
                 data-tier-pieces-equipped={String(raider.tierPiecesEquipped ?? -1)}
                 data-crest-sort={String(crestSortValue(raider))}
                 data-total-upgrades-missing={String(raider.totalUpgradesMissing ?? -1)}
-                data-last-checked-at={String(raider.lastCheckedAt ?? 0)}
+                data-preparedness-score={String(preparednessSortValue(raider))}
               >
                 <td><a href={`/raiders/${raider.blizzardCharId}`} class="name-link"><span class="name-pill" style={`--class-color: ${color}`}>{raider.name}</span></a></td>
                 <td>
@@ -345,10 +357,7 @@ const spotlightCards = [
                 <td>{raider.totalUpgradesMissing ?? '—'}</td>
                 <td><span class="score-val" style={`color: ${scoreColor(raider.socketedGems, raider.totalSockets)}`}>{formatScore(raider.socketedGems, raider.totalSockets)}</span></td>
                 <td><span class="score-val" style={`color: ${scoreColor(raider.enchantedSlots, raider.enchantableSlots)}`}>{formatScore(raider.enchantedSlots, raider.enchantableSlots)}</span></td>
-                <td>
-                  <span class:list={['status-badge', raider.authState]}>{authLabel(raider.authState)}</span>
-                </td>
-                <td>{formatLastChecked(raider.lastCheckedAt)}</td>
+                <td><span class="score-val" style={`color: ${preparednessTier.color}`}>{preparednessTier.label}</span></td>
               </tr>
             );
           })}
@@ -370,7 +379,6 @@ const spotlightCards = [
   const searchInput = document.querySelector<HTMLInputElement>('#raiders-search');
   const classFilter = document.querySelector<HTMLSelectElement>('#raiders-class-filter');
   const teamFilter = document.querySelector<HTMLSelectElement>('#raiders-team-filter');
-  const authFilter = document.querySelector<HTMLSelectElement>('#raiders-auth-filter');
   const countLabel = document.querySelector<HTMLParagraphElement>('#raiders-count');
   const table = document.querySelector<HTMLTableElement>('#raiders-table');
   const tableBody = table?.querySelector('tbody');
@@ -387,24 +395,21 @@ const spotlightCards = [
     const query = searchInput?.value.trim().toLowerCase() ?? '';
     const selectedClass = classFilter?.value ?? 'all';
     const selectedTeam = teamFilter?.value ?? 'all';
-    const selectedAuth = authFilter?.value ?? 'all';
 
     const rows = [...tableBody.querySelectorAll('tr')];
     const visibleRows = rows.filter((row) => {
       const rowName = row.dataset.name ?? '';
       const rowClass = row.dataset.class ?? '';
       const rowTeam = row.dataset.team ?? '';
-      const rowAuthState = row.dataset.authState ?? '';
 
       const matchesSearch = query.length === 0 || rowName.includes(query);
       const matchesClass = selectedClass === 'all' || rowClass === selectedClass;
       const matchesTeam = selectedTeam === 'all' || rowTeam.split(',').map((value) => value.trim()).includes(selectedTeam);
-      const matchesAuth = selectedAuth === 'all' || rowAuthState === selectedAuth;
 
-      return matchesSearch && matchesClass && matchesTeam && matchesAuth;
+      return matchesSearch && matchesClass && matchesTeam;
     });
 
-    const numericKeys = new Set(['equippedItemLevel', 'raidProgressKills', 'mythicScore', 'tierPiecesEquipped', 'crestSort', 'totalUpgradesMissing', 'lastCheckedAt']);
+    const numericKeys = new Set(['equippedItemLevel', 'raidProgressKills', 'mythicScore', 'tierPiecesEquipped', 'crestSort', 'totalUpgradesMissing', 'preparednessScore']);
 
     visibleRows.sort((rowA, rowB) => {
       const toAttr = (key: string) => key.replace(/[A-Z]/g, (char) => `-${char.toLowerCase()}`);
@@ -472,10 +477,6 @@ const spotlightCards = [
     currentPage = 1;
     applyFiltersAndSort();
   });
-  authFilter?.addEventListener('change', () => {
-    currentPage = 1;
-    applyFiltersAndSort();
-  });
 
   sortButtons.forEach((button) => {
     button.addEventListener('click', () => {
@@ -486,7 +487,7 @@ const spotlightCards = [
         sortDirection = sortDirection === 'asc' ? 'desc' : 'asc';
       } else {
         sortKey = nextKey;
-        sortDirection = nextKey === 'name' || nextKey === 'class' || nextKey === 'authState' ? 'asc' : 'desc';
+        sortDirection = nextKey === 'name' || nextKey === 'class' ? 'asc' : 'desc';
       }
 
       applyFiltersAndSort();
@@ -717,6 +718,30 @@ const spotlightCards = [
     text-align: left;
     cursor: pointer;
     padding: 0;
+    position: relative;
+  }
+
+  .sort-btn[data-tooltip]:hover::before,
+  .sort-btn[data-tooltip]:focus-visible::before {
+    content: attr(data-tooltip);
+    position: absolute;
+    top: calc(100% + 0.35rem);
+    right: 0;
+    z-index: 20;
+    max-width: min(34rem, 80vw);
+    width: max-content;
+    white-space: normal;
+    padding: 0.45rem 0.55rem;
+    border-radius: 0.45rem;
+    border: 1px solid rgba(214, 176, 106, 0.4);
+    background: rgba(7, 14, 22, 0.97);
+    color: #d8e2e8;
+    font-size: 0.76rem;
+    line-height: 1.35;
+    text-transform: none;
+    letter-spacing: normal;
+    box-shadow: 0 10px 22px rgba(0, 0, 0, 0.38);
+    pointer-events: none;
   }
 
   .sort-btn[aria-sort='asc']::after {
