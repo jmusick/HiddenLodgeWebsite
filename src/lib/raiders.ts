@@ -11,6 +11,7 @@ const LOCALE = 'en_US';
 const REQUEST_CONCURRENCY = 3;
 const DETAILS_TTL_SECONDS = 12 * 60 * 60;
 const DETAIL_BATCH_SIZE = 6;
+const PREPAREDNESS_HISTORY_WINDOW_SECONDS = 30 * 24 * 60 * 60; // 30 days
 
 const CREST_STAT_IDS = {
   adventurer: 62292,
@@ -90,6 +91,10 @@ interface CachedRaiderRow {
   raid_progress_kills: number | null;
   raid_progress_total: number | null;
   details_synced_at: number | null;
+  avg_30d_socketed_gems: number | null;
+  avg_30d_total_sockets: number | null;
+  avg_30d_enchanted_slots: number | null;
+  avg_30d_enchantable_slots: number | null;
 }
 
 interface BlizzardSummaryResponse {
@@ -197,6 +202,10 @@ export interface RaiderRecord {
   raidProgressLabel: string | null;
   raidProgressKills: number | null;
   raidProgressTotal: number | null;
+  avg30dSocketedGems: number | null;
+  avg30dTotalSockets: number | null;
+  avg30dEnchantedSlots: number | null;
+  avg30dEnchantableSlots: number | null;
 }
 
 export interface RaidersCacheStatus {
@@ -443,6 +452,10 @@ async function enrichRaider(row: RaiderSourceRow, now: number, raidProgressTarge
     raidProgressLabel: null,
     raidProgressKills: null,
     raidProgressTotal: null,
+    avg30dSocketedGems: null,
+    avg30dTotalSockets: null,
+    avg30dEnchantedSlots: null,
+    avg30dEnchantableSlots: null,
   };
 
   const accessToken = await getBlizzardAppAccessToken();
@@ -500,6 +513,10 @@ async function enrichRaider(row: RaiderSourceRow, now: number, raidProgressTarge
     raidProgressLabel: raidProgress.label,
     raidProgressKills: raidProgress.kills,
     raidProgressTotal: raidProgress.total,
+    avg30dSocketedGems: null,
+    avg30dTotalSockets: null,
+    avg30dEnchantedSlots: null,
+    avg30dEnchantableSlots: null,
   };
 }
 
@@ -579,7 +596,11 @@ async function listCachedRaiders(db: D1Database): Promise<RaiderRecord[]> {
           raid_progress_label,
           raid_progress_kills,
           raid_progress_total,
-          details_synced_at
+          details_synced_at,
+          avg_30d_socketed_gems,
+          avg_30d_total_sockets,
+          avg_30d_enchanted_slots,
+          avg_30d_enchantable_slots
        FROM raider_metrics_cache
        ORDER BY class_name ASC, name ASC`
     )
@@ -613,7 +634,88 @@ async function listCachedRaiders(db: D1Database): Promise<RaiderRecord[]> {
     raidProgressLabel: row.raid_progress_label,
     raidProgressKills: row.raid_progress_kills,
     raidProgressTotal: row.raid_progress_total,
+    avg30dSocketedGems: row.avg_30d_socketed_gems,
+    avg30dTotalSockets: row.avg_30d_total_sockets,
+    avg30dEnchantedSlots: row.avg_30d_enchanted_slots,
+    avg30dEnchantableSlots: row.avg_30d_enchantable_slots,
   }));
+}
+
+async function recordPreparednessHistory(db: D1Database, raider: RaiderRecord, now: number): Promise<void> {
+  if (raider.socketedGems === null || raider.totalSockets === null ||
+      raider.enchantedSlots === null || raider.enchantableSlots === null) {
+    return;
+  }
+
+  await db
+    .prepare(
+      `INSERT INTO raider_preparedness_history (
+        blizzard_char_id,
+        recorded_at,
+        socketed_gems,
+        total_sockets,
+        enchanted_slots,
+        enchantable_slots
+      ) VALUES (?, ?, ?, ?, ?, ?)`
+    )
+    .bind(
+      raider.blizzardCharId,
+      now,
+      raider.socketedGems,
+      raider.totalSockets,
+      raider.enchantedSlots,
+      raider.enchantableSlots
+    )
+    .run();
+}
+
+async function calculateAndUpdatePreparednessAverages(db: D1Database, charId: number, now: number): Promise<void> {
+  const cutoff = now - PREPAREDNESS_HISTORY_WINDOW_SECONDS;
+
+  const averageResult = await db
+    .prepare(
+      `SELECT
+        AVG(CAST(socketed_gems AS REAL)) as avg_socketed_gems,
+        AVG(CAST(total_sockets AS REAL)) as avg_total_sockets,
+        AVG(CAST(enchanted_slots AS REAL)) as avg_enchanted_slots,
+        AVG(CAST(enchantable_slots AS REAL)) as avg_enchantable_slots
+       FROM raider_preparedness_history
+       WHERE blizzard_char_id = ? AND recorded_at >= ?`
+    )
+    .bind(charId, cutoff)
+    .first<{
+      avg_socketed_gems: number | null;
+      avg_total_sockets: number | null;
+      avg_enchanted_slots: number | null;
+      avg_enchantable_slots: number | null;
+    }>();
+
+  await db
+    .prepare(
+      `UPDATE raider_metrics_cache
+       SET avg_30d_socketed_gems = ?,
+           avg_30d_total_sockets = ?,
+           avg_30d_enchanted_slots = ?,
+           avg_30d_enchantable_slots = ?,
+           preparedness_history_synced_at = ?
+       WHERE blizzard_char_id = ?`
+    )
+    .bind(
+      averageResult?.avg_socketed_gems ?? null,
+      averageResult?.avg_total_sockets ?? null,
+      averageResult?.avg_enchanted_slots ?? null,
+      averageResult?.avg_enchantable_slots ?? null,
+      now,
+      charId
+    )
+    .run();
+}
+
+async function prunePreparednessHistory(db: D1Database, cutoff: number): Promise<void> {
+  await db
+    .prepare(`DELETE FROM raider_preparedness_history WHERE recorded_at < ?`)
+    .bind(cutoff)
+    .run();
 }
 
 async function pruneMissingRaiders(db: D1Database, summarySyncTime: number): Promise<void> {
@@ -847,7 +949,15 @@ export async function refreshRaidersCache(
         source.blizzard_char_id
       )
       .run();
+
+    // Record preparedness history and calculate 30-day averages
+    await recordPreparednessHistory(db, detailed, now);
+    await calculateAndUpdatePreparednessAverages(db, detailed.blizzardCharId, now);
   }
+
+  // Prune preparedness history older than 30 days
+  const cutoff = now - PREPAREDNESS_HISTORY_WINDOW_SECONDS;
+  await prunePreparednessHistory(db, cutoff);
 
   return getCacheStatus(db);
 }
@@ -923,7 +1033,11 @@ export async function getRaiderByCharId(charId: number, dbInput?: D1Database): P
            raid_progress_label,
            raid_progress_kills,
            raid_progress_total,
-          details_synced_at
+          details_synced_at,
+          avg_30d_socketed_gems,
+          avg_30d_total_sockets,
+          avg_30d_enchanted_slots,
+          avg_30d_enchantable_slots
        FROM raider_metrics_cache
        WHERE blizzard_char_id = ?`
     )
@@ -960,6 +1074,10 @@ export async function getRaiderByCharId(charId: number, dbInput?: D1Database): P
     raidProgressLabel: row.raid_progress_label,
     raidProgressKills: row.raid_progress_kills,
     raidProgressTotal: row.raid_progress_total,
+    avg30dSocketedGems: row.avg_30d_socketed_gems,
+    avg30dTotalSockets: row.avg_30d_total_sockets,
+    avg30dEnchantedSlots: row.avg_30d_enchanted_slots,
+    avg30dEnchantableSlots: row.avg_30d_enchantable_slots,
   };
 }
 

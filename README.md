@@ -8,6 +8,17 @@ The site combines public guild information, Blizzard-authenticated member profil
 
 ## Release Notes
 
+### 1.4.5
+
+- Added 30-day rolling history for gem socket and enchant coverage metrics on the Raiders page.
+- Preparedness Tier scores now reflect a raider's 30-day average rather than a point-in-time snapshot, protecting against temporary oversights on newly acquired gear.
+- Relaxed Preparedness Tier thresholds: S = 100%, A ≥ 85%, B ≥ 70%, C ≥ 40%, D < 40%.
+- Added `raider_preparedness_history` table to persist daily snapshots; 30-day averages are stored back to `raider_metrics_cache` after each refresh cycle.
+- History older than 30 days is automatically pruned on each refresh.
+- Detail pages (Raiders profile) now show Gems and Enchants as 30-day averages.
+- Updated Preparedness column tooltip to describe the rolling-average methodology.
+- Added DB migration `0023_preparedness_history.sql`.
+
 ### 1.4.4b
 
 - Added a defensive roster icon fallback path so class icons still render from static fallback URLs when Blizzard class-media lookups fail at runtime.

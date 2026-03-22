@@ -38,18 +38,24 @@ function formatScore(filled: number | null, total: number | null): string {
 }
 
 function preparednessTotals(raider: (typeof sortedRaiders)[number]): { filled: number | null; total: number | null } {
+  // Use 30-day averages if available, otherwise fall back to current values
+  const socketedGems = raider.avg30dSocketedGems ?? raider.socketedGems;
+  const totalSockets = raider.avg30dTotalSockets ?? raider.totalSockets;
+  const enchantedSlots = raider.avg30dEnchantedSlots ?? raider.enchantedSlots;
+  const enchantableSlots = raider.avg30dEnchantableSlots ?? raider.enchantableSlots;
+
   if (
-    raider.socketedGems === null ||
-    raider.totalSockets === null ||
-    raider.enchantedSlots === null ||
-    raider.enchantableSlots === null
+    socketedGems === null ||
+    totalSockets === null ||
+    enchantedSlots === null ||
+    enchantableSlots === null
   ) {
     return { filled: null, total: null };
   }
 
   return {
-    filled: raider.socketedGems + raider.enchantedSlots,
-    total: raider.totalSockets + raider.enchantableSlots,
+    filled: socketedGems + enchantedSlots,
+    total: totalSockets + enchantableSlots,
   };
 }
 
@@ -65,9 +71,9 @@ function preparednessTierDisplay(filled: number | null, total: number | null): {
 
   const pct = filled / total;
   if (pct >= 1) return { label: 'S Tier', color: '#ff8000' }; // Blizzard orange
-  if (pct >= 0.9) return { label: 'A Tier', color: '#a335ee' };
-  if (pct >= 0.75) return { label: 'B Tier', color: '#0070dd' };
-  if (pct >= 0.5) return { label: 'C Tier', color: '#1eff00' };
+  if (pct >= 0.85) return { label: 'A Tier', color: '#a335ee' };
+  if (pct >= 0.7) return { label: 'B Tier', color: '#0070dd' };
+  if (pct >= 0.4) return { label: 'C Tier', color: '#1eff00' };
   return { label: 'D Tier', color: '#ffffff' };
 }
 
@@ -283,7 +289,7 @@ const spotlightCards = [
             <th><button class="sort-btn" type="button" data-sort-key="totalUpgradesMissing">Missing Upgrades</button></th>
             <th>Gems</th>
             <th>Enchants</th>
-            <th><button class="sort-btn" type="button" data-sort-key="preparednessScore" data-tooltip="Preparedness = (Socketed Gems + Enchanted Slots) / (Total Sockets + Enchantable Slots). Tiers: S = 100%, A >= 90%, B >= 75%, C >= 50%, D < 50%." aria-label="Preparedness. Formula: (Socketed Gems + Enchanted Slots) / (Total Sockets + Enchantable Slots). Tiers: S equals 100 percent, A 90 percent or higher, B 75 percent or higher, C 50 percent or higher, D below 50 percent.">Preparedness</button></th>
+            <th><button class="sort-btn" type="button" data-sort-key="preparednessScore" data-tooltip="Preparedness = 30-day rolling average of (Socketed Gems + Enchanted Slots) / (Total Sockets + Enchantable Slots). Falls back to current snapshot until history accumulates. Tiers: S = 100%, A >= 85%, B >= 70%, C >= 40%, D < 40%." aria-label="Preparedness. Based on a 30-day rolling average of gem and enchant coverage. Formula: (Socketed Gems + Enchanted Slots) / (Total Sockets + Enchantable Slots). Tiers: S equals 100 percent, A 85 percent or higher, B 70 percent or higher, C 40 percent or higher, D below 40 percent.">Preparedness</button></th>
           </tr>
         </thead>
         <tbody>

@@ -227,20 +227,20 @@ const raiderIoUrl = raider.realmSlug
         <div class="stat-card">
           <div class="stat-label">
             <Icon name="lucide:gem" class="stat-icon" aria-hidden="true" />
-            Gems
+            Gems (30d Avg)
           </div>
-          <div class="stat-value" style={`color: ${scoreColor(raider.socketedGems, raider.totalSockets)}`}>
-            {formatScore(raider.socketedGems, raider.totalSockets)}
+          <div class="stat-value" style={`color: ${scoreColor(raider.avg30dSocketedGems ?? raider.socketedGems, raider.avg30dTotalSockets ?? raider.totalSockets)}`}>
+            {formatScore(raider.avg30dSocketedGems ?? raider.socketedGems, raider.avg30dTotalSockets ?? raider.totalSockets)}
           </div>
         </div>
 
         <div class="stat-card">
           <div class="stat-label">
             <Icon name="lucide:sparkles" class="stat-icon" aria-hidden="true" />
-            Enchants
+            Enchants (30d Avg)
           </div>
-          <div class="stat-value" style={`color: ${scoreColor(raider.enchantedSlots, raider.enchantableSlots)}`}>
-            {formatScore(raider.enchantedSlots, raider.enchantableSlots)}
+          <div class="stat-value" style={`color: ${scoreColor(raider.avg30dEnchantedSlots ?? raider.enchantedSlots, raider.avg30dEnchantableSlots ?? raider.enchantableSlots)}`}>
+            {formatScore(raider.avg30dEnchantedSlots ?? raider.enchantedSlots, raider.avg30dEnchantableSlots ?? raider.enchantableSlots)}
           </div>
         </div>
       </div>
