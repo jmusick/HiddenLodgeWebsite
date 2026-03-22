@@ -8,6 +8,10 @@ The site combines public guild information, Blizzard-authenticated member profil
 
 ## Release Notes
 
+### 1.4.6
+
+- Export JSON now includes each character's currently calculated `preparednessTier` (30-day average with current-value fallback).
+
 ### 1.4.5a
 
 - Raider detail pages now show Preparedness as a dedicated collapsible history table (30-day rolling snapshots) instead of separate Gems/Enchants stat cards.
@@ -149,6 +153,7 @@ Admin access is granted by guild rank via middleware. Officer or higher can acce
 	- manually trigger cache refresh for roster and raiders caches
 - Export module:
 	- generate character-to-label export JSON for guild addon workflows
+	- include each character's current Preparedness Tier in the export payload
 	- copy JSON to clipboard
 	- download export as a file
 

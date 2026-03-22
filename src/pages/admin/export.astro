@@ -17,11 +17,20 @@ interface GuildUserRow {
 
 interface CharRow {
 	user_id: number;
+	blizzard_char_id: number;
 	name: string;
 	realm: string;
 	class_name: string;
 	is_main: number;
 	guild_rank: number | null;
+	socketed_gems: number | null;
+	total_sockets: number | null;
+	enchanted_slots: number | null;
+	enchantable_slots: number | null;
+	avg_30d_socketed_gems: number | null;
+	avg_30d_total_sockets: number | null;
+	avg_30d_enchanted_slots: number | null;
+	avg_30d_enchantable_slots: number | null;
 }
 
 const [usersResult, charsResult] = await env.DB.batch([
@@ -33,14 +42,23 @@ const [usersResult, charsResult] = await env.DB.batch([
 		ORDER BY u.battle_tag
 	`),
 	env.DB.prepare(`
-		SELECT c.user_id, c.name, c.realm, c.class_name, c.is_main,
-		       rmc.rank AS guild_rank
+		SELECT c.user_id, c.blizzard_char_id, c.name, c.realm, c.class_name, c.is_main,
+		       rmc.rank AS guild_rank,
+		       mc.socketed_gems,
+		       mc.total_sockets,
+		       mc.enchanted_slots,
+		       mc.enchantable_slots,
+		       mc.avg_30d_socketed_gems,
+		       mc.avg_30d_total_sockets,
+		       mc.avg_30d_enchanted_slots,
+		       mc.avg_30d_enchantable_slots
 		FROM characters c
 		JOIN (
 		  SELECT DISTINCT ci.user_id FROM characters ci
 		  JOIN roster_members_cache r ON r.blizzard_char_id = ci.blizzard_char_id
 		) guild_users ON guild_users.user_id = c.user_id
 		LEFT JOIN roster_members_cache rmc ON rmc.blizzard_char_id = c.blizzard_char_id
+		LEFT JOIN raider_metrics_cache mc ON mc.blizzard_char_id = c.blizzard_char_id
 		ORDER BY c.user_id, c.is_main DESC, rmc.rank ASC, c.name ASC
 	`),
 ]);
@@ -65,7 +83,35 @@ type ExportEntry = {
 	main: string | null;
 	label: string;
 	nickname: string | null;
+	preparednessTier: string;
 };
+
+function preparednessTierForChar(char: CharRow): string {
+	const socketedGems = char.avg_30d_socketed_gems ?? char.socketed_gems;
+	const totalSockets = char.avg_30d_total_sockets ?? char.total_sockets;
+	const enchantedSlots = char.avg_30d_enchanted_slots ?? char.enchanted_slots;
+	const enchantableSlots = char.avg_30d_enchantable_slots ?? char.enchantable_slots;
+
+	if (
+		socketedGems === null ||
+		totalSockets === null ||
+		enchantedSlots === null ||
+		enchantableSlots === null
+	) {
+		return '—';
+	}
+
+	const filled = socketedGems + enchantedSlots;
+	const total = totalSockets + enchantableSlots;
+	if (total === 0) return 'N/A';
+
+	const pct = filled / total;
+	if (pct >= 1) return 'S Tier';
+	if (pct >= 0.85) return 'A Tier';
+	if (pct >= 0.7) return 'B Tier';
+	if (pct >= 0.4) return 'C Tier';
+	return 'D Tier';
+}
 
 const exportEntries: ExportEntry[] = [];
 
@@ -87,6 +133,7 @@ for (const user of guildUsers) {
 			main: mainName,
 			label,
 			nickname: user.nickname,
+			preparednessTier: preparednessTierForChar(char),
 		});
 	}
 }
