@@ -8,6 +8,10 @@ The site combines public guild information, Blizzard-authenticated member profil
 
 ## Release Notes
 
+### 1.4.4b
+
+- Added a defensive roster icon fallback path so class icons still render from static fallback URLs when Blizzard class-media lookups fail at runtime.
+
 ### 1.4.4a
 
 - Normalized Blizzard class icon media URLs to HTTPS before rendering to prevent mixed-content blocking on production roster class icons.

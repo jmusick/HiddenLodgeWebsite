@@ -765,6 +765,12 @@ export async function loadRosterWithCache(
   } catch (error) {
     // Non-fatal: class icons are decorative.
     console.error('Roster class icon load failed:', error);
+
+    // Keep roster icons visible even if Blizzard media/index calls fail.
+    members = members.map((member) => ({
+      ...member,
+      classIconUrl: fallbackClassIconUrl(member.className),
+    }));
   }
 
   return { members, status, errorMessage };
