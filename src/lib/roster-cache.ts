@@ -15,6 +15,32 @@ const API_BASE = `https://${REGION}.api.blizzard.com`;
 const STATIC_NAMESPACE = `static-${REGION}`;
 const LOCALE = 'en_US';
 
+// The guild roster API returns only { key, id } in playable_class — name is absent.
+// This map lets us resolve a display name from the numeric class ID.
+const WOW_CLASS_NAMES_BY_ID: Record<number, string> = {
+  1: 'Warrior',
+  2: 'Paladin',
+  3: 'Hunter',
+  4: 'Rogue',
+  5: 'Priest',
+  6: 'Death Knight',
+  7: 'Shaman',
+  8: 'Mage',
+  9: 'Warlock',
+  10: 'Monk',
+  11: 'Druid',
+  12: 'Demon Hunter',
+  13: 'Evoker',
+};
+
+function resolveClassName(playableClass?: { name?: string; id?: number }): string {
+  return playableClass?.name ?? WOW_CLASS_NAMES_BY_ID[playableClass?.id ?? -1] ?? 'Unknown';
+}
+
+function resolveRaceName(playableRace?: { name?: string }): string {
+  return playableRace?.name ?? 'Unknown';
+}
+
 interface GuildRosterMember {
   character: {
     key?: { href?: string };
@@ -22,7 +48,7 @@ interface GuildRosterMember {
     name: string;
     realm: { slug: string; name?: string };
     level?: number;
-    playable_class?: { name?: string };
+    playable_class?: { name?: string; id?: number };
     playable_race?: { name?: string };
   };
   rank: number;
@@ -393,8 +419,8 @@ export async function refreshRosterCache(
         member.character.name,
         member.character.realm.name ?? formatRealmFromSlug(member.character.realm.slug),
         member.character.realm.slug,
-        member.character.playable_class?.name ?? 'Unknown',
-        member.character.playable_race?.name ?? 'Unknown',
+        resolveClassName(member.character.playable_class),
+        resolveRaceName(member.character.playable_race),
         Number(member.character.level ?? 0),
         member.rank,
         now,
