@@ -52,6 +52,30 @@ function nowInSeconds(): number {
   return Math.floor(Date.now() / 1000);
 }
 
+function normalizeClassIconUrl(iconUrl: string | null | undefined): string | null {
+  const raw = iconUrl?.trim();
+  if (!raw) return null;
+
+  try {
+    const parsed = new URL(raw);
+    if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') {
+      return null;
+    }
+
+    // Browser mixed-content blocking can hide icons on production if API returns http links.
+    if (parsed.protocol === 'http:') {
+      parsed.protocol = 'https:';
+    }
+
+    return parsed.toString();
+  } catch {
+    if (raw.startsWith('//')) {
+      return `https:${raw}`;
+    }
+    return null;
+  }
+}
+
 export function normalizeWowClassName(value: string): string {
   return value.trim().toLowerCase();
 }
@@ -120,7 +144,7 @@ export async function loadBlizzardClassIconMap({
     const mediaUrl = `${apiBase}/data/wow/media/playable-class/${classId}?namespace=${staticNamespace}&locale=${locale}`;
     const media = await fetchJsonWithRetry<BlizzardPlayableClassMediaResponse>(mediaUrl, accessToken);
     const iconAsset = media?.assets?.find((asset) => (asset.key ?? '').toLowerCase() === 'icon');
-    const iconUrl = iconAsset?.value ?? null;
+    const iconUrl = normalizeClassIconUrl(iconAsset?.value ?? null);
     return {
       className,
       iconUrl,

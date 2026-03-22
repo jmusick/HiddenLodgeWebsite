@@ -8,6 +8,10 @@ The site combines public guild information, Blizzard-authenticated member profil
 
 ## Release Notes
 
+### 1.4.4a
+
+- Normalized Blizzard class icon media URLs to HTTPS before rendering to prevent mixed-content blocking on production roster class icons.
+
 ### 1.4.0
 
 - Added crest tracking to Raiders metrics (Adventurer, Veteran, Champion, Hero, Myth) sourced from Blizzard character statistics.
