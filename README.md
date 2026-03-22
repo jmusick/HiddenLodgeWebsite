@@ -8,6 +8,11 @@ The site combines public guild information, Blizzard-authenticated member profil
 
 ## Release Notes
 
+### 1.4.5a
+
+- Raider detail pages now show Preparedness as a dedicated collapsible history table (30-day rolling snapshots) instead of separate Gems/Enchants stat cards.
+- Unified right-column panel card styling on raider detail pages so Preparedness History, Raid Progress, Crests Earned, and sync blocks align consistently.
+
 ### 1.4.5
 
 - Added 30-day rolling history for gem socket and enchant coverage metrics on the Raiders page.

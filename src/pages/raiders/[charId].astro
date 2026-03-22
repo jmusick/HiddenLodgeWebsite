@@ -4,7 +4,7 @@ export const prerender = false;
 import Layout from '../../layouts/Layout.astro';
 import { Icon } from 'astro-icon/components';
 import { classColor } from '../../lib/wow';
-import { getRaiderByCharId, getRaiderMedia } from '../../lib/raiders';
+import { getRaiderByCharId, getRaiderMedia, getPreparednessHistory } from '../../lib/raiders';
 import { RAID_PROGRESS_TARGET_GROUPS } from '../../data/raidProgressTargets';
 
 const { charId } = Astro.params;
@@ -13,9 +13,10 @@ if (!charId || !Number.isFinite(id)) {
   return new Response('Not found', { status: 404 });
 }
 
-const [raider, media] = await Promise.all([
+const [raider, media, preparednessHistory] = await Promise.all([
   getRaiderByCharId(id),
   getRaiderMedia(id),
+  getPreparednessHistory(id),
 ]);
 if (!raider) {
   return new Response('Not found', { status: 404 });
@@ -224,25 +225,6 @@ const raiderIoUrl = raider.realmSlug
           <div class="stat-value">{raider.totalUpgradesMissing ?? '—'}</div>
         </div>
 
-        <div class="stat-card">
-          <div class="stat-label">
-            <Icon name="lucide:gem" class="stat-icon" aria-hidden="true" />
-            Gems (30d Avg)
-          </div>
-          <div class="stat-value" style={`color: ${scoreColor(raider.avg30dSocketedGems ?? raider.socketedGems, raider.avg30dTotalSockets ?? raider.totalSockets)}`}>
-            {formatScore(raider.avg30dSocketedGems ?? raider.socketedGems, raider.avg30dTotalSockets ?? raider.totalSockets)}
-          </div>
-        </div>
-
-        <div class="stat-card">
-          <div class="stat-label">
-            <Icon name="lucide:sparkles" class="stat-icon" aria-hidden="true" />
-            Enchants (30d Avg)
-          </div>
-          <div class="stat-value" style={`color: ${scoreColor(raider.avg30dEnchantedSlots ?? raider.enchantedSlots, raider.avg30dEnchantableSlots ?? raider.enchantableSlots)}`}>
-            {formatScore(raider.avg30dEnchantedSlots ?? raider.enchantedSlots, raider.avg30dEnchantableSlots ?? raider.enchantableSlots)}
-          </div>
-        </div>
       </div>
 
       <section class="raid-progress-panel panel" aria-label="Raid progress">
@@ -288,6 +270,62 @@ const raiderIoUrl = raider.realmSlug
           <p class="raid-progress-empty">No crest data available yet.</p>
         )}
       </section>
+
+      <details class="preparedness-history-panel panel">
+        <summary class="prep-history-summary" aria-label="Preparedness history">
+          <Icon name="lucide:history" class="raid-progress-icon" aria-hidden="true" />
+          Preparedness History
+          <span class="history-subtitle">(30-day rolling)</span>
+          <Icon name="lucide:chevron-down" class="collapse-chevron" aria-hidden="true" />
+        </summary>
+        {preparednessHistory.length > 0 ? (
+          <div class="prep-history-table-wrap">
+            <table class="prep-history-table">
+              <thead>
+                <tr>
+                  <th>Date</th>
+                  <th>Gems</th>
+                  <th>Enchants</th>
+                  <th>Combined</th>
+                  <th>Tier</th>
+                </tr>
+              </thead>
+              <tbody>
+                {preparednessHistory.map((row) => {
+                  const combinedFilled = row.socketedGems !== null && row.enchantedSlots !== null ? row.socketedGems + row.enchantedSlots : null;
+                  const combinedTotal = row.totalSockets !== null && row.enchantableSlots !== null ? row.totalSockets + row.enchantableSlots : null;
+                  const combinedPct = combinedFilled !== null && combinedTotal && combinedTotal > 0 ? combinedFilled / combinedTotal : null;
+
+                  const tierLabel = combinedPct === null ? '—'
+                    : combinedPct >= 1 ? 'S'
+                    : combinedPct >= 0.85 ? 'A'
+                    : combinedPct >= 0.7 ? 'B'
+                    : combinedPct >= 0.4 ? 'C'
+                    : 'D';
+                  const tierColor = combinedPct === null ? '#b0c4d0'
+                    : combinedPct >= 1 ? '#ff8000'
+                    : combinedPct >= 0.85 ? '#a335ee'
+                    : combinedPct >= 0.7 ? '#0070dd'
+                    : combinedPct >= 0.4 ? '#1eff00'
+                    : '#ffffff';
+
+                  return (
+                    <tr>
+                      <td class="date-col">{new Date(row.recordedAt * 1000).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}</td>
+                      <td style={`color: ${scoreColor(row.socketedGems, row.totalSockets)}`}>{formatScore(row.socketedGems, row.totalSockets)}</td>
+                      <td style={`color: ${scoreColor(row.enchantedSlots, row.enchantableSlots)}`}>{formatScore(row.enchantedSlots, row.enchantableSlots)}</td>
+                      <td style={`color: ${scoreColor(combinedFilled, combinedTotal)}`}>{formatScore(combinedFilled, combinedTotal)}</td>
+                      <td><span class="tier-badge" style={`color: ${tierColor}; border-color: ${tierColor}40`}>{tierLabel}</span></td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          <p class="raid-progress-empty">No preparedness history recorded yet. History accumulates with each cron refresh.</p>
+        )}
+      </details>
 
       <section class="sync-info panel" aria-label="Sync info">
         <p class="sync-text">
@@ -522,6 +560,23 @@ const raiderIoUrl = raider.realmSlug
     gap: 1rem;
   }
 
+  .panel {
+    width: 100%;
+    min-width: 0;
+    box-sizing: border-box;
+    border: 1px solid rgba(214, 176, 106, 0.32);
+    border-radius: 0.75rem;
+    background:
+      linear-gradient(155deg, rgba(214, 176, 106, 0.07), transparent 50%),
+      rgba(11, 21, 32, 0.78);
+  }
+
+  .stats-col > section,
+  .stats-col > details {
+    max-width: 100%;
+    min-width: 0;
+  }
+
   /* ── Stat cards ── */
   .stats-grid {
     display: grid;
@@ -665,6 +720,135 @@ const raiderIoUrl = raider.realmSlug
   /* ── Sync info ── */
   .sync-info {
     padding: 0.75rem 1rem;
+  }
+
+  /* ── Preparedness History ── */
+  .preparedness-history-panel {
+    padding: 0;
+    display: block;
+    max-width: 100%;
+    min-width: 0;
+    box-sizing: border-box;
+    overflow: hidden;
+  }
+
+  .prep-history-summary {
+    display: flex;
+    align-items: center;
+    gap: 0.45rem;
+    padding: 1rem 1.1rem;
+    cursor: pointer;
+    list-style: none;
+    color: #f1d9a9;
+    font-family: 'Cinzel', serif;
+    font-size: 1.05rem;
+    letter-spacing: 0.02em;
+    user-select: none;
+    border-radius: 0.75rem;
+    transition: background 0.15s;
+  }
+
+  .prep-history-summary::-webkit-details-marker {
+    display: none;
+  }
+
+  .prep-history-summary:hover {
+    background: rgba(214, 176, 106, 0.06);
+  }
+
+  details.preparedness-history-panel[open] .prep-history-summary {
+    border-bottom: 1px solid rgba(214, 176, 106, 0.18);
+    border-radius: 0.75rem 0.75rem 0 0;
+  }
+
+  .collapse-chevron {
+    width: 1rem;
+    height: 1rem;
+    margin-left: auto;
+    flex-shrink: 0;
+    transition: transform 0.2s ease;
+  }
+
+  details.preparedness-history-panel[open] .collapse-chevron {
+    transform: rotate(180deg);
+  }
+
+  .prep-history-table-wrap,
+  .preparedness-history-panel > .raid-progress-empty {
+    padding: 0.75rem 1.1rem 1rem;
+  }
+
+  .history-subtitle {
+    font-size: 0.78rem;
+    color: #b0c4d0;
+    font-family: sans-serif;
+    font-weight: 400;
+    letter-spacing: 0.02em;
+    text-transform: none;
+    margin-left: 0.25rem;
+  }
+
+  .prep-history-table-wrap {
+    max-width: 100%;
+    min-width: 0;
+    box-sizing: border-box;
+    overflow-x: auto;
+  }
+
+  .prep-history-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.9rem;
+  }
+
+  .prep-history-table thead th {
+    text-align: left;
+    padding: 0.35rem 0.65rem;
+    color: #b0c4d0;
+    font-size: 0.79rem;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    border-bottom: 1px solid rgba(214, 176, 106, 0.22);
+    white-space: nowrap;
+  }
+
+  .prep-history-table tbody tr {
+    border-bottom: 1px solid rgba(109, 172, 229, 0.1);
+    transition: background 0.1s;
+  }
+
+  .prep-history-table tbody tr:last-child {
+    border-bottom: none;
+  }
+
+  .prep-history-table tbody tr:hover {
+    background: rgba(214, 176, 106, 0.06);
+  }
+
+  .prep-history-table tbody td {
+    padding: 0.38rem 0.65rem;
+    color: #d8e2e8;
+    font-weight: 600;
+    white-space: nowrap;
+  }
+
+  .date-col {
+    color: #b0c4d0 !important;
+    font-weight: 400 !important;
+    font-size: 0.86rem;
+  }
+
+  .tier-badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0.1rem 0.55rem;
+    border-radius: 999px;
+    border: 1px solid;
+    font-family: 'Cinzel', serif;
+    font-size: 0.82rem;
+    font-weight: 700;
+    min-width: 2rem;
   }
 
   .sync-text {

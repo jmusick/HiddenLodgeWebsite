@@ -1003,6 +1003,48 @@ export async function getRaiderMediaUrl(charId: number, dbInput?: D1Database): P
   return fullBody ?? portrait;
 }
 
+export interface PreparednessHistoryRow {
+  recordedAt: number;
+  socketedGems: number | null;
+  totalSockets: number | null;
+  enchantedSlots: number | null;
+  enchantableSlots: number | null;
+}
+
+export async function getPreparednessHistory(charId: number, dbInput?: D1Database): Promise<PreparednessHistoryRow[]> {
+  const db = getDatabase(dbInput);
+  const cutoff = nowInSeconds() - PREPAREDNESS_HISTORY_WINDOW_SECONDS;
+
+  const result = await db
+    .prepare(
+      `SELECT
+         recorded_at,
+         socketed_gems,
+         total_sockets,
+         enchanted_slots,
+         enchantable_slots
+       FROM raider_preparedness_history
+       WHERE blizzard_char_id = ? AND recorded_at >= ?
+       ORDER BY recorded_at DESC`
+    )
+    .bind(charId, cutoff)
+    .all<{
+      recorded_at: number;
+      socketed_gems: number | null;
+      total_sockets: number | null;
+      enchanted_slots: number | null;
+      enchantable_slots: number | null;
+    }>();
+
+  return (result.results ?? []).map((row) => ({
+    recordedAt: row.recorded_at,
+    socketedGems: row.socketed_gems,
+    totalSockets: row.total_sockets,
+    enchantedSlots: row.enchanted_slots,
+    enchantableSlots: row.enchantable_slots,
+  }));
+}
+
 export async function getRaiderByCharId(charId: number, dbInput?: D1Database): Promise<RaiderRecord | null> {
   const db = getDatabase(dbInput);
   const row = await db
