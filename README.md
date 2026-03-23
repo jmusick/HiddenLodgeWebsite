@@ -8,6 +8,16 @@ The site combines public guild information, Blizzard-authenticated member profil
 
 ## Release Notes
 
+### 1.5.0
+
+- Added interactive sim tools to raider detail pages (`RaiderSimTools` component):
+  - Run a full droptimizer sim for any raider directly from their profile page, using site roster data or a pasted SimC addon export.
+  - Live progress bar and stage/detail label update in real time while the sim runs (polling the local WoWSim app via `/api/sim/launch/status`).
+  - Results table shows top upgrade candidates ranked by DPS gain once the run completes.
+  - Purge sim history action clears stored run data for that raider.
+- Added `POST /api/sim/latest` handler for purging a raider's sim history (replaces the previous `/api/sim/purge` route).
+- Sim API fetch calls now use a base-URL-aware helper with automatic 404 fallback, ensuring correct routing under all deploy contexts.
+
 ### 1.4.6
 
 - Export JSON now includes each character's currently calculated `preparednessTier` (30-day average with current-value fallback).
@@ -231,6 +241,174 @@ Admin access is granted by guild rank via middleware. Officer or higher can acce
 | `/api/admin/links/update-link` | POST | Update link name, URL, or sort order |
 | `/api/admin/links/delete-link` | POST | Delete a link |
 
+### Sim Runner API
+
+Machine-to-machine endpoints for local/external simulation runners. These endpoints do not rely on session auth and require `X-Sim-Runner-Key`.
+
+| Endpoint | Method | Description |
+|---|---|---|
+| `/api/sim/targets` | GET | Returns deterministic team/member simulation targets for active roster teams |
+| `/api/sim/results` | POST | Ingests simulation output and persists run/winner data with idempotency by `(run_id, site_team_id)` |
+| `/api/sim/runs/start` | POST | Optional lifecycle endpoint to mark a sim run as started |
+| `/api/sim/runs/heartbeat` | POST | Optional lifecycle endpoint to mark a sim run as running/healthy |
+| `/api/sim/runs/finish` | POST | Optional lifecycle endpoint to mark a sim run as finished or failed |
+
+Required request header for the endpoints above:
+
+```http
+X-Sim-Runner-Key: <SIM_RUNNER_KEY>
+```
+
+Authentication behavior:
+
+1. Missing key returns `401 Unauthorized`.
+2. Invalid key returns `401 Unauthorized`.
+3. Session cookies are not used for these machine endpoints.
+
+### Sim UI Read API
+
+| Endpoint | Method | Description |
+|---|---|---|
+| `/api/sim/latest?team_id=<id>&difficulty=<value>` | GET | Returns latest successful run and normalized winners for UI rendering |
+| `/api/sim/latest` | POST | Purges stored sim history for the authenticated raider (ownership or admin required) |
+
+Intended usage: internal website/admin UI reads. These endpoints require an authenticated guild member (or admin) session.
+
+### Sim UI Action API
+
+| Endpoint | Method | Description |
+|---|---|---|
+| `/api/sim/launch` | POST | Launches a raider sim job through the external WoWSim app using either site data or pasted addon export |
+| `/api/sim/launch/status?job_id=<id>&char_id=<id>` | GET | Polls WoWSim app job status and returns merged latest uploaded recommendations for the raider |
+
+These endpoints require an authenticated guild-member (or admin) session.
+
+### Sim Runner Request/Response Samples
+
+`GET /api/sim/targets` example response:
+
+```json
+{
+	"roster_revision": "fnv1a-77e16490",
+	"generated_at_utc": "2026-03-22T18:01:12.456Z",
+	"teams": [
+		{
+			"team_id": 1,
+			"team_name": "Mythic Main Team",
+			"raid_mode": "mythic",
+			"difficulty": "mythic",
+			"raiders": [
+				{
+					"blizzard_char_id": 123456789,
+					"name": "Aldren",
+					"realm_slug": "illidan",
+					"region": "us",
+					"level": 90,
+					"guild_rank": 4,
+					"priority": null
+				}
+			]
+		}
+	]
+}
+```
+
+`POST /api/sim/results` request body example:
+
+```json
+{
+	"run_id": "run-2026-03-22-001",
+	"roster_revision": "fnv1a-77e16490",
+	"started_at_utc": "2026-03-22T17:40:00Z",
+	"finished_at_utc": "2026-03-22T17:44:10Z",
+	"site_team_id": 1,
+	"difficulty": "mythic",
+	"simc_version": "1100-03",
+	"runner_version": "sim-runner/1.3.0",
+	"raider_summaries": [
+		{
+			"blizzard_char_id": 123456789,
+			"baseline_dps": 1432200.4,
+			"top_scenario": "Shoulders + Ring",
+			"top_dps": 1489012.7,
+			"gain_dps": 56812.3
+		}
+	],
+	"item_winners": [
+		{
+			"slot": "shoulder",
+			"item_id": 238117,
+			"item_label": "Crystalline Fury Pauldrons",
+			"ilvl": 678,
+			"source": "Mug'Zee",
+			"best_blizzard_char_id": 123456789,
+			"delta_dps": 56812.3,
+			"pct_gain": 3.97,
+			"simc": "head=...\nshoulder=..."
+		}
+	]
+}
+```
+
+`POST /api/sim/results` success response:
+
+```json
+{
+	"success": true,
+	"duplicate": false,
+	"run_id": "run-2026-03-22-001",
+	"site_team_id": 1,
+	"inserted": {
+		"raider_summaries": 1,
+		"item_winners": 1
+	}
+}
+```
+
+Duplicate upload response (same `run_id` + `site_team_id`):
+
+```json
+{
+	"success": true,
+	"duplicate": true,
+	"run_id": "run-2026-03-22-001",
+	"site_team_id": 1
+}
+```
+
+Validation error response example:
+
+```json
+{
+	"error": "Invalid payload",
+	"details": [
+		"site_team_id must be a positive integer.",
+		"raider_summaries must be an array."
+	]
+}
+```
+
+### Sim Runner Local Testing
+
+Targets pull:
+
+```bash
+curl -sS \
+	-H "X-Sim-Runner-Key: $SIM_RUNNER_KEY" \
+	http://localhost:4321/api/sim/targets
+```
+
+Results push:
+
+```bash
+curl -sS \
+	-X POST \
+	-H "Content-Type: application/json" \
+	-H "X-Sim-Runner-Key: $SIM_RUNNER_KEY" \
+	-d @sim-results.json \
+	http://localhost:4321/api/sim/results
+```
+
 ### Scheduled / Maintenance API
 
 | Endpoint | Method | Description |
@@ -348,7 +526,9 @@ These handlers remain in the codebase as retired stubs and currently return HTTP
 │   ├── 0019_raider_crests.sql
 │   ├── 0020_missing_upgrades.sql
 │   ├── 0021_deaths_count.sql
-│   └── 0022_deaths_count_backfill.sql
+│   ├── 0022_deaths_count_backfill.sql
+│   ├── 0023_preparedness_history.sql
+│   └── 0024_sim_runs.sql
 ├── public/
 │   ├── _routes.json
 │   └── images/
@@ -483,6 +663,11 @@ Migrations are stored in `migrations/` and should be applied in order.
 | `WCL_CLIENT_ID` | No | Warcraft Logs OAuth client ID (enables Recent Logs uploader and publish time metadata) |
 | `WCL_CLIENT_SECRET` | No | Warcraft Logs OAuth client secret (enables Recent Logs uploader and publish time metadata) |
 | `CRON_SECRET` | Yes | Shared secret for roster refresh requests |
+| `SIM_RUNNER_KEY` | Yes (for sim APIs) | Shared secret used by `/api/sim/*` machine endpoints via `X-Sim-Runner-Key` |
+| `WOWSIM_APP_BASE_URL` | Yes (for Sim Tools launch) | Base URL for the WoWSim app used by raider profile Sim Tools |
+| `WOWSIM_APP_API_KEY` | No | Optional key sent to WoWSim app in `X-WoWSim-Key` |
+| `WOWSIM_APP_TRIGGER_PATH` | No | WoWSim launch path template; defaults to `/api/jobs/start` |
+| `WOWSIM_APP_STATUS_PATH` | No | WoWSim status path template; defaults to `/api/jobs/{job_id}` |
 | `SESSION_SECRET` | Yes | Session signing and validation secret |
 
 ## Deployment

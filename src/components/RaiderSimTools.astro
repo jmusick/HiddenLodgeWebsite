@@ -1,0 +1,1254 @@
+---
+import { env } from 'cloudflare:workers';
+import { Icon } from 'astro-icon/components';
+import { classColor } from '../lib/wow';
+import { getLatestSimForRaider } from '../lib/sim-api';
+
+interface Props {
+  charId: number;
+  charName: string;
+  charClass: string;
+  canManageSim?: boolean;
+}
+
+const { charId, charName, charClass, canManageSim = false } = Astro.props as Props;
+const accent = classColor(charClass);
+const latest = await getLatestSimForRaider(env.DB, charId);
+---
+
+<section class="sim-tools-panel" data-sim-tools-root data-char-id={String(charId)} data-can-manage={canManageSim ? '1' : '0'} aria-label="Sim tools">
+  <header class="sim-tools-head" style={`--sim-accent: ${accent}`}>
+    <h2 class="sim-tools-title">
+      <Icon name="lucide:flask-conical" class="sim-tools-icon" aria-hidden="true" />
+      Sim Tools
+      <span class="sim-tools-beta">Beta</span>
+    </h2>
+    <p class="sim-tools-subtitle">Run a fresh LodgeSim job and prioritize upgrades by source or slot. This beta feature is still being tuned.</p>
+  </header>
+
+  <div class="sim-tools-controls">
+    <label class="sim-tools-field">
+      <span>Input Mode</span>
+      <select data-sim-tools-mode>
+        <option value="site">Use site data</option>
+        <option value="addon">Paste SimC addon export</option>
+      </select>
+    </label>
+
+    <label class="sim-tools-field">
+      <span>Raid</span>
+      <select data-sim-tools-raid>
+        <option value="all">All Raids</option>
+        <option value="voidspire">The Voidspire</option>
+        <option value="dreamrift">The Dreamrift</option>
+        <option value="queldanas">March on Quel'Danas</option>
+      </select>
+    </label>
+
+    <label class="sim-tools-field">
+      <span>Difficulty</span>
+      <select data-sim-tools-difficulty>
+        <option value="all">All</option>
+        <option value="normal">Normal</option>
+        <option value="heroic">Heroic</option>
+        <option value="mythic">Mythic</option>
+      </select>
+    </label>
+
+    <button type="button" class="sim-tools-run" data-sim-tools-run>
+      Run Sim for {charName}
+    </button>
+  </div>
+
+  <label class="sim-tools-addon-wrap is-hidden" data-sim-addon-wrap>
+    <span>SimC Addon Export</span>
+    <textarea
+      data-sim-addon-input
+      rows="8"
+      placeholder="Paste your /simc export here when using addon mode."
+    ></textarea>
+  </label>
+
+  <div class="sim-tools-status" data-sim-status-wrap>
+    <p class="sim-tools-connection checking" data-sim-connection>
+      <span class="dot" aria-hidden="true"></span>
+      <span data-sim-connection-text>Checking LodgeSim connection...</span>
+    </p>
+    <div class="sim-tools-status-row">
+      <p class="sim-tools-status-line" data-sim-status-text>Ready to run.</p>
+      {canManageSim && (
+        <button type="button" class="sim-tools-purge" data-sim-tools-purge>
+          Purge Sim History
+        </button>
+      )}
+    </div>
+    <div class="sim-tools-progress-track" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" data-sim-progress-track>
+      <div class="sim-tools-progress-fill" data-sim-progress-fill></div>
+    </div>
+  </div>
+
+  <div class="sim-tools-meta" data-sim-meta>
+    {latest ? (
+      <p>
+        Latest result: <strong>{latest.run_id}</strong>
+        <span aria-hidden="true"> • </span>
+        Updated {new Date(latest.updated_at * 1000).toLocaleString()}
+      </p>
+    ) : (
+      <p>No uploaded sim results for this raider yet.</p>
+    )}
+    <p class="sim-tools-assumption" data-sim-assumption>
+      Sim assumption: candidate items are evaluated at the highest crest-upgrade step available within their current upgrade track.
+    </p>
+  </div>
+
+  <div class="sim-tools-table-wrap">
+    <table class="sim-tools-table" data-sim-table>
+      <thead>
+        <tr>
+          <th><button type="button" class="sim-sort" data-sort-key="slot">Slot</button></th>
+          <th><button type="button" class="sim-sort" data-sort-key="item">Item</button></th>
+          <th><button type="button" class="sim-sort" data-sort-key="source">Source</button></th>
+          <th><button type="button" class="sim-sort" data-sort-key="difficulty">Source Difficulty</button></th>
+          <th><button type="button" class="sim-sort" data-sort-key="ilvl">iLvl</button></th>
+          <th><button type="button" class="sim-sort" data-sort-key="delta">Delta DPS</button></th>
+          <th><button type="button" class="sim-sort" data-sort-key="pct">Gain %</button></th>
+        </tr>
+        <tr class="sim-filter-row">
+          <th>
+            <select data-filter-key="slot" class="sim-filter-select">
+              <option value="">All Slots</option>
+            </select>
+          </th>
+          <th><input data-filter-key="item" class="sim-filter" type="text" placeholder="Search item" /></th>
+          <th>
+            <select data-filter-key="source" class="sim-filter-select">
+              <option value="">All Sources</option>
+            </select>
+          </th>
+          <th>
+            <select data-filter-key="difficulty" class="sim-filter-select">
+              <option value="">All</option>
+              <option value="normal">Normal</option>
+              <option value="heroic">Heroic</option>
+              <option value="mythic">Mythic</option>
+            </select>
+          </th>
+          <th></th>
+          <th></th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody data-sim-table-body>
+        <tr>
+          <td colspan="7" class="sim-tools-empty">Loading recommendations...</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<script>
+  // @ts-nocheck
+  const initSimTools = () => {
+    const panel = document.querySelector('[data-sim-tools-root]');
+    if (!(panel instanceof HTMLElement)) return;
+
+    const forceOffline = (text) => {
+      const line = panel.querySelector('[data-sim-connection]');
+      if (!(line instanceof HTMLElement)) return;
+      line.classList.remove('checking', 'online', 'offline');
+      line.classList.add('offline');
+      const textSpan = line.querySelector('[data-sim-connection-text]');
+      if (textSpan) textSpan.textContent = text;
+    };
+
+    const charId = Number(panel.getAttribute('data-char-id') || 0);
+    if (!Number.isFinite(charId) || charId <= 0) return;
+
+    const modeSelect = panel.querySelector('[data-sim-tools-mode]');
+    const raidSelect = panel.querySelector('[data-sim-tools-raid]');
+    const difficultySelect = panel.querySelector('[data-sim-tools-difficulty]');
+    const runButton = panel.querySelector('[data-sim-tools-run]');
+    const purgeButton = panel.querySelector('[data-sim-tools-purge]');
+    const addonWrap = panel.querySelector('[data-sim-addon-wrap]');
+    const addonInput = panel.querySelector('[data-sim-addon-input]');
+    const statusText = panel.querySelector('[data-sim-status-text]');
+    const connectionLine = panel.querySelector('[data-sim-connection]');
+    const progressTrack = panel.querySelector('[data-sim-progress-track]');
+    const progressFill = panel.querySelector('[data-sim-progress-fill]');
+    const tableBody = panel.querySelector('[data-sim-table-body]');
+    const meta = panel.querySelector('[data-sim-meta]');
+
+    if (!(modeSelect instanceof HTMLSelectElement)) return;
+    if (!(raidSelect instanceof HTMLSelectElement)) return;
+    if (!(difficultySelect instanceof HTMLSelectElement)) return;
+    if (!(runButton instanceof HTMLButtonElement)) return;
+      if (purgeButton && !(purgeButton instanceof HTMLButtonElement)) return;
+    if (!(addonWrap instanceof HTMLElement)) return;
+    if (!(addonInput instanceof HTMLTextAreaElement)) return;
+    if (!(statusText instanceof HTMLElement)) return;
+    if (!(connectionLine instanceof HTMLElement)) return;
+    if (!(progressTrack instanceof HTMLElement)) return;
+    if (!(progressFill instanceof HTMLElement)) return;
+    if (!(tableBody instanceof HTMLElement)) return;
+    if (!(meta instanceof HTMLElement)) return;
+
+    const watchdog = window.setTimeout(() => {
+      forceOffline('Connection check stalled. Refresh page.');
+    }, 6000);
+
+    let latest = null;
+    let activeJobId = null;
+    let pollTimer = null;
+    let sortKey = 'delta';
+    let sortDir = 'desc';
+    let lastSimRaidLabel = null;
+    let lastSimDifficulty = null;
+
+    const filterValues = {
+      slot: '',
+      item: '',
+      source: '',
+      difficulty: '',
+    };
+
+    const populateSelectOptions = (selector, options, emptyLabel) => {
+      const select = panel.querySelector(selector);
+      if (!(select instanceof HTMLSelectElement)) return;
+
+      const current = select.value;
+      const unique = [...new Set(options.map((v) => String(v || '').trim()).filter(Boolean))]
+        .sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
+
+      select.innerHTML = `<option value="">${emptyLabel}</option>`
+        + unique.map((value) => `<option value="${esc(value)}">${esc(value)}</option>`).join('');
+
+      if (current && unique.includes(current)) {
+        select.value = current;
+      }
+    };
+
+    const stripSourceDifficultyPrefix = (value) => String(value || '')
+      .replace(/^\s*(lfr|normal|heroic|mythic)\s+-\s+/i, '')
+      .trim();
+
+    const idleButtonLabel = runButton.textContent?.trim() || 'Run Sim';
+
+    const syncPurgeButtonWidth = () => {
+      if (!(purgeButton instanceof HTMLButtonElement)) return;
+      purgeButton.style.width = '';
+      const width = Math.ceil(runButton.getBoundingClientRect().width);
+      if (width > 0) {
+        purgeButton.style.width = `${width}px`;
+      }
+    };
+
+    const slotLabel = (value) => {
+      const key = String(value || '').trim().toLowerCase();
+      const map = {
+        main_hand: 'Main Hand',
+        off_hand: 'Off Hand',
+        trinket1: 'Trinket 1',
+        trinket2: 'Trinket 2',
+        finger1: 'Finger 1',
+        finger2: 'Finger 2',
+      };
+      if (map[key]) return map[key];
+      return key
+        .replace(/_/g, ' ')
+        .replace(/\b\w/g, (ch) => ch.toUpperCase());
+    };
+
+    const parseBonusIds = (simc) => {
+      const match = String(simc || '').match(/\bbonus_id=([0-9/]+)/i);
+      if (!match) return [];
+      return match[1]
+        .split('/')
+        .map((part) => Number.parseInt(part, 10))
+        .filter((n) => Number.isInteger(n));
+    };
+
+    const inferSourceDifficulty = (winner) => {
+      const ids = parseBonusIds(winner?.simc || '');
+      if (ids.includes(4797)) return 'lfr';
+      if (ids.includes(4798)) return 'normal';
+      if (ids.includes(4800)) return 'mythic';
+      if (ids.includes(4799)) return 'heroic';
+
+      const sourceText = String(winner?.source || '').toLowerCase();
+      if (sourceText.includes('lfr') || sourceText.includes('raid finder')) return 'lfr';
+      if (sourceText.includes('normal')) return 'normal';
+      if (sourceText.includes('mythic')) return 'mythic';
+      if (sourceText.includes('heroic')) return 'heroic';
+
+      // Live-generated pools can omit bonus_id and use ilevel-only SimC strings.
+      // Fall back to ilvl bands so source difficulty remains visible in the table.
+      const ilvl = Number.parseInt(String(winner?.ilvl ?? ''), 10);
+      if (Number.isInteger(ilvl)) {
+        if (ilvl >= 282) return 'mythic';
+        if (ilvl >= 272) return 'heroic';
+        if (ilvl >= 263) return 'normal';
+        if (ilvl >= 250) return 'lfr';
+      }
+
+      return 'unknown';
+    };
+
+    const formatDifficulty = (value) => {
+      const normalized = String(value || '').trim().toLowerCase();
+      if (normalized === 'lfr') return 'LFR';
+      if (normalized === 'normal') return 'Normal';
+      if (normalized === 'mythic') return 'Mythic';
+      if (normalized === 'heroic') return 'Heroic';
+      return 'Unknown';
+    };
+
+    const formatNumber = (value) => {
+      if (value === null || value === undefined || !Number.isFinite(Number(value))) return '—';
+      return Number(value).toLocaleString(undefined, { maximumFractionDigits: 0 });
+    };
+
+    const formatPct = (value) => {
+      if (value === null || value === undefined || !Number.isFinite(Number(value))) return '—';
+      return `${Number(value).toFixed(2)}%`;
+    };
+
+    const setProgress = (percent) => {
+      const pct = Math.max(0, Math.min(100, Math.round(Number(percent) || 0)));
+      progressFill.style.width = `${pct}%`;
+      progressTrack.setAttribute('aria-valuenow', String(pct));
+    };
+
+    const setStatus = (message) => {
+      statusText.textContent = message;
+    };
+
+    const setConnection = (state, text) => {
+      connectionLine.classList.remove('checking', 'online', 'offline');
+      connectionLine.classList.add(state);
+      const textSpan = connectionLine.querySelector('[data-sim-connection-text]');
+      if (textSpan) textSpan.textContent = text;
+    };
+
+    const esc = (value) => String(value ?? '')
+      .replaceAll('&', '&amp;')
+      .replaceAll('<', '&lt;')
+      .replaceAll('>', '&gt;')
+      .replaceAll('"', '&quot;')
+      .replaceAll("'", '&#39;');
+
+    const compareValues = (a, b, key) => {
+      if (key === 'ilvl' || key === 'delta' || key === 'pct') {
+        const na = Number(a ?? Number.NEGATIVE_INFINITY);
+        const nb = Number(b ?? Number.NEGATIVE_INFINITY);
+        return na - nb;
+      }
+      return String(a ?? '').localeCompare(String(b ?? ''), undefined, { sensitivity: 'base' });
+    };
+
+    const fetchWithTimeout = async (url, timeoutMs) => {
+      const controller = new AbortController();
+      const timer = window.setTimeout(() => controller.abort(), timeoutMs);
+      try {
+        return await fetch(url, {
+          headers: { Accept: 'application/json' },
+          signal: controller.signal,
+        });
+      } finally {
+        window.clearTimeout(timer);
+      }
+    };
+
+    const apiBase = String(import.meta.env.BASE_URL || '/').replace(/\/+$/, '');
+    const normalizePath = (path) => (path.startsWith('/') ? path : `/${path}`);
+    const apiUrl = (path) => `${apiBase}${normalizePath(path)}`;
+    const rootApiUrl = (path) => normalizePath(path);
+
+    const fetchApi = async (path, init) => {
+      const primaryUrl = apiUrl(path);
+      const primaryResp = await fetch(primaryUrl, init);
+      if (primaryResp.status !== 404) return primaryResp;
+
+      const fallbackUrl = rootApiUrl(path);
+      if (fallbackUrl === primaryUrl) return primaryResp;
+      return fetch(fallbackUrl, init);
+    };
+
+    const checkConnection = async () => {
+      setConnection('checking', 'Checking LodgeSim connection...');
+      try {
+        const response = await fetchWithTimeout(apiUrl('/api/sim/launch'), 4000);
+        const finalResponse = response.status === 404 && apiUrl('/api/sim/launch') !== rootApiUrl('/api/sim/launch')
+          ? await fetchWithTimeout(rootApiUrl('/api/sim/launch'), 4000)
+          : response;
+        if (!finalResponse.ok) {
+          setConnection('offline', 'LodgeSim connection check failed.');
+          return false;
+        }
+
+        const payload = await finalResponse.json();
+        if (payload?.online) {
+          setConnection('online', 'LodgeSim online');
+          return true;
+        }
+
+        setConnection('offline', payload?.message || 'LodgeSim offline');
+        return false;
+      } catch {
+        setConnection('offline', 'LodgeSim check timed out or failed');
+        return false;
+      } finally {
+        window.clearTimeout(watchdog);
+      }
+    };
+
+    const setRunning = (running) => {
+      runButton.disabled = running;
+      runButton.textContent = running ? 'Running...' : idleButtonLabel;
+    };
+
+    const syncAddonModeVisibility = () => {
+      const addonMode = modeSelect.value === 'addon';
+      addonWrap.classList.toggle('is-hidden', !addonMode);
+    };
+
+    const updateMeta = () => {
+      if (!latest) {
+        meta.innerHTML = '<p>No uploaded sim results for this raider yet.</p>';
+        return;
+      }
+
+      const updated = latest.updated_at ? new Date(latest.updated_at * 1000).toLocaleString() : 'Unknown';
+      const contextParts = [];
+      if (lastSimRaidLabel && lastSimRaidLabel !== 'All Raids') {
+        contextParts.push(esc(lastSimRaidLabel));
+      }
+      if (lastSimDifficulty && lastSimDifficulty !== 'all') {
+        contextParts.push(esc(lastSimDifficulty.charAt(0).toUpperCase() + lastSimDifficulty.slice(1)));
+      }
+      const contextLabel = contextParts.length > 0
+        ? ` <span aria-hidden="true"> • </span> ${contextParts.join(' <span aria-hidden="true"> • </span> ')}`
+        : '';
+
+      const winners = Array.isArray(latest.winners) ? latest.winners : [];
+      const hasWinners = winners.length > 0;
+      const hasNegative = winners.some((winner) => Number.isFinite(Number(winner?.delta_dps)) && Number(winner.delta_dps) < 0);
+      const likelyPositiveOnly = hasWinners && !hasNegative;
+
+      const badge = likelyPositiveOnly
+        ? '<span class="sim-meta-badge">This run is positive-only (no DPS losses in uploaded winners).</span>'
+        : '';
+
+      meta.innerHTML = `<p>Latest result: <strong>${latest.run_id}</strong>${contextLabel} <span aria-hidden="true"> • </span> Updated ${updated}</p>${badge}`;
+
+      const rows = Array.isArray(latest.winners) ? latest.winners : [];
+      populateSelectOptions('[data-filter-key="slot"]', rows.map((w) => slotLabel(w?.slot)), 'All Slots');
+      populateSelectOptions('[data-filter-key="source"]', rows.map((w) => stripSourceDifficultyPrefix(w?.source || 'Unknown source')), 'All Sources');
+    };
+
+    const buildRows = () => {
+      if (!latest || !Array.isArray(latest.winners) || latest.winners.length === 0) {
+        tableBody.innerHTML = '<tr><td colspan="7" class="sim-tools-empty">No recommendations yet for this raider.</td></tr>';
+        return;
+      }
+
+      const rows = latest.winners
+        .map((winner) => {
+          const sourceDifficulty = inferSourceDifficulty(winner);
+          return {
+            ...winner,
+            slotText: slotLabel(winner.slot),
+            itemText: winner.item_label || `Item #${winner.item_id ?? '—'}`,
+            sourceText: stripSourceDifficultyPrefix(winner.source || 'Unknown source'),
+            sourceDifficulty,
+            ilvlNum: Number.isFinite(Number(winner.ilvl)) ? Number(winner.ilvl) : null,
+            deltaNum: Number.isFinite(Number(winner.delta_dps)) ? Number(winner.delta_dps) : null,
+            pctNum: Number.isFinite(Number(winner.pct_gain)) ? Number(winner.pct_gain) : null,
+          };
+        })
+        .filter((row) => {
+          const checks = {
+            slot: row.slotText,
+            item: row.itemText,
+            source: row.sourceText,
+            difficulty: row.sourceDifficulty,
+          };
+
+          const textMatch = Object.entries(filterValues).every(([key, raw]) => {
+            const needle = String(raw || '').trim().toLowerCase();
+            if (!needle) return true;
+            return String(checks[key] ?? '').toLowerCase().includes(needle);
+          });
+
+          if (!textMatch) return false;
+
+          return true;
+        });
+
+      rows.sort((a, b) => {
+        const av =
+          sortKey === 'slot' ? a.slotText :
+          sortKey === 'item' ? a.itemText :
+          sortKey === 'source' ? a.sourceText :
+          sortKey === 'difficulty' ? a.sourceDifficulty :
+          sortKey === 'ilvl' ? a.ilvlNum :
+          sortKey === 'delta' ? a.deltaNum :
+          a.pctNum;
+
+        const bv =
+          sortKey === 'slot' ? b.slotText :
+          sortKey === 'item' ? b.itemText :
+          sortKey === 'source' ? b.sourceText :
+          sortKey === 'difficulty' ? b.sourceDifficulty :
+          sortKey === 'ilvl' ? b.ilvlNum :
+          sortKey === 'delta' ? b.deltaNum :
+          b.pctNum;
+
+        const cmp = compareValues(av, bv, sortKey);
+        return sortDir === 'asc' ? cmp : -cmp;
+      });
+
+      if (rows.length === 0) {
+        tableBody.innerHTML = '<tr><td colspan="7" class="sim-tools-empty">No rows match your filters.</td></tr>';
+        return;
+      }
+
+      tableBody.innerHTML = rows
+        .map((winner) => {
+          const delta = winner.deltaNum;
+          const deltaLabel = delta === null || delta === undefined || !Number.isFinite(Number(delta))
+            ? '—'
+            : `${Number(delta) >= 0 ? '+' : ''}${formatNumber(delta)}`;
+
+          const itemId = Number(winner.item_id ?? 0);
+          const wowhead = Number.isInteger(itemId) && itemId > 0 ? `https://www.wowhead.com/item=${itemId}` : null;
+
+          return `
+            <tr>
+              <td>${esc(winner.slotText)}</td>
+              <td>
+                <div class="sim-item-cell">
+                  ${wowhead
+                    ? `<a class="sim-item-link" href="${esc(wowhead)}" target="_blank" rel="noopener noreferrer">${esc(winner.itemText)}</a>`
+                    : `<span>${esc(winner.itemText)}</span>`}
+                </div>
+              </td>
+              <td>${esc(winner.sourceText)}</td>
+              <td>${esc(formatDifficulty(winner.sourceDifficulty))}</td>
+              <td>${winner.ilvlNum ?? '—'}</td>
+              <td>${deltaLabel}</td>
+              <td>${formatPct(winner.pctNum)}</td>
+            </tr>
+          `;
+        })
+        .join('');
+
+      const headers = panel.querySelectorAll('[data-sort-key]');
+      headers.forEach((header) => {
+        if (!(header instanceof HTMLElement)) return;
+        const key = header.getAttribute('data-sort-key') || '';
+        header.removeAttribute('data-sort-dir');
+        if (key === sortKey) header.setAttribute('data-sort-dir', sortDir);
+      });
+    };
+
+    const refreshLatest = async () => {
+      try {
+        const resp = await fetchApi(`/api/sim/latest?char_id=${encodeURIComponent(charId)}`, {
+          headers: { Accept: 'application/json' },
+        });
+        if (!resp.ok) return;
+        const payload = await resp.json();
+        latest = payload?.data || null;
+        updateMeta();
+        buildRows();
+      } catch {
+        // Keep existing table when refresh fails.
+      }
+    };
+
+    const stopPolling = () => {
+      if (pollTimer) {
+        window.clearInterval(pollTimer);
+        pollTimer = null;
+      }
+      activeJobId = null;
+      setRunning(false);
+    };
+
+    const pollStatus = async () => {
+      if (!activeJobId) return;
+
+      try {
+        const resp = await fetchApi(`/api/sim/launch/status?job_id=${encodeURIComponent(activeJobId)}&char_id=${encodeURIComponent(charId)}`, {
+          headers: { Accept: 'application/json' },
+        });
+
+        if (!resp.ok) {
+          const payload = await resp.json().catch(() => ({}));
+          setStatus(payload?.error || 'Status check failed.');
+          stopPolling();
+          return;
+        }
+
+        const payload = await resp.json();
+        const status = String(payload?.status || 'unknown');
+        const message = String(payload?.message || '').trim();
+        const pct = payload?.progress_percent;
+        if (pct !== null && pct !== undefined) setProgress(pct);
+
+        if (message) {
+          setStatus(message);
+        } else if (status === 'running') {
+          setStatus('LodgeSim is running your sim...');
+        } else if (status === 'queued') {
+          setStatus('Run queued in LodgeSim...');
+        }
+
+        if (payload?.latest) {
+          latest = payload.latest;
+          updateMeta();
+          buildRows();
+        }
+
+        if (status === 'finished') {
+          setProgress(100);
+          setStatus('Sim complete. Results refreshed.');
+          stopPolling();
+          await refreshLatest();
+          return;
+        }
+
+        if (status === 'failed') {
+          setStatus(message || 'LodgeSim reported a failed run.');
+          stopPolling();
+        }
+      } catch {
+        setStatus('Unable to reach sim status endpoint.');
+        stopPolling();
+      }
+    };
+
+    const launchRun = async () => {
+      const isOnline = await checkConnection();
+      if (!isOnline) {
+        setStatus('LodgeSim app is offline. Start LodgeSim before running.');
+        return;
+      }
+
+      const mode = modeSelect.value === 'addon' ? 'addon' : 'site';
+      const addonExport = addonInput.value.trim();
+      const simRaid = raidSelect.value || 'all';
+      const simDifficulty = difficultySelect.value || 'all';
+
+      const raidLabels = {
+        all: 'All Raids',
+        voidspire: 'The Voidspire',
+        dreamrift: 'The Dreamrift',
+        queldanas: "March on Quel'Danas",
+      };
+
+      if (mode === 'addon' && !addonExport) {
+        setStatus('Paste your SimC addon export before starting addon mode.');
+        return;
+      }
+
+      lastSimRaidLabel = raidLabels[simRaid] || 'All Raids';
+      lastSimDifficulty = simDifficulty;
+
+      setRunning(true);
+      setProgress(0);
+      setStatus('Submitting run to LodgeSim...');
+
+      try {
+        const resp = await fetchApi('/api/sim/launch', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Accept: 'application/json',
+          },
+          body: JSON.stringify({
+            char_id: charId,
+            mode,
+            addon_export: mode === 'addon' ? addonExport : undefined,
+            sim_raid: simRaid,
+            sim_difficulty: simDifficulty,
+          }),
+        });
+
+        const payload = await resp.json().catch(() => ({}));
+        if (!resp.ok) {
+          setStatus(payload?.error || 'Failed to launch sim run.');
+          setRunning(false);
+          return;
+        }
+
+        const jobId = String(payload?.job_id || '').trim();
+        if (!jobId) {
+          setStatus('Launch succeeded but no job id was returned.');
+          setRunning(false);
+          return;
+        }
+
+        activeJobId = jobId;
+        setStatus(`Run submitted. Job ${jobId.slice(0, 8)}...`);
+        setProgress(3);
+
+        if (pollTimer) window.clearInterval(pollTimer);
+        pollTimer = window.setInterval(pollStatus, 5000);
+        await pollStatus();
+      } catch {
+        setStatus('Could not contact the launch endpoint.');
+        setRunning(false);
+      }
+    };
+
+    const purgeHistory = async () => {
+      const confirmed = window.confirm('Purge all saved sim history for this character? This cannot be undone.');
+      if (!confirmed) return;
+
+      if (purgeButton instanceof HTMLButtonElement) purgeButton.disabled = true;
+      setStatus('Purging sim history...');
+
+      try {
+        const resp = await fetchApi('/api/sim/latest', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Accept: 'application/json',
+          },
+          body: JSON.stringify({ char_id: charId }),
+        });
+
+        const raw = await resp.text();
+        let payload = {};
+        try {
+          payload = raw ? JSON.parse(raw) : {};
+        } catch {
+          payload = {};
+        }
+
+        if (!resp.ok) {
+          const message =
+            (payload && typeof payload === 'object' && 'error' in payload && typeof payload.error === 'string' && payload.error)
+            || (raw ? raw.slice(0, 240) : '')
+            || `Failed to purge sim history (HTTP ${resp.status}).`;
+          setStatus(message);
+          return;
+        }
+
+        const record = payload && typeof payload === 'object' ? payload : {};
+        latest = record?.latest || null;
+        updateMeta();
+        buildRows();
+
+        const deleted = record?.deleted || {};
+        const totalDeleted = Number(deleted.deleted_item_winners ?? 0);
+        setStatus(`Sim history purged (${totalDeleted} item entries removed).`);
+      } catch {
+        setStatus('Could not reach purge endpoint.');
+      } finally {
+        if (purgeButton instanceof HTMLButtonElement) purgeButton.disabled = false;
+      }
+    };
+
+    modeSelect.addEventListener('change', () => {
+      syncAddonModeVisibility();
+    });
+
+    const selectAddonExport = () => {
+      if (!addonInput.value) return;
+      addonInput.select();
+    };
+
+    addonInput.addEventListener('focus', () => {
+      selectAddonExport();
+    });
+
+    addonInput.addEventListener('click', () => {
+      selectAddonExport();
+    });
+
+    const sortButtons = panel.querySelectorAll('[data-sort-key]');
+    sortButtons.forEach((button) => {
+      if (!(button instanceof HTMLButtonElement)) return;
+      button.addEventListener('click', () => {
+        const key = button.getAttribute('data-sort-key') || 'delta';
+        if (sortKey === key) {
+          sortDir = sortDir === 'asc' ? 'desc' : 'asc';
+        } else {
+          sortKey = key;
+          sortDir = key === 'slot' || key === 'item' || key === 'source' || key === 'difficulty' ? 'asc' : 'desc';
+        }
+        buildRows();
+      });
+    });
+
+    const filterInputs = panel.querySelectorAll('[data-filter-key]');
+    filterInputs.forEach((input) => {
+      if (!(input instanceof HTMLInputElement) && !(input instanceof HTMLSelectElement)) return;
+      input.addEventListener('input', () => {
+        const key = input.getAttribute('data-filter-key');
+        if (!key || !(key in filterValues)) return;
+        filterValues[key] = input.value;
+        buildRows();
+      });
+      input.addEventListener('change', () => {
+        const key = input.getAttribute('data-filter-key');
+        if (!key || !(key in filterValues)) return;
+        filterValues[key] = input.value;
+        buildRows();
+      });
+    });
+
+    runButton.addEventListener('click', () => {
+      if (activeJobId) {
+        setStatus('A run is already active.');
+        return;
+      }
+      void launchRun();
+    });
+
+    if (purgeButton instanceof HTMLButtonElement) {
+      purgeButton.addEventListener('click', () => {
+        void purgeHistory();
+      });
+    }
+
+    window.addEventListener('resize', syncPurgeButtonWidth);
+
+    try {
+      syncAddonModeVisibility();
+      syncPurgeButtonWidth();
+      updateMeta();
+      buildRows();
+      void refreshLatest();
+      void checkConnection();
+    } catch {
+      window.clearTimeout(watchdog);
+      forceOffline('Connection check failed in UI. Refresh page.');
+    }
+  };
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', initSimTools, { once: true });
+  } else {
+    initSimTools();
+  }
+</script>
+
+<style is:global>
+  .sim-tools-panel {
+    margin-top: 1rem;
+    border: 1px solid rgba(214, 176, 106, 0.32);
+    border-radius: 0.75rem;
+    background:
+      linear-gradient(155deg, rgba(214, 176, 106, 0.07), transparent 50%),
+      rgba(11, 21, 32, 0.78);
+    padding: 1rem 1.1rem;
+    display: grid;
+    gap: 0.8rem;
+  }
+
+  .sim-tools-head {
+    display: grid;
+    gap: 0.2rem;
+  }
+
+  .sim-tools-title {
+    margin: 0;
+    display: inline-flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 0.45rem;
+    color: var(--sim-accent, #f1d9a9);
+    font-size: 1.05rem;
+    letter-spacing: 0.02em;
+  }
+
+  .sim-tools-beta {
+    display: inline-flex;
+    align-items: center;
+    padding: 0.1rem 0.42rem;
+    border-radius: 999px;
+    border: 1px solid rgba(242, 204, 96, 0.45);
+    background: rgba(242, 204, 96, 0.12);
+    color: #f2cc60;
+    font-size: 0.66rem;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+
+  .sim-tools-icon {
+    width: 1rem;
+    height: 1rem;
+  }
+
+  .sim-tools-subtitle {
+    margin: 0;
+    color: #a7c0d0;
+    font-size: 0.86rem;
+  }
+
+  .sim-tools-controls {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr)) auto;
+    gap: 0.6rem;
+    align-items: end;
+  }
+
+  .sim-tools-field {
+    display: grid;
+    gap: 0.3rem;
+  }
+
+  .sim-tools-field span {
+    color: #b3c6d3;
+    font-size: 0.8rem;
+    letter-spacing: 0.03em;
+    text-transform: uppercase;
+  }
+
+  .sim-tools-field select {
+    padding: 0.5rem 0.55rem;
+    border-radius: 0.45rem;
+    border: 1px solid rgba(109, 172, 229, 0.35);
+    background: rgba(7, 15, 25, 0.8);
+    color: #e6eff6;
+  }
+
+  .sim-tools-run {
+    padding: 0.52rem 0.78rem;
+    border-radius: 0.45rem;
+    border: 1px solid rgba(214, 176, 106, 0.4);
+    background: rgba(214, 176, 106, 0.15);
+    color: #f4ddb1;
+    font-weight: 700;
+    cursor: pointer;
+  }
+
+  .sim-tools-purge {
+    padding: 0.52rem 0.78rem;
+    border-radius: 0.45rem;
+    border: 1px solid rgba(248, 81, 73, 0.45);
+    background: rgba(248, 81, 73, 0.12);
+    color: #ffb4ae;
+    font-weight: 700;
+    cursor: pointer;
+  }
+
+  .sim-tools-purge:hover {
+    background: rgba(248, 81, 73, 0.2);
+    border-color: rgba(248, 81, 73, 0.62);
+  }
+
+  .sim-tools-purge:disabled {
+    opacity: 0.65;
+    cursor: wait;
+  }
+
+  .sim-tools-run:disabled {
+    opacity: 0.65;
+    cursor: wait;
+  }
+
+  .sim-tools-addon-wrap {
+    display: grid;
+    gap: 0.35rem;
+  }
+
+  .sim-tools-addon-wrap span {
+    color: #b3c6d3;
+    font-size: 0.8rem;
+    letter-spacing: 0.03em;
+    text-transform: uppercase;
+  }
+
+  .sim-tools-addon-wrap textarea {
+    width: 100%;
+    border-radius: 0.5rem;
+    border: 1px solid rgba(109, 172, 229, 0.28);
+    background: rgba(4, 10, 17, 0.8);
+    color: #d8e7f4;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 0.78rem;
+    padding: 0.6rem;
+    resize: vertical;
+  }
+
+  .is-hidden {
+    display: none;
+  }
+
+  .sim-tools-status {
+    display: grid;
+    gap: 0.35rem;
+  }
+
+  .sim-tools-status-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+  }
+
+  .sim-tools-status-line {
+    margin: 0;
+    color: #d9e7f2;
+    font-size: 0.88rem;
+  }
+
+  .sim-tools-connection {
+    margin: 0;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    font-size: 0.78rem;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    color: #a5bed0;
+  }
+
+  .sim-tools-connection .dot {
+    flex-shrink: 0;
+    width: 0.5rem;
+    height: 0.5rem;
+    border-radius: 50%;
+    background: #9bb2c1;
+    box-shadow: 0 0 0.35rem rgba(155, 178, 193, 0.8);
+  }
+
+  .sim-tools-connection.checking {
+    color: #f2cc60;
+  }
+  .sim-tools-connection.checking .dot {
+    background: #f2cc60;
+    box-shadow: 0 0 0.5rem rgba(242, 204, 96, 0.9);
+  }
+
+  .sim-tools-connection.online {
+    color: #3fb950;
+  }
+  .sim-tools-connection.online .dot {
+    background: #3fb950;
+    box-shadow: 0 0 0.7rem 0.1rem rgba(63, 185, 80, 0.9);
+    animation: dot-pulse 2s ease-in-out infinite;
+  }
+
+  .sim-tools-connection.offline {
+    color: #f85149;
+  }
+  .sim-tools-connection.offline .dot {
+    background: #f85149;
+    box-shadow: 0 0 0.7rem 0.1rem rgba(248, 81, 73, 0.9);
+  }
+
+  @keyframes dot-pulse {
+    0%, 100% { box-shadow: 0 0 0.4rem 0.05rem rgba(63, 185, 80, 0.7); }
+    50%       { box-shadow: 0 0 1rem 0.15rem rgba(63, 185, 80, 1); }
+  }
+
+  .sim-tools-progress-track {
+    height: 0.55rem;
+    border-radius: 999px;
+    border: 1px solid rgba(109, 172, 229, 0.35);
+    overflow: hidden;
+    background: rgba(3, 9, 14, 0.9);
+  }
+
+  .sim-tools-progress-fill {
+    height: 100%;
+    width: 0;
+    background: linear-gradient(90deg, rgba(109, 172, 229, 0.85), rgba(214, 176, 106, 0.85));
+    transition: width 0.25s ease;
+  }
+
+  .sim-tools-meta {
+    color: #abc1d0;
+    font-size: 0.86rem;
+  }
+
+  .sim-tools-meta p {
+    margin: 0;
+  }
+
+  .sim-tools-assumption {
+    margin-top: 0.4rem !important;
+    color: #c6d7e2;
+    font-size: 0.79rem;
+    line-height: 1.35;
+    border: 1px solid rgba(109, 172, 229, 0.25);
+    border-radius: 0.45rem;
+    padding: 0.38rem 0.46rem;
+    background: rgba(4, 10, 17, 0.6);
+  }
+
+  .sim-meta-badge {
+    display: inline-block;
+    margin-top: 0.35rem;
+    padding: 0.2rem 0.45rem;
+    border-radius: 999px;
+    border: 1px solid rgba(242, 204, 96, 0.45);
+    background: rgba(242, 204, 96, 0.12);
+    color: #f2cc60;
+    font-size: 0.73rem;
+    letter-spacing: 0.02em;
+  }
+
+  .sim-tools-table-wrap {
+    margin-top: 0.85rem;
+    overflow-x: auto;
+    border: 1px solid rgba(214, 176, 106, 0.24);
+    border-radius: 0.65rem;
+    background: rgba(5, 10, 16, 0.55);
+  }
+
+  .sim-tools-table {
+    width: 100%;
+    border-collapse: collapse;
+    min-width: 960px;
+    table-layout: fixed;
+  }
+
+  .sim-tools-table th:nth-child(1),
+  .sim-tools-table td:nth-child(1) { width: 80px; }
+
+  .sim-tools-table th:nth-child(2),
+  .sim-tools-table td:nth-child(2) { width: 220px; }
+
+  .sim-tools-table th:nth-child(3),
+  .sim-tools-table td:nth-child(3) { width: 250px; }
+
+  .sim-tools-table th:nth-child(4),
+  .sim-tools-table td:nth-child(4) { width: 110px; }
+
+  .sim-tools-table th:nth-child(5),
+  .sim-tools-table td:nth-child(5) { width: 55px; }
+
+  .sim-tools-table th:nth-child(6),
+  .sim-tools-table td:nth-child(6) { width: 95px; }
+
+  .sim-tools-table th:nth-child(7),
+  .sim-tools-table td:nth-child(7) { width: 70px; }
+
+  .sim-tools-table td {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .sim-tools-table th,
+  .sim-tools-table td {
+    border-bottom: 1px solid rgba(214, 176, 106, 0.18);
+    padding: 0.58rem 0.65rem;
+    text-align: left;
+    color: #d8e2e8;
+    font-size: 0.95rem;
+    vertical-align: top;
+  }
+
+  .sim-tools-table thead th {
+    background: rgba(15, 28, 43, 0.88);
+    position: sticky;
+    top: 0;
+    z-index: 1;
+  }
+
+  .sim-tools-table tbody tr:hover {
+    background: rgba(214, 176, 106, 0.08);
+  }
+
+  .sim-sort {
+    width: 100%;
+    border: 0;
+    background: transparent;
+    color: #e4c27a;
+    font: inherit;
+    font-weight: 700;
+    letter-spacing: 0.03em;
+    text-transform: uppercase;
+    font-size: 0.78rem;
+    text-align: left;
+    cursor: pointer;
+    padding: 0;
+  }
+
+  .sim-sort[data-sort-dir='asc']::after {
+    content: ' ▲';
+    color: #9bc6ea;
+  }
+
+  .sim-sort[data-sort-dir='desc']::after {
+    content: ' ▼';
+    color: #f1d9a9;
+  }
+
+  .sim-filter-row th {
+    padding-top: 0.2rem;
+    padding-bottom: 0.4rem;
+  }
+
+  .sim-filter,
+  .sim-filter-select {
+    width: 100%;
+    max-width: 100%;
+    display: block;
+    box-sizing: border-box;
+    border: 1px solid rgba(214, 176, 106, 0.42);
+    border-radius: 0.45rem;
+    background: rgba(7, 14, 22, 0.85);
+    color: #d8e2e8;
+    font-size: 0.82rem;
+    padding: 0.28rem 0.42rem;
+  }
+
+  .sim-item-cell {
+    position: relative;
+    display: inline-flex;
+    align-items: flex-start;
+    gap: 0.42rem;
+    max-width: 100%;
+    overflow: visible;
+    white-space: normal;
+    word-break: break-word;
+  }
+
+  .sim-item-link {
+    color: #f1d9a9;
+    text-decoration: none;
+    border-bottom: 1px dotted rgba(241, 217, 169, 0.45);
+  }
+
+  .sim-item-link:hover {
+    color: #ffe8bd;
+    border-bottom-color: rgba(255, 232, 189, 0.8);
+  }
+
+  .sim-tools-empty {
+    color: #a3b6c3;
+    text-align: center;
+    padding: 0.8rem;
+  }
+
+  @media (max-width: 760px) {
+    .sim-tools-controls {
+      grid-template-columns: 1fr 1fr;
+    }
+
+    .sim-tools-run {
+      grid-column: 1 / -1;
+      width: 100%;
+    }
+
+    .sim-tools-status-row {
+      flex-direction: column;
+      align-items: flex-start;
+    }
+
+    .sim-tools-table {
+      min-width: 42rem;
+    }
+  }
+</style>

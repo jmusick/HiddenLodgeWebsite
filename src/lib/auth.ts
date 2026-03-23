@@ -64,6 +64,20 @@ export async function isGuildMember(db: D1Database, userId: number): Promise<boo
 	return row !== null;
 }
 
+/** Returns true if the specified Blizzard character is linked to the given user. */
+export async function isCharacterOwner(db: D1Database, userId: number, blizzardCharId: number): Promise<boolean> {
+	const row = await db
+		.prepare(
+			`SELECT 1
+			 FROM characters
+			 WHERE user_id = ? AND blizzard_char_id = ?
+			 LIMIT 1`
+		)
+		.bind(userId, blizzardCharId)
+		.first();
+	return row !== null;
+}
+
 export async function createSession(db: D1Database, userId: number): Promise<string> {
 	const sessionId = crypto.randomUUID();
 	const expiresAt = Math.floor(Date.now() / 1000) + SESSION_TTL_SECONDS;

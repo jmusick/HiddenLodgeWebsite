@@ -19,3 +19,19 @@ WCL_CLIENT_SECRET=your_wcl_client_secret_here
 # Shared secret for /api/cron/refresh-roster.
 # Use the same value in your LOCAL_CRON_SECRET environment variable when running npm run cron:local.
 CRON_SECRET=replace_with_a_local_secret
+
+# Shared secret for sim runner machine endpoints (/api/sim/*).
+SIM_RUNNER_KEY=replace-with-a-strong-shared-secret
+
+# WoWSim app connection for raider profile Sim Tools.
+# Example with local WoWSim app: http://127.0.0.1:5050
+WOWSIM_APP_BASE_URL=http://127.0.0.1:5050
+# Optional shared key sent as X-WoWSim-Key to WoWSim app.
+WOWSIM_APP_API_KEY=
+# Optional override paths for start/status calls.
+# Defaults are /api/jobs/start and /api/jobs/{job_id}
+WOWSIM_APP_TRIGGER_PATH=/api/jobs/start
+WOWSIM_APP_STATUS_PATH=/api/jobs/{job_id}
+
+# Session signing/validation secret for local auth/session flows.
+SESSION_SECRET=replace-with-a-strong-session-secret

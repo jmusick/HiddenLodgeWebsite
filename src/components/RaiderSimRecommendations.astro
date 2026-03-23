@@ -1,0 +1,300 @@
+---
+import { env } from 'cloudflare:workers';
+import { Icon } from 'astro-icon/components';
+import { classColor } from '../lib/wow';
+import { getLatestSimForRaider } from '../lib/sim-api';
+
+interface Props {
+  charId: number;
+  charName: string;
+  charClass: string;
+}
+
+const { charId, charName, charClass } = Astro.props as Props;
+const accent = classColor(charClass);
+const latest = await getLatestSimForRaider(env.DB, charId);
+
+interface SlotGroup {
+  slot: string;
+  slotLabel: string;
+  items: NonNullable<typeof latest>['winners'];
+}
+
+function formatDps(value: number | null): string {
+  if (value === null || !Number.isFinite(value)) return '—';
+  return value.toLocaleString(undefined, { maximumFractionDigits: 0 });
+}
+
+function formatPct(value: number | null): string {
+  if (value === null || !Number.isFinite(value)) return '—';
+  return `${value.toFixed(2)}%`;
+}
+
+function formatUpdated(value: number): string {
+  return new Date(value * 1000).toLocaleString();
+}
+
+function formatDifficulty(value: string): string {
+  const normalized = value.trim().toLowerCase();
+  if (normalized === 'mythic') return 'Mythic';
+  if (normalized === 'heroic') return 'Heroic';
+  return normalized ? normalized.charAt(0).toUpperCase() + normalized.slice(1) : 'Unknown';
+}
+
+function slotLabel(slot: string): string {
+  const key = slot.trim().toLowerCase();
+  const map: Record<string, string> = {
+    main_hand: 'Main Hand',
+    off_hand: 'Off Hand',
+    trinket1: 'Trinket 1',
+    trinket2: 'Trinket 2',
+    finger1: 'Finger 1',
+    finger2: 'Finger 2',
+  };
+  if (map[key]) return map[key];
+  return key
+    .replace(/_/g, ' ')
+    .replace(/\b\w/g, (char) => char.toUpperCase());
+}
+
+const groupedBySlot: SlotGroup[] = latest
+  ? Object.entries(
+      latest.winners.reduce<Record<string, typeof latest.winners>>((acc, winner) => {
+        const key = winner.slot;
+        if (!acc[key]) acc[key] = [];
+        acc[key].push(winner);
+        return acc;
+      }, {})
+    )
+      .map(([slot, winners]) => ({
+        slot,
+        slotLabel: slotLabel(slot),
+        items: [...winners].sort((a, b) => (b.delta_dps ?? Number.NEGATIVE_INFINITY) - (a.delta_dps ?? Number.NEGATIVE_INFINITY)),
+      }))
+      .sort((a, b) => a.slotLabel.localeCompare(b.slotLabel))
+  : [];
+---
+
+<section class="sim-panel" aria-label="Sim recommendations">
+  <h2 class="sim-title" style={`--sim-accent: ${accent}`}>
+    <Icon name="lucide:flask-conical" class="sim-title-icon" aria-hidden="true" />
+    Sim Recommendations
+  </h2>
+
+  {!latest || latest.winners.length === 0 ? (
+    <p class="sim-empty">No simulation recommendations are uploaded yet for this raider.</p>
+  ) : (
+    <>
+      <p class="sim-meta">
+        Latest run: <strong>{latest.run_id}</strong>
+        <span aria-hidden="true"> • </span>
+        Team #{latest.site_team_id}
+        <span aria-hidden="true"> • </span>
+        {latest.difficulty}
+        <span aria-hidden="true"> • </span>
+        Updated {formatUpdated(latest.updated_at)}
+      </p>
+
+      <div class="sim-slot-stack">
+        {groupedBySlot.map((group) => (
+          <article class="sim-slot-group">
+            <header class="sim-slot-head">
+              <h3 class="sim-slot-title">{group.slotLabel}</h3>
+              <span class="sim-slot-count">{group.items.length} item{group.items.length === 1 ? '' : 's'}</span>
+            </header>
+
+            <div class="sim-slot-list" role="list">
+              {group.items.map((winner) => (
+                <div class="sim-item-row" role="listitem">
+                  <div class="sim-item-main">
+                    <strong class="sim-item-name">{winner.item_label ?? `Item #${winner.item_id ?? '—'}`}</strong>
+                    <span class="sim-item-source">{winner.source ?? 'Unknown source'}</span>
+                  </div>
+                  <dl class="sim-item-metrics">
+                    <div>
+                      <dt>Difficulty</dt>
+                      <dd>{formatDifficulty(latest.difficulty)}</dd>
+                    </div>
+                    <div>
+                      <dt>Ilvl</dt>
+                      <dd>{winner.ilvl ?? '—'}</dd>
+                    </div>
+                    <div>
+                      <dt>Delta</dt>
+                      <dd>{winner.delta_dps !== null ? `${winner.delta_dps >= 0 ? '+' : ''}${formatDps(winner.delta_dps)}` : '—'}</dd>
+                    </div>
+                    <div>
+                      <dt>Gain</dt>
+                      <dd>{formatPct(winner.pct_gain)}</dd>
+                    </div>
+                  </dl>
+
+                  {winner.simc && (
+                    <details class="simc-block">
+                      <summary>Show SimC snapshot</summary>
+                      <pre>{winner.simc}</pre>
+                    </details>
+                  )}
+                </div>
+              ))}
+            </div>
+          </article>
+        ))}
+      </div>
+    </>
+  )}
+</section>
+
+<style>
+  .sim-panel {
+    margin-top: 1rem;
+    border: 1px solid rgba(214, 176, 106, 0.32);
+    border-radius: 0.75rem;
+    background:
+      linear-gradient(155deg, rgba(214, 176, 106, 0.07), transparent 50%),
+      rgba(11, 21, 32, 0.78);
+    padding: 1rem 1.1rem;
+  }
+
+  .sim-title {
+    margin: 0 0 0.75rem;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.45rem;
+    color: var(--sim-accent, #f1d9a9);
+    font-size: 1.05rem;
+    letter-spacing: 0.02em;
+  }
+
+  .sim-title-icon {
+    width: 1rem;
+    height: 1rem;
+  }
+
+  .sim-meta {
+    margin: 0 0 0.85rem;
+    color: #b0c4d0;
+    font-size: 0.9rem;
+  }
+
+  .sim-empty {
+    margin: 0;
+    color: #b0c4d0;
+  }
+
+  .sim-slot-stack {
+    display: grid;
+    gap: 0.75rem;
+  }
+
+  .sim-slot-group {
+    border: 1px solid rgba(109, 172, 229, 0.28);
+    border-radius: 0.55rem;
+    background: rgba(8, 18, 29, 0.8);
+    padding: 0.75rem;
+  }
+
+  .sim-slot-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 0.6rem;
+    margin-bottom: 0.55rem;
+  }
+
+  .sim-slot-title {
+    margin: 0;
+    color: #f3ddb0;
+    font-size: 0.98rem;
+    letter-spacing: 0.02em;
+  }
+
+  .sim-slot-count {
+    color: #9cb2c0;
+    font-size: 0.78rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+
+  .sim-slot-list {
+    display: grid;
+    gap: 0.5rem;
+  }
+
+  .sim-item-row {
+    border: 1px solid rgba(214, 176, 106, 0.2);
+    border-radius: 0.45rem;
+    padding: 0.5rem 0.55rem;
+    background: rgba(3, 9, 14, 0.6);
+  }
+
+  .sim-item-main {
+    display: grid;
+    gap: 0.15rem;
+    margin-bottom: 0.45rem;
+  }
+
+  .sim-item-name {
+    color: #f1d9a9;
+    font-size: 0.92rem;
+    line-height: 1.2;
+  }
+
+  .sim-item-source {
+    color: #9cb2c0;
+    font-size: 0.78rem;
+  }
+
+  .sim-item-metrics {
+    margin: 0;
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 0.42rem;
+  }
+
+  .sim-item-metrics div {
+    border: 1px solid rgba(109, 172, 229, 0.18);
+    border-radius: 0.4rem;
+    padding: 0.3rem 0.4rem;
+    background: rgba(2, 7, 12, 0.55);
+  }
+
+  .sim-item-metrics dt {
+    color: #9cb2c0;
+    font-size: 0.68rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+
+  .sim-item-metrics dd {
+    margin: 0.18rem 0 0;
+    color: #e7f0f6;
+    font-size: 0.86rem;
+    font-weight: 600;
+  }
+
+  .simc-block {
+    margin-top: 0.6rem;
+  }
+
+  .simc-block summary {
+    cursor: pointer;
+    color: #9bc6ea;
+    font-size: 0.82rem;
+  }
+
+  .simc-block pre {
+    margin: 0.45rem 0 0;
+    max-height: 12rem;
+    overflow: auto;
+    padding: 0.55rem;
+    border-radius: 0.45rem;
+    border: 1px solid rgba(109, 172, 229, 0.22);
+    background: rgba(3, 9, 14, 0.85);
+    color: #d7e7f3;
+    font-size: 0.75rem;
+    line-height: 1.35;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+</style>

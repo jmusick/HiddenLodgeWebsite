@@ -35,17 +35,15 @@ const UPGRADE_STEPS_BY_BONUS_ID = new Map<number, { current: number; max: number
   )
 );
 
-const ENCHANTABLE_SLOTS = new Set([
-  'BACK',
+const ALWAYS_ENCHANTABLE_SLOTS = new Set([
+  'HEAD',
+  'SHOULDER',
   'CHEST',
-  'WRISTS',
-  'HANDS',
   'LEGS',
   'FEET',
   'FINGER_1',
   'FINGER_2',
   'MAIN_HAND',
-  'OFF_HAND',
 ]);
 
 // Class tier sets only ever occupy these five armor slots.
@@ -163,15 +161,189 @@ interface BlizzardEquippedItem {
   slot?: {
     type?: string;
   };
+  name?: string;
+  quality?: {
+    type?: string;
+  };
+  level?: {
+    value?: number;
+  };
+  item?: {
+    id?: number;
+  };
   sockets?: Array<{
-    item?: unknown;
+    item?: {
+      id?: number;
+      name?: string;
+    };
     media?: unknown;
     display_string?: string;
   }>;
-  enchantments?: Array<unknown>;
+  enchantments?: Array<{
+    display_string?: string;
+  }>;
+  stats?: BlizzardItemStat[];
   bonus_list?: number[];
   item_set?: unknown;
   set?: unknown;
+}
+
+interface BlizzardItemStat {
+  type?: {
+    type?: string;
+    name?: string;
+  };
+  value?: number;
+  display?: {
+    display_string?: string;
+  };
+  display_string?: string;
+}
+
+export interface RaiderGearItem {
+  slotKey: string;
+  slotLabel: string;
+  itemName: string | null;
+  itemId: number | null;
+  itemLevel: number | null;
+  quality: string | null;
+  qualityColor: string;
+  enchantments: string[];
+  gems: string[];
+  stats: string[];
+  socketsFilled: number;
+  socketsTotal: number;
+  canEnchant: boolean;
+  canGem: boolean;
+}
+
+const GEAR_SLOT_ORDER: string[] = [
+  'HEAD',
+  'NECK',
+  'SHOULDER',
+  'BACK',
+  'CHEST',
+  'WRIST',
+  'HANDS',
+  'WAIST',
+  'LEGS',
+  'FEET',
+  'FINGER_1',
+  'FINGER_2',
+  'TRINKET_1',
+  'TRINKET_2',
+  'MAIN_HAND',
+  'OFF_HAND',
+];
+
+const GEAR_SLOT_LABELS: Record<string, string> = {
+  HEAD: 'Head',
+  NECK: 'Neck',
+  SHOULDER: 'Shoulder',
+  BACK: 'Back',
+  CHEST: 'Chest',
+  SHIRT: 'Shirt',
+  TABARD: 'Tabard',
+  WRIST: 'Wrist',
+  HANDS: 'Hands',
+  WAIST: 'Waist',
+  LEGS: 'Legs',
+  FEET: 'Feet',
+  FINGER_1: 'Finger 1',
+  FINGER_2: 'Finger 2',
+  TRINKET_1: 'Trinket 1',
+  TRINKET_2: 'Trinket 2',
+  MAIN_HAND: 'Main Hand',
+  OFF_HAND: 'Off Hand',
+};
+
+const ITEM_QUALITY_COLORS: Record<string, string> = {
+  POOR: '#9d9d9d',
+  COMMON: '#ffffff',
+  UNCOMMON: '#1eff00',
+  RARE: '#0070dd',
+  EPIC: '#a335ee',
+  LEGENDARY: '#ff8000',
+  ARTIFACT: '#e6cc80',
+  HEIRLOOM: '#00ccff',
+};
+
+function gearSlotLabel(slotType: string): string {
+  return GEAR_SLOT_LABELS[slotType] ?? slotType.replace(/_/g, ' ');
+}
+
+function itemQualityColor(qualityType: string | null | undefined): string {
+  if (!qualityType) return '#d7e7f3';
+  return ITEM_QUALITY_COLORS[qualityType.toUpperCase()] ?? '#d7e7f3';
+}
+
+function formatItemStat(stat: BlizzardItemStat): string | null {
+  const displayString = (stat.display?.display_string ?? stat.display_string ?? '').trim();
+  if (displayString) return displayString;
+
+  const statName = (stat.type?.name ?? stat.type?.type ?? '').trim().replace(/_/g, ' ');
+  const statValue = Number(stat.value ?? 0);
+  if (!statName || !Number.isFinite(statValue) || statValue === 0) return null;
+
+  return `${statValue > 0 ? '+' : ''}${statValue} ${statName}`;
+}
+
+function formatEnchantmentLabel(raw: string): string | null {
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+
+  // Normalize to a single line first.
+  let normalized = trimmed
+    .split(/[\r\n\u2028\u2029]+/)[0]
+    ?.replace(/\s+/g, ' ')
+    .trim() ?? trimmed;
+
+  // Common Blizzard prefixes seen in item tooltips.
+  normalized = normalized
+    .replace(/^Enchanted:\s*/i, '')
+    .replace(/^Enchant\s+(?:Ring|Rings|Weapon|Weapons|Chest|Feet|Boots|Legs|Shoulders|Shoulder|Head|Main Hand|Off Hand)\s*[-:]+\s*/i, '')
+    .replace(/^Enchant\s+/i, '')
+    .trim();
+
+  // If a slot prefix remains (e.g. "Shoulders - Authority of Storms"), keep only the right side.
+  if (normalized.includes(' - ')) {
+    const rhs = normalized.split(' - ').pop()?.trim();
+    if (rhs) normalized = rhs;
+  }
+
+  // Drop trailing metadata and effect descriptions.
+  normalized = normalized
+    .split(/\s+(?:Requires|Quality|Tier|Rank)\b/i)[0]
+    .split(/\s+(?:and\s+lasts|and\s+adds?|and\s+grants?|adds?|grants?|increases?|improves?|provides?|reduces?|restores?)\b/i)[0]
+    .split('|')[0]
+    .replace(/\s*\([^)]*\)\s*/g, ' ')
+    .replace(/[.;:,\s]+$/g, '')
+    .trim();
+
+  return normalized || trimmed;
+}
+
+function itemLooksLikeWeapon(item: BlizzardEquippedItem | null | undefined): boolean {
+  if (!item) return false;
+
+  return (item.stats ?? []).some((stat) => {
+    const typeName = String(stat.type?.type ?? stat.type?.name ?? '').toUpperCase();
+    const display = String(stat.display?.display_string ?? stat.display_string ?? '').toUpperCase();
+    return (
+      typeName.includes('DAMAGE') ||
+      typeName.includes('DPS') ||
+      typeName.includes('SPEED') ||
+      display.includes('DAMAGE PER SECOND') ||
+      display.includes('DAMAGE') ||
+      display.includes('SPEED')
+    );
+  });
+}
+
+function isEnchantableItem(slotType: string, item: BlizzardEquippedItem | null | undefined): boolean {
+  if (ALWAYS_ENCHANTABLE_SLOTS.has(slotType)) return true;
+  if (slotType === 'OFF_HAND') return itemLooksLikeWeapon(item);
+  return false;
 }
 
 export interface RaiderRecord {
@@ -297,7 +469,7 @@ function countEnchants(items: BlizzardEquippedItem[]): { filled: number; total: 
 
   for (const item of items) {
     const slotType = item.slot?.type ?? '';
-    if (!ENCHANTABLE_SLOTS.has(slotType)) continue;
+    if (!isEnchantableItem(slotType, item)) continue;
 
     total += 1;
     if ((item.enchantments?.length ?? 0) > 0) {
@@ -1001,6 +1173,86 @@ export async function getRaiderMedia(charId: number, dbInput?: D1Database): Prom
 export async function getRaiderMediaUrl(charId: number, dbInput?: D1Database): Promise<string | null> {
   const { fullBody, portrait } = await getRaiderMedia(charId, dbInput);
   return fullBody ?? portrait;
+}
+
+export async function getRaiderGear(charId: number, dbInput?: D1Database): Promise<RaiderGearItem[]> {
+  const db = getDatabase(dbInput);
+  const row = await db
+    .prepare(
+      `SELECT rmc.name, rmc.realm_slug
+       FROM raider_metrics_cache rmc
+       WHERE rmc.blizzard_char_id = ?`
+    )
+    .bind(charId)
+    .first<{ name: string; realm_slug: string }>();
+
+  const accessToken = await getBlizzardAppAccessToken();
+  if (!row || !accessToken) return [];
+
+  const url = buildCharacterUrl(row.realm_slug, row.name, '/equipment');
+  const equipment = await fetchBlizzardJsonWithRetry<BlizzardEquipmentResponse>(url, accessToken);
+  const items = equipment?.equipped_items ?? [];
+
+  const bySlot = new Map<string, BlizzardEquippedItem>();
+  for (const item of items) {
+    const slotType = (item.slot?.type ?? '').toUpperCase();
+    if (!slotType) continue;
+    bySlot.set(slotType, item);
+  }
+
+  return GEAR_SLOT_ORDER.map((slotKey) => {
+    const item = bySlot.get(slotKey);
+    if (!item) {
+      return {
+        slotKey,
+        slotLabel: gearSlotLabel(slotKey),
+        itemName: null,
+        itemId: null,
+        itemLevel: null,
+        quality: null,
+        qualityColor: '#90a4b2',
+        enchantments: [],
+        gems: [],
+        stats: [],
+        socketsFilled: 0,
+        socketsTotal: 0,
+        canEnchant: false,
+        canGem: false,
+      } satisfies RaiderGearItem;
+    }
+
+    const sockets = item.sockets ?? [];
+    const socketsTotal = sockets.length;
+    const socketsFilled = sockets.filter((socket) => socket.item || socket.media || socket.display_string).length;
+    const enchantments = (item.enchantments ?? [])
+      .map((entry) => formatEnchantmentLabel(entry?.display_string ?? ''))
+      .filter((text) => text.length > 0);
+
+    const gems = sockets
+      .map((socket) => (socket.item?.name ?? socket.display_string ?? '').trim())
+      .filter((text) => text.length > 0);
+
+    const stats = (item.stats ?? [])
+      .map((entry) => formatItemStat(entry))
+      .filter((text): text is string => Boolean(text));
+
+    return {
+      slotKey,
+      slotLabel: gearSlotLabel(slotKey),
+      itemName: item.name ?? null,
+      itemId: item.item?.id ?? null,
+      itemLevel: item.level?.value ?? null,
+      quality: item.quality?.type ?? null,
+      qualityColor: itemQualityColor(item.quality?.type),
+      enchantments,
+      gems,
+      stats,
+      socketsFilled,
+      socketsTotal,
+      canEnchant: isEnchantableItem(slotKey, item),
+      canGem: socketsTotal > 0,
+    } satisfies RaiderGearItem;
+  });
 }
 
 export interface PreparednessHistoryRow {

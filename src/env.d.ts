@@ -8,6 +8,11 @@ interface CloudflareEnv {
 	WCL_CLIENT_ID?: string;
 	WCL_CLIENT_SECRET?: string;
 	CRON_SECRET?: string;
+	SIM_RUNNER_KEY?: string;
+	WOWSIM_APP_BASE_URL?: string;
+	WOWSIM_APP_API_KEY?: string;
+	WOWSIM_APP_TRIGGER_PATH?: string;
+	WOWSIM_APP_STATUS_PATH?: string;
 	RAID_PROGRESS_TARGET?: string;
 }
 
