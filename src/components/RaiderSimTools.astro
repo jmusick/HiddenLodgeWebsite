@@ -205,6 +205,7 @@ const latest = await getLatestSimForRaider((env as any).DB, charId);
     let sortDir = 'desc';
     let lastSimRaidLabel = null;
     let lastSimDifficulty = null;
+    let remoteRunnerMode = false;
 
     const filterValues = {
       slot: '',
@@ -376,6 +377,7 @@ const latest = await getLatestSimForRaider((env as any).DB, charId);
     };
 
     const checkConnection = async () => {
+      remoteRunnerMode = false;
       setConnection('checking', 'Checking LodgeSim connection...');
       try {
         const response = await fetchWithTimeout(apiUrl('/api/sim/launch'), 4000);
@@ -388,6 +390,12 @@ const latest = await getLatestSimForRaider((env as any).DB, charId);
         }
 
         const payload = await finalResponse.json();
+        if (payload?.remote_mode) {
+          remoteRunnerMode = true;
+          setConnection('checking', payload?.message || 'Remote runner mode enabled.');
+          return false;
+        }
+
         if (payload?.online) {
           setConnection('online', 'LodgeSim online');
           return true;
@@ -633,6 +641,10 @@ const latest = await getLatestSimForRaider((env as any).DB, charId);
     const launchRun = async () => {
       const isOnline = await checkConnection();
       if (!isOnline) {
+        if (remoteRunnerMode) {
+          setStatus('Remote runner mode is enabled. Manual website launch is unavailable from this environment.');
+          return;
+        }
         setStatus('LodgeSim app is offline. Start LodgeSim before running.');
         return;
       }

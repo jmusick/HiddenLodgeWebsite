@@ -47,7 +47,8 @@ export async function GET(context: APIContext): Promise<Response> {
     return Response.json(
       {
         online: false,
-        message: 'WOWSIM_APP_BASE_URL is not configured.',
+        remote_mode: true,
+        message: 'Remote runner mode: website launch endpoint is disabled (WOWSIM_APP_BASE_URL not set).',
       },
       { status: 200 }
     );
