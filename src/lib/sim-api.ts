@@ -229,6 +229,11 @@ async function getTableNames(db: D1Database): Promise<Set<string>> {
   return new Set((rows.results ?? []).map((row) => row.name));
 }
 
+async function hasSimRunsTable(db: D1Database): Promise<boolean> {
+  const tables = await getTableNames(db);
+  return tables.has('sim_runs');
+}
+
 async function getSimTableNames(db: D1Database): Promise<SimTableNames> {
   const tables = await getTableNames(db);
   const useLegacySummaries = !tables.has('sim_raider_summaries') && tables.has('sim_run_raider_summaries');
@@ -1161,6 +1166,14 @@ export async function getPassiveSimTasks(
   const maxTasks = Math.max(1, Math.min(100, options?.maxTasks ?? 20));
   const maxAgeSeconds = Math.max(60 * 60, Math.min(7 * 24 * 60 * 60, options?.maxAgeSeconds ?? 24 * 60 * 60));
 
+  if (!(await hasSimRunsTable(db))) {
+    return {
+      generated_at_utc: toIsoNow(),
+      max_age_seconds: maxAgeSeconds,
+      tasks: [],
+    };
+  }
+
   const simTables = await getSimTableNames(db);
   await purgeStaleSimData(db, simTables);
 
@@ -1305,6 +1318,8 @@ export async function getLatestDroptimizerForRaiders(
   const normalizedCharIds = [...new Set(charIds.filter((id) => Number.isInteger(id) && id > 0))];
   if (normalizedCharIds.length === 0) return snapshots;
 
+  if (!(await hasSimRunsTable(db))) return snapshots;
+
   const maxAgeSeconds = Math.max(60 * 60, Math.min(30 * 24 * 60 * 60, options?.maxAgeSeconds ?? 14 * 24 * 60 * 60));
   const cutoff = nowSeconds() - maxAgeSeconds;
   const simTables = await getSimTableNames(db);
@@ -1374,6 +1389,8 @@ export async function getLatestSingleTargetForRaiders(
   const snapshots = new Map<number, RaiderSingleTargetSnapshot>();
   const normalizedCharIds = [...new Set(charIds.filter((id) => Number.isInteger(id) && id > 0))];
   if (normalizedCharIds.length === 0) return snapshots;
+
+  if (!(await hasSimRunsTable(db))) return snapshots;
 
   const maxAgeSeconds = Math.max(60 * 60, Math.min(30 * 24 * 60 * 60, options?.maxAgeSeconds ?? 7 * 24 * 60 * 60));
   const cutoff = nowSeconds() - maxAgeSeconds;
