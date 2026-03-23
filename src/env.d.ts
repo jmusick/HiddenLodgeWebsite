@@ -16,8 +16,14 @@ interface CloudflareEnv {
 	RAID_PROGRESS_TARGET?: string;
 }
 
+interface Env extends CloudflareEnv {}
+
 declare module 'cloudflare:workers' {
 	export const env: CloudflareEnv;
+}
+
+declare module 'astro-icon/components' {
+	export const Icon: any;
 }
 
 declare namespace App {

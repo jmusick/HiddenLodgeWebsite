@@ -375,7 +375,7 @@ const spotlightCards = [
 </Layout>
 
 <script>
-  const pageSizeSelect = document.querySelector<HTMLSelectElement>('#raiders-page-size');
+  const pageSizeSelect = document.getElementById('raiders-page-size') as unknown as HTMLSelectElement | null;
   const prevPageBtn = document.querySelector<HTMLButtonElement>('#raiders-prev-page');
   const nextPageBtn = document.querySelector<HTMLButtonElement>('#raiders-next-page');
   const pageInfo = document.querySelector<HTMLSpanElement>('#raiders-page-info');
@@ -384,8 +384,8 @@ const spotlightCards = [
   let pageSize = 25;
 
   const searchInput = document.querySelector<HTMLInputElement>('#raiders-search');
-  const classFilter = document.querySelector<HTMLSelectElement>('#raiders-class-filter');
-  const teamFilter = document.querySelector<HTMLSelectElement>('#raiders-team-filter');
+  const classFilter = document.getElementById('raiders-class-filter') as unknown as HTMLSelectElement | null;
+  const teamFilter = document.getElementById('raiders-team-filter') as unknown as HTMLSelectElement | null;
   const countLabel = document.querySelector<HTMLParagraphElement>('#raiders-count');
   const table = document.querySelector<HTMLTableElement>('#raiders-table');
   const tableBody = table?.querySelector('tbody');

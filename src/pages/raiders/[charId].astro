@@ -30,8 +30,8 @@ const { portrait, fullBody } = media;
 const nowEpoch = Math.floor(Date.now() / 1000);
 
 const [singleTargetMap, droptimizerMap] = await Promise.all([
-  getLatestSingleTargetForRaiders(env.DB, [id], { maxAgeSeconds: 14 * 24 * 60 * 60 }),
-  getLatestDroptimizerForRaiders(env.DB, [id], { maxAgeSeconds: 14 * 24 * 60 * 60 }),
+  getLatestSingleTargetForRaiders((env as any).DB, [id], { maxAgeSeconds: 14 * 24 * 60 * 60 }),
+  getLatestDroptimizerForRaiders((env as any).DB, [id], { maxAgeSeconds: 14 * 24 * 60 * 60 }),
 ]);
 const singleTargetSnapshot = singleTargetMap.get(id) ?? null;
 const droptimizerSnapshot = droptimizerMap.get(id) ?? null;
@@ -150,7 +150,7 @@ const raidProgressMatrix = parseRaidProgressMatrix(raider.raidProgressLabel);
 const warcraftLogsUrl = `https://www.warcraftlogs.com/character/id/${raider.blizzardCharId}`;
 const canManageSim = Boolean(
   Astro.locals.user && (
-    Astro.locals.isAdmin || await isCharacterOwner(env.DB, Astro.locals.user.id, raider.blizzardCharId)
+    Astro.locals.isAdmin || await isCharacterOwner((env as any).DB, Astro.locals.user.id, raider.blizzardCharId)
   )
 );
 const blizzardArmoryUrl = raider.realmSlug
