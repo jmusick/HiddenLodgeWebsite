@@ -136,6 +136,45 @@ export interface RaiderSimLaunchContext {
   realm_slug: string;
 }
 
+export interface PassiveSimTask {
+  task_id: string;
+  task_type: 'droptimizer' | 'single_target';
+  site_team_id: number;
+  difficulty: SimDifficulty;
+  char_id: number;
+  char_name: string;
+  realm_slug: string;
+  region: 'us';
+  sim_raid: 'all';
+  sim_difficulty: 'all';
+  stale_seconds: number;
+  last_sim_updated_at: number | null;
+}
+
+export interface PassiveSimTasksResponse {
+  generated_at_utc: string;
+  max_age_seconds: number;
+  tasks: PassiveSimTask[];
+}
+
+export interface RaiderSingleTargetSnapshot {
+  char_id: number;
+  baseline_dps: number | null;
+  top_dps: number | null;
+  updated_at: number;
+  finished_at_utc: string | null;
+  site_team_id: number;
+  difficulty: SimDifficulty;
+}
+
+export interface RaiderDroptimizerSnapshot {
+  char_id: number;
+  updated_at: number;
+  finished_at_utc: string | null;
+  site_team_id: number;
+  difficulty: SimDifficulty;
+}
+
 interface SimRunsSchema {
   hasLastHeartbeatUtc: boolean;
   hasLastHeartbeatAt: boolean;
@@ -1113,4 +1152,296 @@ export async function getLatestSimByTeam(
     updated_at: runRow.updated_at,
     winners: (winnersResult.results ?? []) as Array<RaiderSimWinner & { best_blizzard_char_id: number | null }> ,
   };
+}
+
+export async function getPassiveSimTasks(
+  db: D1Database,
+  options?: { maxTasks?: number; maxAgeSeconds?: number }
+): Promise<PassiveSimTasksResponse> {
+  const maxTasks = Math.max(1, Math.min(100, options?.maxTasks ?? 20));
+  const maxAgeSeconds = Math.max(60 * 60, Math.min(7 * 24 * 60 * 60, options?.maxAgeSeconds ?? 24 * 60 * 60));
+
+  const simTables = await getSimTableNames(db);
+  await purgeStaleSimData(db, simTables);
+
+  const targets = await getSimTargets(db);
+  const now = nowSeconds();
+
+  const latestSingleRows = await db
+    .prepare(
+      `SELECT
+         sr.site_team_id,
+         sr.difficulty,
+         srs.blizzard_char_id AS char_id,
+         MAX(sr.updated_at) AS last_updated_at
+       FROM sim_runs sr
+       JOIN ${simTables.raiderSummaries} srs ON srs.${simTables.summaryRunFk} = sr.id
+       WHERE sr.status = 'finished'
+       GROUP BY sr.site_team_id, sr.difficulty, srs.blizzard_char_id`
+    )
+    .all<{
+      site_team_id: number;
+      difficulty: string;
+      char_id: number;
+      last_updated_at: number | null;
+    }>();
+
+  const latestSingleByKey = new Map<string, number | null>();
+  for (const row of (latestSingleRows.results ?? []) as Array<{
+    site_team_id: number;
+    difficulty: string;
+    char_id: number;
+    last_updated_at: number | null;
+  }>) {
+    const diff = normalizeDifficulty(row.difficulty);
+    const key = `${row.site_team_id}:${diff}:${row.char_id}`;
+    latestSingleByKey.set(key, row.last_updated_at ?? null);
+  }
+
+  const latestDroptimizerRows = await db
+    .prepare(
+      `SELECT
+         sr.site_team_id,
+         sr.difficulty,
+         siw.best_blizzard_char_id AS char_id,
+         MAX(sr.updated_at) AS last_updated_at
+       FROM sim_runs sr
+       JOIN ${simTables.itemWinners} siw ON siw.${simTables.winnerRunFk} = sr.id
+       WHERE sr.status = 'finished'
+         AND siw.best_blizzard_char_id IS NOT NULL
+       GROUP BY sr.site_team_id, sr.difficulty, siw.best_blizzard_char_id`
+    )
+    .all<{
+      site_team_id: number;
+      difficulty: string;
+      char_id: number;
+      last_updated_at: number | null;
+    }>();
+
+  const latestDroptimizerByKey = new Map<string, number | null>();
+  for (const row of (latestDroptimizerRows.results ?? []) as Array<{
+    site_team_id: number;
+    difficulty: string;
+    char_id: number;
+    last_updated_at: number | null;
+  }>) {
+    const diff = normalizeDifficulty(row.difficulty);
+    const key = `${row.site_team_id}:${diff}:${row.char_id}`;
+    latestDroptimizerByKey.set(key, row.last_updated_at ?? null);
+  }
+
+  const tasks: PassiveSimTask[] = [];
+  for (const team of targets.teams) {
+    const difficulty = normalizeDifficulty(team.difficulty);
+    if (difficulty === 'unknown') continue;
+
+    for (const raider of team.raiders) {
+      const key = `${team.team_id}:${difficulty}:${raider.blizzard_char_id}`;
+      const singleTargetLastUpdated = latestSingleByKey.get(key) ?? null;
+      const singleTargetStaleSeconds = singleTargetLastUpdated ? Math.max(0, now - singleTargetLastUpdated) : maxAgeSeconds + 1;
+      const droptimizerLastUpdated = latestDroptimizerByKey.get(key) ?? null;
+      const droptimizerStaleSeconds = droptimizerLastUpdated ? Math.max(0, now - droptimizerLastUpdated) : maxAgeSeconds + 1;
+
+      const commonTask = {
+        site_team_id: team.team_id,
+        difficulty,
+        char_id: raider.blizzard_char_id,
+        char_name: raider.name,
+        realm_slug: raider.realm_slug,
+        region: 'us' as const,
+        sim_raid: 'all' as const,
+        sim_difficulty: 'all' as const,
+      };
+
+      if (singleTargetStaleSeconds >= maxAgeSeconds) {
+        tasks.push({
+          task_id: `${team.team_id}:${difficulty}:${raider.blizzard_char_id}:single_target`,
+          task_type: 'single_target',
+          stale_seconds: singleTargetStaleSeconds,
+          last_sim_updated_at: singleTargetLastUpdated,
+          ...commonTask,
+        });
+      }
+
+      if (droptimizerStaleSeconds >= maxAgeSeconds) {
+        tasks.push({
+          task_id: `${team.team_id}:${difficulty}:${raider.blizzard_char_id}:droptimizer`,
+          task_type: 'droptimizer',
+          stale_seconds: droptimizerStaleSeconds,
+          last_sim_updated_at: droptimizerLastUpdated,
+          ...commonTask,
+        });
+      }
+    }
+  }
+
+  tasks.sort((a, b) => {
+    if (a.task_type !== b.task_type) {
+      return a.task_type === 'single_target' ? -1 : 1;
+    }
+    if (a.task_type === 'single_target') {
+      const aMissing = a.last_sim_updated_at == null;
+      const bMissing = b.last_sim_updated_at == null;
+      if (aMissing !== bMissing) return aMissing ? -1 : 1;
+    }
+    if (b.stale_seconds !== a.stale_seconds) return b.stale_seconds - a.stale_seconds;
+    if (a.site_team_id !== b.site_team_id) return a.site_team_id - b.site_team_id;
+    return a.char_name.localeCompare(b.char_name);
+  });
+
+  return {
+    generated_at_utc: toIsoNow(),
+    max_age_seconds: maxAgeSeconds,
+    tasks: tasks.slice(0, maxTasks),
+  };
+}
+
+export async function getLatestDroptimizerForRaiders(
+  db: D1Database,
+  charIds: number[],
+  options?: { maxAgeSeconds?: number }
+): Promise<Map<number, RaiderDroptimizerSnapshot>> {
+  const snapshots = new Map<number, RaiderDroptimizerSnapshot>();
+  const normalizedCharIds = [...new Set(charIds.filter((id) => Number.isInteger(id) && id > 0))];
+  if (normalizedCharIds.length === 0) return snapshots;
+
+  const maxAgeSeconds = Math.max(60 * 60, Math.min(30 * 24 * 60 * 60, options?.maxAgeSeconds ?? 14 * 24 * 60 * 60));
+  const cutoff = nowSeconds() - maxAgeSeconds;
+  const simTables = await getSimTableNames(db);
+  await purgeStaleSimData(db, simTables);
+
+  const placeholders = normalizedCharIds.map(() => '?').join(', ');
+  const result = await db
+    .prepare(
+      `SELECT
+         latest.char_id,
+         latest.updated_at,
+         latest.finished_at_utc,
+         latest.site_team_id,
+         latest.difficulty
+       FROM (
+         SELECT
+           siw.best_blizzard_char_id AS char_id,
+           sr.updated_at,
+           sr.finished_at_utc,
+           sr.site_team_id,
+           sr.difficulty,
+           ROW_NUMBER() OVER (
+             PARTITION BY siw.best_blizzard_char_id
+             ORDER BY sr.updated_at DESC, sr.id DESC
+           ) AS rn
+         FROM sim_runs sr
+         JOIN ${simTables.itemWinners} siw ON siw.${simTables.winnerRunFk} = sr.id
+         WHERE sr.status = 'finished'
+           AND sr.updated_at >= ?
+           AND siw.best_blizzard_char_id IN (${placeholders})
+       ) latest
+       WHERE latest.rn = 1`
+    )
+    .bind(cutoff, ...normalizedCharIds)
+    .all<{
+      char_id: number;
+      updated_at: number;
+      finished_at_utc: string | null;
+      site_team_id: number;
+      difficulty: string;
+    }>();
+
+  for (const row of (result.results ?? []) as Array<{
+    char_id: number;
+    updated_at: number;
+    finished_at_utc: string | null;
+    site_team_id: number;
+    difficulty: string;
+  }>) {
+    snapshots.set(row.char_id, {
+      char_id: row.char_id,
+      updated_at: row.updated_at,
+      finished_at_utc: row.finished_at_utc,
+      site_team_id: row.site_team_id,
+      difficulty: normalizeDifficulty(row.difficulty),
+    });
+  }
+
+  return snapshots;
+}
+
+export async function getLatestSingleTargetForRaiders(
+  db: D1Database,
+  charIds: number[],
+  options?: { maxAgeSeconds?: number }
+): Promise<Map<number, RaiderSingleTargetSnapshot>> {
+  const snapshots = new Map<number, RaiderSingleTargetSnapshot>();
+  const normalizedCharIds = [...new Set(charIds.filter((id) => Number.isInteger(id) && id > 0))];
+  if (normalizedCharIds.length === 0) return snapshots;
+
+  const maxAgeSeconds = Math.max(60 * 60, Math.min(30 * 24 * 60 * 60, options?.maxAgeSeconds ?? 7 * 24 * 60 * 60));
+  const cutoff = nowSeconds() - maxAgeSeconds;
+  const simTables = await getSimTableNames(db);
+  await purgeStaleSimData(db, simTables);
+
+  const placeholders = normalizedCharIds.map(() => '?').join(', ');
+  const result = await db
+    .prepare(
+      `SELECT
+         latest.char_id,
+         latest.baseline_dps,
+         latest.top_dps,
+         latest.updated_at,
+         latest.finished_at_utc,
+         latest.site_team_id,
+         latest.difficulty
+       FROM (
+         SELECT
+           srs.blizzard_char_id AS char_id,
+           srs.baseline_dps,
+           srs.top_dps,
+           sr.updated_at,
+           sr.finished_at_utc,
+           sr.site_team_id,
+           sr.difficulty,
+           ROW_NUMBER() OVER (
+             PARTITION BY srs.blizzard_char_id
+             ORDER BY sr.updated_at DESC, sr.id DESC
+           ) AS rn
+         FROM sim_runs sr
+         JOIN ${simTables.raiderSummaries} srs ON srs.${simTables.summaryRunFk} = sr.id
+         WHERE sr.status = 'finished'
+           AND sr.updated_at >= ?
+           AND srs.blizzard_char_id IN (${placeholders})
+       ) latest
+       WHERE latest.rn = 1`
+    )
+    .bind(cutoff, ...normalizedCharIds)
+    .all<{
+      char_id: number;
+      baseline_dps: number | null;
+      top_dps: number | null;
+      updated_at: number;
+      finished_at_utc: string | null;
+      site_team_id: number;
+      difficulty: string;
+    }>();
+
+  for (const row of (result.results ?? []) as Array<{
+    char_id: number;
+    baseline_dps: number | null;
+    top_dps: number | null;
+    updated_at: number;
+    finished_at_utc: string | null;
+    site_team_id: number;
+    difficulty: string;
+  }>) {
+    snapshots.set(row.char_id, {
+      char_id: row.char_id,
+      baseline_dps: row.baseline_dps,
+      top_dps: row.top_dps,
+      updated_at: row.updated_at,
+      finished_at_utc: row.finished_at_utc,
+      site_team_id: row.site_team_id,
+      difficulty: normalizeDifficulty(row.difficulty),
+    });
+  }
+
+  return snapshots;
 }

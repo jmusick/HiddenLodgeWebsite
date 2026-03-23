@@ -2,6 +2,7 @@ import type { D1Database } from '@cloudflare/workers-types';
 import { env } from 'cloudflare:workers';
 import { resolveRaidProgressTier } from '../data/raidProgressTargets';
 import { fallbackClassIconUrl } from './class-icons';
+import { getLatestDroptimizerForRaiders, getLatestSingleTargetForRaiders } from './sim-api';
 import { getBlizzardAppAccessToken as getSharedBlizzardAppAccessToken } from './blizzard-app-token';
 import { fetchBlizzardJsonWithRetry } from './blizzard-fetch';
 
@@ -378,6 +379,9 @@ export interface RaiderRecord {
   avg30dTotalSockets: number | null;
   avg30dEnchantedSlots: number | null;
   avg30dEnchantableSlots: number | null;
+  singleTargetDps: number | null;
+  singleTargetUpdatedAt: number | null;
+  droptimizerUpdatedAt: number | null;
 }
 
 export interface RaidersCacheStatus {
@@ -628,6 +632,9 @@ async function enrichRaider(row: RaiderSourceRow, now: number, raidProgressTarge
     avg30dTotalSockets: null,
     avg30dEnchantedSlots: null,
     avg30dEnchantableSlots: null,
+    singleTargetDps: null,
+    singleTargetUpdatedAt: null,
+    droptimizerUpdatedAt: null,
   };
 
   const accessToken = await getBlizzardAppAccessToken();
@@ -810,6 +817,9 @@ async function listCachedRaiders(db: D1Database): Promise<RaiderRecord[]> {
     avg30dTotalSockets: row.avg_30d_total_sockets,
     avg30dEnchantedSlots: row.avg_30d_enchanted_slots,
     avg30dEnchantableSlots: row.avg_30d_enchantable_slots,
+    singleTargetDps: null,
+    singleTargetUpdatedAt: null,
+    droptimizerUpdatedAt: null,
   }));
 }
 
@@ -1226,7 +1236,7 @@ export async function getRaiderGear(charId: number, dbInput?: D1Database): Promi
     const socketsFilled = sockets.filter((socket) => socket.item || socket.media || socket.display_string).length;
     const enchantments = (item.enchantments ?? [])
       .map((entry) => formatEnchantmentLabel(entry?.display_string ?? ''))
-      .filter((text) => text.length > 0);
+      .filter((text): text is string => Boolean(text && text.length > 0));
 
     const gems = sockets
       .map((socket) => (socket.item?.name ?? socket.display_string ?? '').trim())
@@ -1372,6 +1382,9 @@ export async function getRaiderByCharId(charId: number, dbInput?: D1Database): P
     avg30dTotalSockets: row.avg_30d_total_sockets,
     avg30dEnchantedSlots: row.avg_30d_enchanted_slots,
     avg30dEnchantableSlots: row.avg_30d_enchantable_slots,
+    singleTargetDps: null,
+    singleTargetUpdatedAt: null,
+    droptimizerUpdatedAt: null,
   };
 }
 
@@ -1394,6 +1407,34 @@ export async function loadRaidersViewData(dbInput?: D1Database): Promise<Raiders
     ...raider,
     classIconUrl: fallbackClassIconUrl(raider.className),
   }));
+
+  try {
+    const singleTargetMap = await getLatestSingleTargetForRaiders(
+      db,
+      raiders.map((raider) => raider.blizzardCharId),
+      { maxAgeSeconds: 14 * 24 * 60 * 60 }
+    );
+    const droptimizerMap = await getLatestDroptimizerForRaiders(
+      db,
+      raiders.map((raider) => raider.blizzardCharId),
+      { maxAgeSeconds: 14 * 24 * 60 * 60 }
+    );
+
+    raiders = raiders.map((raider) => {
+      const snapshot = singleTargetMap.get(raider.blizzardCharId);
+      const droptimizer = droptimizerMap.get(raider.blizzardCharId);
+      return {
+        ...raider,
+        singleTargetDps: snapshot?.baseline_dps ?? null,
+        singleTargetUpdatedAt: snapshot?.updated_at ?? null,
+        droptimizerUpdatedAt: droptimizer?.updated_at ?? null,
+      };
+    });
+  } catch (error) {
+    if (!errorMessage) {
+      errorMessage = error instanceof Error ? error.message : 'Unable to load single-target snapshots.';
+    }
+  }
 
   return {
     raiders,

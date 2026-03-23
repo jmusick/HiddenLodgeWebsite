@@ -6,7 +6,7 @@ import { Icon } from 'astro-icon/components';
 import { classColor } from '../lib/wow';
 import { loadRaidersViewData } from '../lib/raiders';
 
-const { raiders, totalMembers, readyCount, unavailableCount, status, errorMessage } = await loadRaidersViewData();
+const { raiders, totalMembers, readyCount, unavailableCount } = await loadRaidersViewData();
 
 const sortedRaiders = [...raiders].sort((a, b) => {
   const scoreA = a.mythicScore ?? -1;
@@ -177,6 +177,10 @@ const topMythicScore = sortedRaiders.reduce((best, raider) =>
   (raider.mythicScore ?? -1) > (best?.mythicScore ?? -1) ? raider : best,
   null as (typeof sortedRaiders)[number] | null
 );
+const topSingleTarget = sortedRaiders.reduce((best, raider) =>
+  (raider.singleTargetDps ?? -1) > (best?.singleTargetDps ?? -1) ? raider : best,
+  null as (typeof sortedRaiders)[number] | null
+);
 
 const spotlightCards = [
   {
@@ -194,6 +198,15 @@ const spotlightCards = [
     className: topItemLevel?.className ?? '',
   },
   {
+    label: 'Highest Simulated DPS',
+    icon: 'lucide:crosshair',
+    value: topSingleTarget?.singleTargetDps
+      ? topSingleTarget.singleTargetDps.toLocaleString(undefined, { maximumFractionDigits: 0 })
+      : '—',
+    detail: topSingleTarget?.name ?? '—',
+    className: topSingleTarget?.className ?? '',
+  },
+  {
     label: 'Highest M+ Score',
     icon: 'lucide:trophy',
     value: topMythicScore?.mythicScore ? topMythicScore.mythicScore.toLocaleString(undefined, { maximumFractionDigits: 0 }) : '—',
@@ -206,21 +219,6 @@ const spotlightCards = [
 <Layout title="The Hidden Lodge | Raiders" description="Guild-member view backed by cached Blizzard character-profile data for roster-team members.">
   <section>
     <h1 class="title-row"><Icon name="lucide:shield-user" class="title-icon" aria-hidden="true" />Raiders</h1>
-  </section>
-
-  <section class="panel cache-panel" aria-label="Raiders cache status">
-    <h2 class="title-row"><Icon name="lucide:database" class="title-icon" aria-hidden="true" />Cache Status</h2>
-    {errorMessage ? (
-      <p class="panel-text error-text">{errorMessage}</p>
-    ) : (
-      <p class="panel-text">
-        Last summary sync: <strong>{status.lastSummarySync ? new Date(status.lastSummarySync * 1000).toLocaleString() : 'Never'}</strong>
-        {' · '}
-        Last detail sync: <strong>{status.lastDetailSync ? new Date(status.lastDetailSync * 1000).toLocaleString() : 'Never'}</strong>
-        {' · '}
-        Pending detail refresh: <strong>{status.pendingDetailCount}</strong>
-      </p>
-    )}
   </section>
 
   <section class="spotlights" aria-label="Raiders snapshot">
@@ -283,6 +281,7 @@ const spotlightCards = [
             <th><button class="sort-btn" type="button" data-sort-key="name">Name</button></th>
             <th><button class="sort-btn" type="button" data-sort-key="class">Class</button></th>
             <th><button class="sort-btn" type="button" data-sort-key="equippedItemLevel">iLvl</button></th>
+            <th><button class="sort-btn" type="button" data-sort-key="singleTargetDps">Sim DPS</button></th>
             <th><button class="sort-btn" type="button" data-sort-key="mythicScore">M+ Score</button></th>
             <th><button class="sort-btn" type="button" data-sort-key="tierPiecesEquipped">Tier</button></th>
             <th><button class="sort-btn" type="button" data-sort-key="crestSort">Crests Earned</button></th>
@@ -307,6 +306,7 @@ const spotlightCards = [
                 data-equipped-item-level={String(raider.equippedItemLevel ?? -1)}
                 data-raid-progress-kills={String(raider.raidProgressKills ?? -1)}
                 data-mythic-score={String(raider.mythicScore ?? -1)}
+                data-single-target-dps={String(raider.singleTargetDps ?? -1)}
                 data-tier-pieces-equipped={String(raider.tierPiecesEquipped ?? -1)}
                 data-crest-sort={String(crestSortValue(raider))}
                 data-total-upgrades-missing={String(raider.totalUpgradesMissing ?? -1)}
@@ -345,6 +345,7 @@ const spotlightCards = [
                     </span>
                   </div>
                 </td>
+                <td>{raider.singleTargetDps ? raider.singleTargetDps.toLocaleString(undefined, { maximumFractionDigits: 0 }) : '—'}</td>
                 <td>{raider.mythicScore ? raider.mythicScore.toLocaleString(undefined, { maximumFractionDigits: 0 }) : '—'}</td>
                 <td>{raider.tierPiecesEquipped ?? '—'}</td>
                 <td>
@@ -415,7 +416,7 @@ const spotlightCards = [
       return matchesSearch && matchesClass && matchesTeam;
     });
 
-    const numericKeys = new Set(['equippedItemLevel', 'raidProgressKills', 'mythicScore', 'tierPiecesEquipped', 'crestSort', 'totalUpgradesMissing', 'preparednessScore']);
+    const numericKeys = new Set(['equippedItemLevel', 'raidProgressKills', 'mythicScore', 'singleTargetDps', 'tierPiecesEquipped', 'crestSort', 'totalUpgradesMissing', 'preparednessScore']);
 
     visibleRows.sort((rowA, rowB) => {
       const toAttr = (key: string) => key.replace(/[A-Z]/g, (char) => `-${char.toLowerCase()}`);
@@ -586,7 +587,7 @@ const spotlightCards = [
 
   .spotlights {
     display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-columns: repeat(4, minmax(0, 1fr));
     gap: 0.75rem;
     margin-top: 1rem;
   }

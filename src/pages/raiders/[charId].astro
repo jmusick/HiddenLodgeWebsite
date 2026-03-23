@@ -7,6 +7,7 @@ import { env } from 'cloudflare:workers';
 import { classColor } from '../../lib/wow';
 import { getRaiderByCharId, getRaiderGear, getRaiderMedia, getPreparednessHistory } from '../../lib/raiders';
 import { isCharacterOwner } from '../../lib/auth';
+import { getLatestDroptimizerForRaiders, getLatestSingleTargetForRaiders } from '../../lib/sim-api';
 import { RAID_PROGRESS_TARGET_GROUPS } from '../../data/raidProgressTargets';
 import RaiderSimTools from '../../components/RaiderSimTools.astro';
 
@@ -26,6 +27,14 @@ if (!raider) {
   return new Response('Not found', { status: 404 });
 }
 const { portrait, fullBody } = media;
+const nowEpoch = Math.floor(Date.now() / 1000);
+
+const [singleTargetMap, droptimizerMap] = await Promise.all([
+  getLatestSingleTargetForRaiders(env.DB, [id], { maxAgeSeconds: 14 * 24 * 60 * 60 }),
+  getLatestDroptimizerForRaiders(env.DB, [id], { maxAgeSeconds: 14 * 24 * 60 * 60 }),
+]);
+const singleTargetSnapshot = singleTargetMap.get(id) ?? null;
+const droptimizerSnapshot = droptimizerMap.get(id) ?? null;
 
 function authLabel(state: string): string {
   if (state === 'ready') return 'Loaded';
@@ -41,6 +50,14 @@ function scoreColor(filled: number | null, total: number | null): string {
   if (pct >= 0.75) return '#0070dd';
   if (pct >= 0.5)  return '#1eff00';
   return '#ffffff';
+}
+
+function freshnessBadge(updatedAt: number | null): { label: string; className: string } {
+  if (!updatedAt || updatedAt <= 0) return { label: 'missing', className: 'missing' };
+  const age = Math.max(0, nowEpoch - updatedAt);
+  if (age <= 24 * 60 * 60) return { label: 'fresh', className: 'fresh' };
+  if (age <= 2 * 24 * 60 * 60) return { label: 'aging', className: 'aging' };
+  return { label: 'stale', className: 'stale' };
 }
 
 function formatScore(filled: number | null, total: number | null): string {
@@ -127,6 +144,8 @@ function fullDifficultyName(mode: 'L' | 'N' | 'H' | 'M'): string {
 
 const color = classColor(raider.className);
 const pageTitle = `${raider.name} — ${raider.realm} | The Hidden Lodge`;
+const stFresh = freshnessBadge(singleTargetSnapshot?.updated_at ?? null);
+const dropFresh = freshnessBadge(droptimizerSnapshot?.updated_at ?? null);
 const raidProgressMatrix = parseRaidProgressMatrix(raider.raidProgressLabel);
 const warcraftLogsUrl = `https://www.warcraftlogs.com/character/id/${raider.blizzardCharId}`;
 const canManageSim = Boolean(
@@ -609,6 +628,14 @@ function gemAffixState(item: (typeof gear)[number] | undefined): { missing: bool
 
       <section class="sync-info panel" aria-label="Sync info">
         <p class="sync-text">
+          <Icon name="lucide:activity" class="sync-icon" aria-hidden="true" />
+          Sim Freshness:&nbsp;
+          <span class="sim-freshness-wrap">
+            <span class:list={['freshness-chip', stFresh.className]}>Sim DPS: {stFresh.label}</span>
+            <span class:list={['freshness-chip', dropFresh.className]}>Droptimizer: {dropFresh.label}</span>
+          </span>
+        </p>
+        <p class="sync-text">
           <Icon name="lucide:clock" class="sync-icon" aria-hidden="true" />
           Last detail sync:&nbsp;
           <strong>
@@ -759,6 +786,44 @@ function gemAffixState(item: (typeof gear)[number] | undefined): { missing: bool
   }
 
   .status-badge.missing {
+    color: #cfdae2;
+    background: rgba(132, 154, 171, 0.14);
+    border-color: rgba(190, 205, 215, 0.26);
+  }
+
+  .sim-freshness-wrap {
+    display: inline-flex;
+    flex-wrap: wrap;
+    gap: 0.35rem;
+    vertical-align: middle;
+  }
+
+  .freshness-chip {
+    display: inline-flex;
+    align-items: center;
+    padding: 0.14rem 0.45rem;
+    border-radius: 999px;
+    font-size: 0.75rem;
+    font-weight: 700;
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    text-transform: uppercase;
+    letter-spacing: 0.02em;
+  }
+
+  .freshness-chip.fresh {
+    color: #9ce5b0;
+    background: rgba(56, 142, 81, 0.18);
+    border-color: rgba(109, 202, 138, 0.34);
+  }
+
+  .freshness-chip.aging {
+    color: #f0c07f;
+    background: rgba(173, 96, 31, 0.16);
+    border-color: rgba(240, 192, 127, 0.3);
+  }
+
+  .freshness-chip.stale,
+  .freshness-chip.missing {
     color: #cfdae2;
     background: rgba(132, 154, 171, 0.14);
     border-color: rgba(190, 205, 215, 0.26);

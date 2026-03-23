@@ -17,6 +17,12 @@ The site combines public guild information, Blizzard-authenticated member profil
   - Purge sim history action clears stored run data for that raider.
 - Added `POST /api/sim/latest` handler for purging a raider's sim history (replaces the previous `/api/sim/purge` route).
 - Sim API fetch calls now use a base-URL-aware helper with automatic 404 fallback, ensuring correct routing under all deploy contexts.
+- Added passive sim task generation endpoint (`/api/sim/passive/tasks`) for machine runners to request stale background work.
+- Added single-target snapshot surfacing to Raiders:
+	- Raiders table now includes Sim DPS.
+	- Spotlight card now highlights Highest Simulated DPS.
+	- Raider profile page includes Sim Freshness badges for Sim DPS and Droptimizer recency.
+- Added stale-task prioritization so missing single-target sims are emitted ahead of droptimizer tasks.
 
 ### 1.4.6
 
@@ -248,6 +254,7 @@ Machine-to-machine endpoints for local/external simulation runners. These endpoi
 | Endpoint | Method | Description |
 |---|---|---|
 | `/api/sim/targets` | GET | Returns deterministic team/member simulation targets for active roster teams |
+| `/api/sim/passive/tasks` | GET | Returns stale passive background sim tasks for runners (single-target prioritized before droptimizer) |
 | `/api/sim/results` | POST | Ingests simulation output and persists run/winner data with idempotency by `(run_id, site_team_id)` |
 | `/api/sim/runs/start` | POST | Optional lifecycle endpoint to mark a sim run as started |
 | `/api/sim/runs/heartbeat` | POST | Optional lifecycle endpoint to mark a sim run as running/healthy |
