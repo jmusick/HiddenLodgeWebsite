@@ -101,6 +101,7 @@ export interface LifecycleInput {
   started_at_utc?: string | null;
   finished_at_utc?: string | null;
   error_message?: string | null;
+  runner_version?: string | null;
 }
 
 export interface RaiderSimWinner {
@@ -708,6 +709,7 @@ export function validateLifecycleInput(payload: unknown): { value: LifecycleInpu
       started_at_utc: typeof record.started_at_utc === 'string' ? record.started_at_utc : null,
       finished_at_utc: typeof record.finished_at_utc === 'string' ? record.finished_at_utc : null,
       error_message: typeof record.error_message === 'string' ? record.error_message : null,
+      runner_version: typeof record.runner_version === 'string' ? record.runner_version : null,
     },
     errors: [],
   };
@@ -743,9 +745,10 @@ export async function upsertSimRunLifecycle(
             finished_at_utc,
             last_heartbeat_utc,
             error_message,
+            runner_version,
             created_at,
             updated_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
         )
         .bind(
           input.run_id,
@@ -757,6 +760,7 @@ export async function upsertSimRunLifecycle(
           input.finished_at_utc ?? null,
           heartbeatText,
           input.error_message ?? null,
+          input.runner_version ?? null,
           now,
           now
         )
@@ -790,7 +794,7 @@ export async function upsertSimRunLifecycle(
           status,
           successful,
           null,
-          null,
+          input.runner_version ?? null,
           simRunsSchema.hasLastHeartbeatAt ? heartbeatEpoch : null,
           now,
           now
@@ -809,6 +813,7 @@ export async function upsertSimRunLifecycle(
                finished_at_utc = COALESCE(?, finished_at_utc),
                last_heartbeat_utc = COALESCE(?, last_heartbeat_utc),
                error_message = COALESCE(?, error_message),
+               runner_version = COALESCE(?, runner_version),
                updated_at = ?
            WHERE id = ?`
         )
@@ -820,6 +825,7 @@ export async function upsertSimRunLifecycle(
           input.finished_at_utc ?? null,
           heartbeatText,
           input.error_message ?? null,
+          input.runner_version ?? null,
           now,
           existingId
         )
@@ -835,6 +841,7 @@ export async function upsertSimRunLifecycle(
                started_at_utc = COALESCE(?, started_at_utc),
                finished_at_utc = COALESCE(?, finished_at_utc),
                last_heartbeat_at = COALESCE(?, last_heartbeat_at),
+               runner_version = COALESCE(?, runner_version),
                updated_at = ?
            WHERE id = ?`
         )
@@ -846,6 +853,7 @@ export async function upsertSimRunLifecycle(
           startedAtUtc,
           input.finished_at_utc ?? null,
           simRunsSchema.hasLastHeartbeatAt ? heartbeatEpoch : null,
+          input.runner_version ?? null,
           now,
           existingId
         )
