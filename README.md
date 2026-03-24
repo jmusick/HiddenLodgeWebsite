@@ -8,6 +8,13 @@ The site combines public guild information, Blizzard-authenticated member profil
 
 ## Release Notes
 
+### 1.5.2
+
+- Added staged responsive hamburger behavior to the site header so external links, guild/member links, and then the main nav collapse in sequence as the viewport narrows.
+- Tightened top-nav spacing and prevented the site title from wrapping under header compression.
+- Reordered hamburger menu groups to show Main Menu, Guild, External Links, and Profile in a clearer mobile-first order.
+- Added responsive mobile dropdown navigation for the Guild Administration sub-nav.
+
 ### 1.5.1
 
 - Added `WOWSIM_APP_BASE_URL` and related sim runner vars to `wrangler.toml` so the prod Cloudflare Pages deployment connects to the external WoWSim runner without manual dashboard entry.

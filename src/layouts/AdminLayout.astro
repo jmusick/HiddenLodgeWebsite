@@ -18,6 +18,9 @@ const adminModules = [
 	{ href: '/admin/settings', label: 'Settings', icon: 'lucide:settings' },
 	{ href: '/admin/export', label: 'Export', icon: 'lucide:download' },
 ];
+
+const currentAdminModule =
+	adminModules.find((module) => currentPath.startsWith(module.href))?.label ?? 'Modules';
 ---
 
 <Layout title={title}>
@@ -42,6 +45,27 @@ const adminModules = [
 							</li>
 						))}
 					</ul>
+					<details class="admin-subnav-menu">
+						<summary aria-label="Open admin navigation menu">
+							<Icon name="lucide:menu" aria-hidden="true" />
+							<span>{currentAdminModule}</span>
+						</summary>
+						<div class="admin-menu-panel" role="menu">
+							<ul aria-label="Admin modules menu">
+								{adminModules.map((m) => (
+									<li>
+										<a
+											href={m.href}
+											class:list={['admin-tab', 'admin-menu-tab', { active: currentPath.startsWith(m.href) }]}
+										>
+											<Icon name={m.icon} aria-hidden="true" />
+											{m.label}
+										</a>
+									</li>
+								))}
+							</ul>
+						</div>
+					</details>
 				</nav>
 			</div>
 		</div>
@@ -101,6 +125,64 @@ const adminModules = [
 		margin: 0;
 	}
 
+	.admin-subnav-menu {
+		display: none;
+		position: relative;
+	}
+
+	.admin-subnav-menu summary {
+		list-style: none;
+		display: inline-flex;
+		align-items: center;
+		gap: 0.38rem;
+		padding: 0.4rem 0.65rem;
+		border: 1px solid rgba(214, 176, 106, 0.32);
+		border-radius: 0.45rem;
+		background: rgba(214, 176, 106, 0.06);
+		color: var(--gold-bright);
+		font-size: 0.85rem;
+		font-weight: 700;
+		cursor: pointer;
+		white-space: nowrap;
+	}
+
+	.admin-subnav-menu summary::-webkit-details-marker {
+		display: none;
+	}
+
+	.admin-subnav-menu summary [data-icon] {
+		width: 0.95rem;
+		height: 0.95rem;
+	}
+
+	.admin-menu-panel {
+		position: absolute;
+		right: 0;
+		top: calc(100% + 0.45rem);
+		width: min(15rem, calc(100vw - 2rem));
+		background: rgba(10, 18, 28, 0.97);
+		border: 1px solid rgba(214, 176, 106, 0.34);
+		border-radius: 0.55rem;
+		box-shadow: 0 12px 30px rgba(0, 0, 0, 0.35);
+		padding: 0.6rem;
+		overflow: hidden;
+	}
+
+	.admin-menu-panel ul {
+		display: grid;
+		gap: 0.18rem;
+		list-style: none;
+		padding: 0;
+		margin: 0;
+	}
+
+	.admin-menu-tab {
+		display: flex;
+		width: 100%;
+		max-width: 100%;
+		box-sizing: border-box;
+	}
+
 	.admin-tab {
 		display: inline-flex;
 		align-items: center;
@@ -141,6 +223,19 @@ const adminModules = [
 		.admin-header-inner {
 			flex-direction: column;
 			align-items: flex-start;
+		}
+
+		.admin-subnav {
+			width: 100%;
+		}
+
+		.admin-subnav > ul {
+			display: none !important;
+		}
+
+		.admin-subnav-menu {
+			display: block;
+			align-self: stretch;
 		}
 	}
 </style>
