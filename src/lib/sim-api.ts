@@ -1238,6 +1238,7 @@ export async function getPassiveSimTasks(
        FROM sim_runs sr
        JOIN ${simTables.raiderSummaries} srs ON srs.${simTables.summaryRunFk} = sr.id
        WHERE sr.status = 'finished'
+         AND sr.runner_version = 'wowsim-website-runner-v1-single-target'
        GROUP BY sr.site_team_id, sr.difficulty, srs.blizzard_char_id`
     )
     .all<{
