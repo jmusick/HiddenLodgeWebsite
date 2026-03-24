@@ -8,6 +8,14 @@ The site combines public guild information, Blizzard-authenticated member profil
 
 ## Release Notes
 
+### 1.5.5
+
+- Added Nickname field to the `/profile` page so members can set or update their own display name (previously officer-only via the admin panel).
+- Added Preferred Role selector to the `/profile` page; pre-selects the chosen role when signing up for raids.
+- Nickname and Preferred Role settings are displayed side-by-side with descriptive help text on the profile page.
+- Added `POST /api/profile/update-nickname` and `POST /api/profile/update-role` self-service endpoints.
+- Added DB migration `0026_preferred_role.sql` to add `preferred_role` column to `users`.
+
 ### 1.5.2
 
 - Added staged responsive hamburger behavior to the site header so external links, guild/member links, and then the main nav collapse in sequence as the viewport narrows.

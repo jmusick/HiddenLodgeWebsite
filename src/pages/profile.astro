@@ -23,13 +23,16 @@ interface CharacterRow {
 }
 
 const [settingsResult, charsResult] = await env.DB.batch([
-	env.DB.prepare('SELECT time_zone FROM users WHERE id = ?').bind(user.id),
+	env.DB.prepare('SELECT time_zone, nickname, preferred_role FROM users WHERE id = ?').bind(user.id),
 	env.DB.prepare(
 		'SELECT id, name, realm, class_name, race_name, faction, level, is_main FROM characters WHERE user_id = ? ORDER BY level DESC, name ASC'
 	).bind(user.id),
 ]);
 
-const userTimeZone = (settingsResult.results?.[0] as { time_zone?: string } | undefined)?.time_zone ?? 'UTC';
+const settings = settingsResult.results?.[0] as { time_zone?: string; nickname?: string | null; preferred_role?: string | null } | undefined;
+const userTimeZone = settings?.time_zone ?? 'UTC';
+const userNickname = settings?.nickname ?? null;
+const userPreferredRole = settings?.preferred_role ?? null;
 const characters: CharacterRow[] = (charsResult.results ?? []) as CharacterRow[];
 const mainChar = characters.find((c) => c.is_main === 1) ?? null;
 const statusParam = new URL(Astro.request.url).searchParams.get('status');
@@ -63,7 +66,64 @@ const timezoneOptions = getSupportedTimeZones();
 			</div>
 		</header>
 
-		<section class="timezone-section" aria-labelledby="timezone-heading">
+		<div class="settings-row">
+		<section class="nickname-section" aria-labelledby="nickname-heading">
+			<div class="section-title-row">
+				<h2 id="nickname-heading">Nickname</h2>
+			</div>
+			{statusParam === 'nickname-updated' && (
+				<p class="flash-ok" role="status">Nickname saved.</p>
+			)}
+			{statusParam === 'nickname-error' && (
+				<p class="flash-error" role="alert">Nickname must be 48 characters or fewer.</p>
+			)}
+			<form method="POST" action="/api/profile/update-nickname" class="nickname-form">
+				<label>
+					<span>{userNickname ? 'Your nickname:' : 'No nickname set.'}</span>
+					<input
+						type="text"
+						name="nickname"
+						value={userNickname ?? ''}
+						maxlength="48"
+						placeholder="Enter a nickname…"
+						autocomplete="off"
+						spellcheck="false"
+					/>
+				</label>
+				<button type="submit" class="set-main-btn">
+					{userNickname ? 'Update Nickname' : 'Set Nickname'}
+				</button>
+			</form>
+			<small class="setting-help">Displayed instead of your Battle Tag on the signup sheet and roster. Leave blank to use your Battle Tag.</small>
+		</section>
+
+		<section class="role-section" aria-labelledby="role-heading">
+			<div class="section-title-row">
+				<h2 id="role-heading">Preferred Role</h2>
+			</div>
+			{statusParam === 'role-updated' && (
+				<p class="flash-ok" role="status">Preferred role saved.</p>
+			)}
+			{statusParam === 'role-error' && (
+				<p class="flash-error" role="alert">Invalid role selection.</p>
+			)}
+			<form method="POST" action="/api/profile/update-role" class="role-form">
+				<label>
+					<span>Default role when signing up for raids:</span>
+					<select name="preferred_role" required>
+						<option value="tank" selected={userPreferredRole === 'tank'}>Tank</option>
+						<option value="healer" selected={userPreferredRole === 'healer'}>Healer</option>
+						<option value="melee-dps" selected={userPreferredRole === 'melee-dps'}>Melee DPS</option>
+						<option value="ranged-dps" selected={userPreferredRole === 'ranged-dps' || userPreferredRole === null}>Ranged DPS</option>
+					</select>
+				</label>
+				<button type="submit" class="set-main-btn">Save Role</button>
+			</form>
+			<small class="setting-help">Pre-selects your role when signing up for a raid. You can still change it per signup.</small>
+		</section>
+	</div>
+
+	<section class="timezone-section" aria-labelledby="timezone-heading">
 			<div class="section-title-row">
 				<h2 id="timezone-heading">Time Zone</h2>
 			</div>
@@ -95,7 +155,7 @@ const timezoneOptions = getSupportedTimeZones();
 					</select>
 				</label>
 				<button type="submit" class="set-main-btn">Save Time Zone</button>
-				<small class="timezone-help">Type to filter, then pick from the dropdown list.</small>
+				<small class="setting-help">Type to filter, then pick from the dropdown list.</small>
 			</form>
 		</section>
 
@@ -285,6 +345,78 @@ const timezoneOptions = getSupportedTimeZones();
 		gap: 0.5rem;
 	}
 
+	.settings-row {
+		display: grid;
+		grid-template-columns: 1fr 1fr;
+		gap: 1.5rem;
+	}
+
+	@media (max-width: 640px) {
+		.settings-row {
+			grid-template-columns: 1fr;
+		}
+	}
+
+	.nickname-section {
+		background: var(--bg-panel);
+		border: 1px solid var(--border);
+		border-radius: 0.5rem;
+		padding: 1rem;
+	}
+
+	.nickname-form {
+		display: flex;
+		align-items: flex-end;
+		gap: 0.75rem;
+		flex-wrap: wrap;
+	}
+
+	.nickname-form label {
+		display: flex;
+		flex-direction: column;
+		gap: 0.25rem;
+		color: var(--muted);
+	}
+
+	.nickname-form input[type='text'] {
+		background: rgba(9, 18, 28, 0.92);
+		color: var(--text);
+		border: 1px solid var(--border);
+		border-radius: 0.3rem;
+		padding: 0.4rem 0.6rem;
+		min-width: 20rem;
+	}
+
+	.role-section {
+		background: var(--bg-panel);
+		border: 1px solid var(--border);
+		border-radius: 0.5rem;
+		padding: 1rem;
+	}
+
+	.role-form {
+		display: flex;
+		align-items: flex-end;
+		gap: 0.75rem;
+		flex-wrap: wrap;
+	}
+
+	.role-form label {
+		display: flex;
+		flex-direction: column;
+		gap: 0.25rem;
+		color: var(--muted);
+	}
+
+	.role-form select {
+		background: rgba(9, 18, 28, 0.92);
+		color: var(--text);
+		border: 1px solid var(--border);
+		border-radius: 0.3rem;
+		padding: 0.4rem 0.6rem;
+		min-width: 12rem;
+	}
+
 	.timezone-section {
 		background: var(--bg-panel);
 		border: 1px solid var(--border);
@@ -316,7 +448,7 @@ const timezoneOptions = getSupportedTimeZones();
 		min-width: 20rem;
 	}
 
-	.timezone-help {
+	.setting-help {
 		flex-basis: 100%;
 		margin-top: -0.2rem;
 		color: var(--muted);

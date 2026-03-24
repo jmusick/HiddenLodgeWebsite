@@ -103,7 +103,7 @@ const gridStartEpoch = Math.floor(grid.gridStart.getTime() / 1000);
 const gridEndEpoch = Math.floor(grid.gridEndExclusive.getTime() / 1000);
 
 const [settingsResult, charsResult, schedulesResult, adHocResult, signupsResult] = await env.DB.batch([
-  env.DB.prepare('SELECT time_zone FROM users WHERE id = ?').bind(user.id),
+  env.DB.prepare('SELECT time_zone, preferred_role FROM users WHERE id = ?').bind(user.id),
   env.DB.prepare(
      `SELECT id, name, realm, class_name, level, is_main
      FROM characters
@@ -134,7 +134,9 @@ const [settingsResult, charsResult, schedulesResult, adHocResult, signupsResult]
   ).bind(user.id),
 ]);
 
-const userTimeZone = (settingsResult.results?.[0] as { time_zone?: string } | undefined)?.time_zone ?? 'UTC';
+const userSettings = settingsResult.results?.[0] as { time_zone?: string; preferred_role?: string | null } | undefined;
+const userTimeZone = userSettings?.time_zone ?? 'UTC';
+const userPreferredRole = (userSettings?.preferred_role as AssignedRole | null | undefined) ?? 'ranged-dps';
 const characters = (charsResult.results ?? []) as CharacterRow[];
 const primarySchedules = (schedulesResult.results ?? []) as PrimarySchedule[];
 const adHocRaids = (adHocResult.results ?? []) as AdHocRaid[];
@@ -594,7 +596,7 @@ for (const row of selectedDaySummaryRows) {
                             <span class="sr-only">Role</span>
                             <select name="signup_role" required>
                               {ROLE_OPTIONS.map((role) => (
-                                <option value={role.value} selected={role.value === 'ranged-dps'}>{role.label}</option>
+                                <option value={role.value} selected={role.value === userPreferredRole}>{role.label}</option>
                               ))}
                             </select>
                           </label>
