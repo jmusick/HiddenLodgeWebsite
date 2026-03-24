@@ -486,6 +486,10 @@ function d1Changes(result: unknown): number {
 }
 
 export async function insertSimResults(db: D1Database, input: SimResultsInput): Promise<InsertSimResultsResult> {
+  console.log(
+    `[insertSimResults] received: run_id=${input.run_id}, site_team_id=${input.site_team_id}, ` +
+    `raider_summaries=${input.raider_summaries.length}, item_winners=${input.item_winners.length}`
+  );
   const existingId = await getSimRunId(db, input.run_id, input.site_team_id);
   const now = nowSeconds();
   const status = 'finished';
@@ -495,7 +499,12 @@ export async function insertSimResults(db: D1Database, input: SimResultsInput): 
   await purgeStaleSimData(db, simTables);
   if (existingId !== null) {
     const counts = await getExistingSimResultCounts(db, existingId, simTables);
+    console.log(
+      `[insertSimResults] run_id=${input.run_id}: found existing sim_runs row (id=${existingId}), ` +
+      `child rows: raider_summaries=${counts.raiderSummaries}, item_winners=${counts.itemWinners}`
+    );
     if (counts.raiderSummaries > 0 || counts.itemWinners > 0) {
+      console.log(`[insertSimResults] run_id=${input.run_id}: returning early — duplicate detected`);
       return {
         success: true,
         duplicate: true,
@@ -503,6 +512,7 @@ export async function insertSimResults(db: D1Database, input: SimResultsInput): 
         site_team_id: input.site_team_id,
       };
     }
+    console.log(`[insertSimResults] run_id=${input.run_id}: existing row has no child rows, will reuse`);
   }
 
   const rosterRevision = input.roster_revision ?? (simRunsSchema.rosterRevisionRequired ? 'unknown' : null);
@@ -604,13 +614,19 @@ export async function insertSimResults(db: D1Database, input: SimResultsInput): 
   });
 
   if (raiderStatements.length > 0) {
+    console.log(
+      `[insertSimResults] run_id=${input.run_id}: batch-inserting ${raiderStatements.length} raider_summaries rows`
+    );
     await db.batch(raiderStatements);
   }
   if (winnerStatements.length > 0) {
+    console.log(
+      `[insertSimResults] run_id=${input.run_id}: batch-inserting ${winnerStatements.length} item_winners rows`
+    );
     await db.batch(winnerStatements);
   }
 
-  return {
+  const result = {
     success: true,
     duplicate: false,
     run_id: input.run_id,
@@ -620,6 +636,11 @@ export async function insertSimResults(db: D1Database, input: SimResultsInput): 
       item_winners: winnerStatements.length,
     },
   };
+  console.log(
+    `[insertSimResults] run_id=${input.run_id}: completed successfully, ` +
+    `inserted: raider_summaries=${raiderStatements.length}, item_winners=${winnerStatements.length}`
+  );
+  return result;
 }
 
 export function validateLifecycleInput(payload: unknown): { value: LifecycleInput | null; errors: string[] } {
