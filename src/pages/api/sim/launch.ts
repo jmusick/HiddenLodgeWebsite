@@ -135,13 +135,14 @@ export async function POST(context: APIContext): Promise<Response> {
   }
 
   const triggerUrl = `${baseUrl}${readTriggerPath()}`;
+  const configDifficulty = parsed.value.sim_difficulty === 'mythic' ? 'mythic' : 'heroic';
   const upstreamPayload = {
     char_id: parsed.value.char_id,
     char_name: launchContext.char_name,
     realm_slug: launchContext.realm_slug,
     region: 'us',
     site_team_id: launchContext.team_id,
-    difficulty: launchContext.difficulty,
+    difficulty: configDifficulty,
     mode: parsed.value.mode,
     addon_export: parsed.value.mode === 'addon' ? parsed.value.addon_export ?? '' : null,
     sim_raid: parsed.value.sim_raid ?? 'all',
