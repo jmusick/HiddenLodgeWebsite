@@ -87,10 +87,7 @@ export interface PurgeSimHistoryResult {
   deleted_item_winners: number;
 }
 
-export interface PurgeAllSimHistoryResult extends PurgeSimHistoryResult {
-  deleted_legacy_raider_summaries: number;
-  deleted_legacy_item_winners: number;
-}
+export interface PurgeAllSimHistoryResult extends PurgeSimHistoryResult {}
 
 export interface LifecycleInput {
   run_id: string;
@@ -190,10 +187,10 @@ interface SimRunsSchema {
 }
 
 interface SimTableNames {
-  raiderSummaries: 'sim_raider_summaries' | 'sim_run_raider_summaries';
-  itemWinners: 'sim_item_winners' | 'sim_run_item_winners';
-  summaryRunFk: 'sim_run_id' | 'run_fk';
-  winnerRunFk: 'sim_run_id' | 'run_fk';
+  raiderSummaries: 'sim_raider_summaries';
+  itemWinners: 'sim_item_winners';
+  summaryRunFk: 'sim_run_id';
+  winnerRunFk: 'sim_run_id';
 }
 
 export function normalizeDifficulty(value: string | null | undefined): SimDifficulty {
@@ -245,15 +242,13 @@ async function hasSimRunsTable(db: D1Database): Promise<boolean> {
 }
 
 async function getSimTableNames(db: D1Database): Promise<SimTableNames> {
-  const tables = await getTableNames(db);
-  const useLegacySummaries = !tables.has('sim_raider_summaries') && tables.has('sim_run_raider_summaries');
-  const useLegacyWinners = !tables.has('sim_item_winners') && tables.has('sim_run_item_winners');
+  const _ = db;
 
   return {
-    raiderSummaries: useLegacySummaries ? 'sim_run_raider_summaries' : 'sim_raider_summaries',
-    itemWinners: useLegacyWinners ? 'sim_run_item_winners' : 'sim_item_winners',
-    summaryRunFk: useLegacySummaries ? 'run_fk' : 'sim_run_id',
-    winnerRunFk: useLegacyWinners ? 'run_fk' : 'sim_run_id',
+    raiderSummaries: 'sim_raider_summaries',
+    itemWinners: 'sim_item_winners',
+    summaryRunFk: 'sim_run_id',
+    winnerRunFk: 'sim_run_id',
   };
 }
 
@@ -553,28 +548,6 @@ export async function insertSimResults(db: D1Database, input: SimResultsInput): 
   }
 
   const raiderStatements = input.raider_summaries.map((entry) => {
-    if (simTables.raiderSummaries === 'sim_run_raider_summaries') {
-      return db
-        .prepare(
-          `INSERT INTO sim_run_raider_summaries (
-            run_fk,
-            blizzard_char_id,
-            baseline_dps,
-            top_scenario,
-            top_dps,
-            gain_dps
-          ) VALUES (?, ?, ?, ?, ?, ?)`
-        )
-        .bind(
-          simRunId,
-          entry.blizzard_char_id,
-          entry.baseline_dps ?? 0,
-          entry.top_scenario ?? '',
-          entry.top_dps ?? 0,
-          entry.gain_dps ?? 0
-        );
-    }
-
     return db
       .prepare(
         `INSERT INTO sim_raider_summaries (
@@ -599,36 +572,6 @@ export async function insertSimResults(db: D1Database, input: SimResultsInput): 
   });
 
   const winnerStatements = input.item_winners.map((entry) => {
-    if (simTables.itemWinners === 'sim_run_item_winners') {
-      return db
-        .prepare(
-          `INSERT INTO sim_run_item_winners (
-            run_fk,
-            slot,
-            item_id,
-            item_label,
-            ilvl,
-            source,
-            best_blizzard_char_id,
-            delta_dps,
-            pct_gain,
-            simc
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-        )
-        .bind(
-          simRunId,
-          entry.slot,
-          entry.item_id ?? null,
-          entry.item_label ?? '',
-          entry.ilvl ?? null,
-          entry.source ?? null,
-          entry.best_blizzard_char_id ?? 0,
-          entry.delta_dps ?? 0,
-          entry.pct_gain ?? 0,
-          entry.simc ?? ''
-        );
-    }
-
     return db
       .prepare(
         `INSERT INTO sim_item_winners (
@@ -990,19 +933,9 @@ export async function purgeSimHistoryForRaider(
       'NOT EXISTS (SELECT 1 FROM sim_item_winners siw WHERE siw.sim_run_id = sim_runs.id)'
     );
   }
-  if (tables.has('sim_run_item_winners')) {
-    runReferenceChecks.push(
-      'NOT EXISTS (SELECT 1 FROM sim_run_item_winners sriw WHERE sriw.run_fk = sim_runs.id)'
-    );
-  }
   if (tables.has('sim_raider_summaries')) {
     runReferenceChecks.push(
       'NOT EXISTS (SELECT 1 FROM sim_raider_summaries srs WHERE srs.sim_run_id = sim_runs.id)'
-    );
-  }
-  if (tables.has('sim_run_raider_summaries')) {
-    runReferenceChecks.push(
-      'NOT EXISTS (SELECT 1 FROM sim_run_raider_summaries srrs WHERE srrs.run_fk = sim_runs.id)'
     );
   }
 
@@ -1028,9 +961,7 @@ export async function purgeAllSimHistory(db: D1Database): Promise<PurgeAllSimHis
   const tables = await getTableNames(db);
 
   let deletedItemWinners = 0;
-  let deletedLegacyItemWinners = 0;
   let deletedRaiderSummaries = 0;
-  let deletedLegacyRaiderSummaries = 0;
   let deletedRuns = 0;
 
   if (tables.has('sim_item_winners')) {
@@ -1038,19 +969,9 @@ export async function purgeAllSimHistory(db: D1Database): Promise<PurgeAllSimHis
     deletedItemWinners = d1Changes(result);
   }
 
-  if (tables.has('sim_run_item_winners')) {
-    const result = await db.prepare('DELETE FROM sim_run_item_winners').run();
-    deletedLegacyItemWinners = d1Changes(result);
-  }
-
   if (tables.has('sim_raider_summaries')) {
     const result = await db.prepare('DELETE FROM sim_raider_summaries').run();
     deletedRaiderSummaries = d1Changes(result);
-  }
-
-  if (tables.has('sim_run_raider_summaries')) {
-    const result = await db.prepare('DELETE FROM sim_run_raider_summaries').run();
-    deletedLegacyRaiderSummaries = d1Changes(result);
   }
 
   if (tables.has('sim_runs')) {
@@ -1062,8 +983,6 @@ export async function purgeAllSimHistory(db: D1Database): Promise<PurgeAllSimHis
     deleted_runs: deletedRuns,
     deleted_raider_summaries: deletedRaiderSummaries,
     deleted_item_winners: deletedItemWinners,
-    deleted_legacy_raider_summaries: deletedLegacyRaiderSummaries,
-    deleted_legacy_item_winners: deletedLegacyItemWinners,
   };
 }
 

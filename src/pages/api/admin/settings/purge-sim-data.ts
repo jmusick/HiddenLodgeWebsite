@@ -16,11 +16,6 @@ export async function POST(context: APIContext): Promise<Response> {
     params.set('sim_runs_deleted', String(deleted.deleted_runs));
     params.set('sim_raider_summaries_deleted', String(deleted.deleted_raider_summaries));
     params.set('sim_item_winners_deleted', String(deleted.deleted_item_winners));
-    params.set(
-      'sim_legacy_raider_summaries_deleted',
-      String(deleted.deleted_legacy_raider_summaries)
-    );
-    params.set('sim_legacy_item_winners_deleted', String(deleted.deleted_legacy_item_winners));
 
     return new Response(null, {
       status: 302,

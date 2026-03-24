@@ -128,24 +128,14 @@ const simRaiderSummariesDeleted = parseNonNegativeIntParam(
   'sim_raider_summaries_deleted'
 );
 const simItemWinnersDeleted = parseNonNegativeIntParam(pageUrl.searchParams, 'sim_item_winners_deleted');
-const simLegacyRaiderSummariesDeleted = parseNonNegativeIntParam(
-  pageUrl.searchParams,
-  'sim_legacy_raider_summaries_deleted'
-);
-const simLegacyItemWinnersDeleted = parseNonNegativeIntParam(
-  pageUrl.searchParams,
-  'sim_legacy_item_winners_deleted'
-);
 const hasSimPurgeCounts = [
   simRunsDeleted,
   simRaiderSummariesDeleted,
   simItemWinnersDeleted,
-  simLegacyRaiderSummariesDeleted,
-  simLegacyItemWinnersDeleted,
 ].every((value) => value !== null);
 
 const simPurgeSummary = hasSimPurgeCounts
-  ? `Deleted ${simRunsDeleted} runs, ${simRaiderSummariesDeleted} raider summaries, ${simItemWinnersDeleted} item winners, ${simLegacyRaiderSummariesDeleted} legacy raider summaries, and ${simLegacyItemWinnersDeleted} legacy item winners.`
+  ? `Deleted ${simRunsDeleted} runs, ${simRaiderSummariesDeleted} raider summaries, and ${simItemWinnersDeleted} item winners.`
   : 'All sim data was purged successfully.';
 ---
 
