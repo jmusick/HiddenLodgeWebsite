@@ -8,6 +8,13 @@ The site combines public guild information, Blizzard-authenticated member profil
 
 ## Release Notes
 
+### 1.5.1
+
+- Added `WOWSIM_APP_BASE_URL` and related sim runner vars to `wrangler.toml` so the prod Cloudflare Pages deployment connects to the external WoWSim runner without manual dashboard entry.
+- Added `POST /api/admin/settings/purge-sim-data` endpoint to allow admins to wipe all sim history from the D1 database in one action.
+- Admin Settings page now shows a detailed purge-result flash message (runs, raider summaries, item winners, and legacy table counts) after a sim data purge.
+- Added `0024_sim_runs.sql` to the project migration list; applied to production D1.
+
 ### 1.5.0
 
 - Added interactive sim tools to raider detail pages (`RaiderSimTools` component):

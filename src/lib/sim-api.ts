@@ -87,6 +87,11 @@ export interface PurgeSimHistoryResult {
   deleted_item_winners: number;
 }
 
+export interface PurgeAllSimHistoryResult extends PurgeSimHistoryResult {
+  deleted_legacy_raider_summaries: number;
+  deleted_legacy_item_winners: number;
+}
+
 export interface LifecycleInput {
   run_id: string;
   site_team_id: number;
@@ -1004,6 +1009,49 @@ export async function purgeSimHistoryForRaider(
     deleted_runs: runDeleteChanges,
     deleted_raider_summaries: d1Changes(summaryDeleteResult),
     deleted_item_winners: d1Changes(winnerDeleteResult),
+  };
+}
+
+export async function purgeAllSimHistory(db: D1Database): Promise<PurgeAllSimHistoryResult> {
+  const tables = await getTableNames(db);
+
+  let deletedItemWinners = 0;
+  let deletedLegacyItemWinners = 0;
+  let deletedRaiderSummaries = 0;
+  let deletedLegacyRaiderSummaries = 0;
+  let deletedRuns = 0;
+
+  if (tables.has('sim_item_winners')) {
+    const result = await db.prepare('DELETE FROM sim_item_winners').run();
+    deletedItemWinners = d1Changes(result);
+  }
+
+  if (tables.has('sim_run_item_winners')) {
+    const result = await db.prepare('DELETE FROM sim_run_item_winners').run();
+    deletedLegacyItemWinners = d1Changes(result);
+  }
+
+  if (tables.has('sim_raider_summaries')) {
+    const result = await db.prepare('DELETE FROM sim_raider_summaries').run();
+    deletedRaiderSummaries = d1Changes(result);
+  }
+
+  if (tables.has('sim_run_raider_summaries')) {
+    const result = await db.prepare('DELETE FROM sim_run_raider_summaries').run();
+    deletedLegacyRaiderSummaries = d1Changes(result);
+  }
+
+  if (tables.has('sim_runs')) {
+    const result = await db.prepare('DELETE FROM sim_runs').run();
+    deletedRuns = d1Changes(result);
+  }
+
+  return {
+    deleted_runs: deletedRuns,
+    deleted_raider_summaries: deletedRaiderSummaries,
+    deleted_item_winners: deletedItemWinners,
+    deleted_legacy_raider_summaries: deletedLegacyRaiderSummaries,
+    deleted_legacy_item_winners: deletedLegacyItemWinners,
   };
 }
 

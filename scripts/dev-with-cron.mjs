@@ -10,9 +10,10 @@ if (!npmExecPath) {
 
 let shuttingDown = false;
 const children = [];
+const forwardedArgs = process.argv.slice(2);
 
-function startScript(name) {
-  const child = spawn(process.execPath, [npmExecPath, 'run', name], {
+function startScript(name, args = []) {
+  const child = spawn(process.execPath, [npmExecPath, 'run', name, ...(args.length ? ['--', ...args] : [])], {
     stdio: 'inherit',
     env: process.env,
   });
@@ -72,5 +73,5 @@ process.on('SIGTERM', () => {
 });
 
 console.log('Starting Astro dev server and local cron refresher...');
-startScript('dev:site');
+startScript('dev:site', forwardedArgs);
 startScript('cron:local');

@@ -40,6 +40,14 @@ const pageUrl = new URL(Astro.request.url);
 const statusParam = pageUrl.searchParams.get('status');
 const failedParam = pageUrl.searchParams.get('failed') ?? '';
 
+function parseNonNegativeIntParam(params: URLSearchParams, key: string): number | null {
+  const raw = params.get(key);
+  if (raw === null) return null;
+  const parsed = Number.parseInt(raw, 10);
+  if (!Number.isInteger(parsed) || parsed < 0) return null;
+  return parsed;
+}
+
 let rosterCache: RosterCacheRow | null = null;
 let raidersCache: RaidersCacheRow | null = null;
 let raidProgressTarget = '';
@@ -113,6 +121,32 @@ const failedTargets = failedParam
   .filter((part) => part === 'roster' || part === 'raiders')
   .map((part) => (part === 'roster' ? 'Roster cache' : 'Raiders cache'));
 const failedTargetsLabel = failedTargets.length > 0 ? failedTargets.join(' + ') : 'cache refresh';
+
+const simRunsDeleted = parseNonNegativeIntParam(pageUrl.searchParams, 'sim_runs_deleted');
+const simRaiderSummariesDeleted = parseNonNegativeIntParam(
+  pageUrl.searchParams,
+  'sim_raider_summaries_deleted'
+);
+const simItemWinnersDeleted = parseNonNegativeIntParam(pageUrl.searchParams, 'sim_item_winners_deleted');
+const simLegacyRaiderSummariesDeleted = parseNonNegativeIntParam(
+  pageUrl.searchParams,
+  'sim_legacy_raider_summaries_deleted'
+);
+const simLegacyItemWinnersDeleted = parseNonNegativeIntParam(
+  pageUrl.searchParams,
+  'sim_legacy_item_winners_deleted'
+);
+const hasSimPurgeCounts = [
+  simRunsDeleted,
+  simRaiderSummariesDeleted,
+  simItemWinnersDeleted,
+  simLegacyRaiderSummariesDeleted,
+  simLegacyItemWinnersDeleted,
+].every((value) => value !== null);
+
+const simPurgeSummary = hasSimPurgeCounts
+  ? `Deleted ${simRunsDeleted} runs, ${simRaiderSummariesDeleted} raider summaries, ${simItemWinnersDeleted} item winners, ${simLegacyRaiderSummariesDeleted} legacy raider summaries, and ${simLegacyItemWinnersDeleted} legacy item winners.`
+  : 'All sim data was purged successfully.';
 ---
 
 <AdminLayout title="Settings | Admin | The Hidden Lodge">
@@ -140,6 +174,12 @@ const failedTargetsLabel = failedTargets.length > 0 ? failedTargets.join(' + ') 
     )}
     {statusParam === 'raid-target-error' && (
       <div class="flash flash-error" role="alert">Could not update tracked raid setting.</div>
+    )}
+    {statusParam === 'sim-purge-ok' && (
+      <div class="flash flash-ok" role="status">{simPurgeSummary}</div>
+    )}
+    {statusParam === 'sim-purge-error' && (
+      <div class="flash flash-error" role="alert">Could not purge sim data. Check logs and try again.</div>
     )}
 
     {cacheError ? (
@@ -216,6 +256,21 @@ const failedTargetsLabel = failedTargets.length > 0 ? failedTargets.join(' + ') 
               </ul>
             </section>
           </div>
+        </section>
+
+        <section class="admin-section danger-zone">
+          <h2>Danger Zone</h2>
+          <p class="setting-copy">
+            Permanently remove all stored sim runs and recommendation snapshots from the database.
+          </p>
+          <form
+            method="POST"
+            action="/api/admin/settings/purge-sim-data"
+            class="danger-form"
+            onsubmit="return confirm('Purge all sim data? This cannot be undone.');"
+          >
+            <button type="submit" class="danger-btn">Purge All Sim Data</button>
+          </form>
         </section>
       </>
     )}
@@ -358,6 +413,35 @@ const failedTargetsLabel = failedTargets.length > 0 ? failedTargets.join(' + ') 
   .setting-current {
     margin: 0.6rem 0 0;
     color: #d8e2e8;
+  }
+
+  .danger-zone {
+    border-color: rgba(233, 127, 106, 0.45);
+    background:
+      linear-gradient(150deg, rgba(233, 127, 106, 0.1), transparent 38%),
+      rgba(36, 12, 10, 0.75);
+  }
+
+  .danger-form {
+    margin-top: 0.85rem;
+  }
+
+  .danger-btn {
+    border: 1px solid rgba(233, 127, 106, 0.55);
+    border-radius: 0.45rem;
+    background: rgba(233, 127, 106, 0.12);
+    color: #ffd4cc;
+    padding: 0.45rem 0.82rem;
+    font-size: 0.9rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: border-color 160ms ease, background 160ms ease;
+  }
+
+  .danger-btn:hover,
+  .danger-btn:focus-visible {
+    border-color: rgba(233, 127, 106, 0.82);
+    background: rgba(233, 127, 106, 0.22);
   }
 
   h2 {
