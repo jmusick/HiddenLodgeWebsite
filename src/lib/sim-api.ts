@@ -1473,6 +1473,7 @@ export async function getLatestSingleTargetForRaiders(
          JOIN ${simTables.raiderSummaries} srs ON srs.${simTables.summaryRunFk} = sr.id
          WHERE sr.status = 'finished'
            AND sr.updated_at >= ?
+           AND sr.runner_version = 'wowsim-website-runner-v1-single-target'
            AND srs.blizzard_char_id IN (${placeholders})
        ) latest
        WHERE latest.rn = 1`
