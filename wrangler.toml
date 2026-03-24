@@ -4,7 +4,6 @@ compatibility_flags = ["nodejs_compat"]
 pages_build_output_dir = "dist"
 
 [vars]
-WOWSIM_APP_BASE_URL = "http://lodgesim.tplinkdns.com:5050"
 WOWSIM_APP_TRIGGER_PATH = "/api/jobs/start"
 WOWSIM_APP_STATUS_PATH = "/api/jobs/{job_id}"
 
