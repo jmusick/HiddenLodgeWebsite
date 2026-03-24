@@ -207,6 +207,10 @@ function nowSeconds(): number {
 }
 
 const SIM_HISTORY_RETENTION_SECONDS = 7 * 24 * 60 * 60;
+// Accept known and future single-target tag variants so single-target snapshots
+// stay visible even if runner_version naming drifts across builds.
+const SINGLE_TARGET_RUNNER_SQL =
+  "(sr.runner_version = 'wowsim-website-runner-v1-single-target' OR sr.runner_version LIKE '%single-target%' OR sr.runner_version LIKE '%single_target%')";
 
 function toIsoNow(): string {
   return new Date().toISOString();
@@ -1238,7 +1242,7 @@ export async function getPassiveSimTasks(
        FROM sim_runs sr
        JOIN ${simTables.raiderSummaries} srs ON srs.${simTables.summaryRunFk} = sr.id
        WHERE sr.status = 'finished'
-         AND sr.runner_version = 'wowsim-website-runner-v1-single-target'
+         AND ${SINGLE_TARGET_RUNNER_SQL}
        GROUP BY sr.site_team_id, sr.difficulty, srs.blizzard_char_id`
     )
     .all<{
@@ -1474,7 +1478,7 @@ export async function getLatestSingleTargetForRaiders(
          JOIN ${simTables.raiderSummaries} srs ON srs.${simTables.summaryRunFk} = sr.id
          WHERE sr.status = 'finished'
            AND sr.updated_at >= ?
-           AND sr.runner_version = 'wowsim-website-runner-v1-single-target'
+           AND ${SINGLE_TARGET_RUNNER_SQL}
            AND srs.blizzard_char_id IN (${placeholders})
        ) latest
        WHERE latest.rn = 1`
