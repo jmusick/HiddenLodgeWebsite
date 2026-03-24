@@ -198,7 +198,7 @@ interface SimTableNames {
 export function normalizeDifficulty(value: string | null | undefined): SimDifficulty {
   const normalized = (value ?? '').trim().toLowerCase();
   if (normalized === 'mythic') return 'mythic';
-  if (normalized === 'heroic') return 'heroic';
+  if (normalized === 'heroic' || normalized === 'flex') return 'heroic';
   return 'unknown';
 }
 
