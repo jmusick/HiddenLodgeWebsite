@@ -141,12 +141,18 @@ export interface RosterRefreshDiagnostics {
   detailProcessed: number;
   detailSkipped: number;
   detailFailed: number;
+  detailPartial: number;
   questBackfillSelected: number;
   questBackfillProcessed: number;
   deathsBackfillSelected: number;
   deathsBackfillProcessed: number;
   critterBackfillSelected: number;
   critterBackfillProcessed: number;
+  profileFetchFailed: number;
+  statisticsFetchFailed: number;
+  mountsFetchFailed: number;
+  petsFetchFailed: number;
+  toysFetchFailed: number;
 }
 
 export interface RosterRefreshResult {
@@ -235,6 +241,14 @@ async function hasCritterCountCheckedColumn(db: D1Database): Promise<boolean> {
 
 function wait(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function fetchOptionalBlizzardJson<T>(url: string, accessToken: string): Promise<T | null> {
+  try {
+    return await fetchBlizzardJsonWithRetry<T>(url, accessToken);
+  } catch {
+    return null;
+  }
 }
 
 function extractStatisticCount(
@@ -508,12 +522,18 @@ export async function refreshRosterCache(
     detailProcessed: 0,
     detailSkipped: 0,
     detailFailed: 0,
+    detailPartial: 0,
     questBackfillSelected: 0,
     questBackfillProcessed: 0,
     deathsBackfillSelected: 0,
     deathsBackfillProcessed: 0,
     critterBackfillSelected: 0,
     critterBackfillProcessed: 0,
+    profileFetchFailed: 0,
+    statisticsFetchFailed: 0,
+    mountsFetchFailed: 0,
+    petsFetchFailed: 0,
+    toysFetchFailed: 0,
   };
 
   const summaryStatements = rosterMembers.map((member) =>
@@ -613,26 +633,42 @@ export async function refreshRosterCache(
       }
 
       const [profile, stats, mounts, pets, toys] = await Promise.all([
-        fetchBlizzardJsonWithRetry<CharacterProfileResponse>(apiUrls.profileUrl, accessToken),
-        fetchBlizzardJsonWithRetry<any>(apiUrls.statisticsUrl, accessToken),
-        fetchBlizzardJsonWithRetry<CharacterMountsResponse>(`${apiUrls.collectionBase}/mounts?namespace=${apiUrls.namespace}&locale=en_US`, accessToken),
-        fetchBlizzardJsonWithRetry<CharacterPetsResponse>(`${apiUrls.collectionBase}/pets?namespace=${apiUrls.namespace}&locale=en_US`, accessToken),
-        fetchBlizzardJsonWithRetry<CharacterToysResponse>(`${apiUrls.collectionBase}/toys?namespace=${apiUrls.namespace}&locale=en_US`, accessToken),
+        fetchOptionalBlizzardJson<CharacterProfileResponse>(apiUrls.profileUrl, accessToken),
+        fetchOptionalBlizzardJson<any>(apiUrls.statisticsUrl, accessToken),
+        fetchOptionalBlizzardJson<CharacterMountsResponse>(
+          `${apiUrls.collectionBase}/mounts?namespace=${apiUrls.namespace}&locale=en_US`,
+          accessToken
+        ),
+        fetchOptionalBlizzardJson<CharacterPetsResponse>(
+          `${apiUrls.collectionBase}/pets?namespace=${apiUrls.namespace}&locale=en_US`,
+          accessToken
+        ),
+        fetchOptionalBlizzardJson<CharacterToysResponse>(
+          `${apiUrls.collectionBase}/toys?namespace=${apiUrls.namespace}&locale=en_US`,
+          accessToken
+        ),
       ]);
 
-      if (!profile || !stats || !mounts || !pets || !toys) {
+      if (!profile) {
+        diagnostics.profileFetchFailed += 1;
         diagnostics.detailSkipped += 1;
         continue;
       }
 
-      const extractedQuestCount = hasQuestColumn ? extractQuestCount(stats) : 0;
-      const extractedDeathsCount = hasDeathsColumn ? extractDeathsCount(stats) : 0;
-      const extractedCritterCount = hasCritterColumn ? extractCritterCount(stats) : 0;
-      const petEntries = Array.isArray(pets.pets) ? pets.pets : [];
+      if (!stats) diagnostics.statisticsFetchFailed += 1;
+      if (!mounts) diagnostics.mountsFetchFailed += 1;
+      if (!pets) diagnostics.petsFetchFailed += 1;
+      if (!toys) diagnostics.toysFetchFailed += 1;
+
+      const extractedQuestCount = hasQuestColumn && stats ? extractQuestCount(stats) : 0;
+      const extractedDeathsCount = hasDeathsColumn && stats ? extractDeathsCount(stats) : 0;
+      const extractedCritterCount = hasCritterColumn && stats ? extractCritterCount(stats) : 0;
+      const petEntries = Array.isArray(pets?.pets) ? pets.pets : [];
       const petSpeciesIds = petEntries
         .map((pet) => Number(pet.species?.id))
         .filter((id) => Number.isFinite(id));
       const uniquePetCount = petSpeciesIds.length > 0 ? new Set(petSpeciesIds).size : petEntries.length;
+      const detailWasPartial = !stats || !mounts || !pets || !toys;
 
       await db
         .prepare(
@@ -662,14 +698,14 @@ export async function refreshRosterCache(
           Number(profile.level ?? 0),
           Number(profile.achievement_points ?? 0),
           ...(hasQuestColumn ? [extractedQuestCount] : []),
-          ...(hasQuestCheckedColumn ? [1] : []),
+          ...(hasQuestCheckedColumn ? [stats ? 1 : 0] : []),
           ...(hasDeathsColumn ? [extractedDeathsCount] : []),
-          ...(hasDeathsCheckedColumn ? [1] : []),
+          ...(hasDeathsCheckedColumn ? [stats ? 1 : 0] : []),
           ...(hasCritterColumn ? [extractedCritterCount] : []),
-          ...(hasCritterCheckedColumn ? [1] : []),
-          Array.isArray(mounts.mounts) ? mounts.mounts.length : 0,
+          ...(hasCritterCheckedColumn ? [stats ? 1 : 0] : []),
+          Array.isArray(mounts?.mounts) ? mounts.mounts.length : 0,
           uniquePetCount,
-          Array.isArray(toys.toys) ? toys.toys.length : 0,
+          Array.isArray(toys?.toys) ? toys.toys.length : 0,
           now,
           now,
           candidateId
@@ -677,6 +713,9 @@ export async function refreshRosterCache(
         .run();
 
       diagnostics.detailProcessed += 1;
+      if (detailWasPartial) {
+        diagnostics.detailPartial += 1;
+      }
     } catch (error) {
       diagnostics.detailFailed += 1;
       console.error('Roster detail refresh failed for candidate', {
