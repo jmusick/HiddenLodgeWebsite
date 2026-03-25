@@ -9,24 +9,33 @@ export const GET: APIRoute = async ({ request }) => {
     return new Response('Unauthorized', { status: 401 });
   }
 
-  try {
-    const url = new URL(request.url);
-    const rosterOptions = getRosterRefreshOptions({
-      batchSize: url.searchParams.get('detailBatchSize') ? Number.parseInt(url.searchParams.get('detailBatchSize')!, 10) : undefined,
-      questBackfillBatchSize: url.searchParams.get('backfillBatchSize') ? Number.parseInt(url.searchParams.get('backfillBatchSize')!, 10) : undefined,
-    });
-    const [rosterStatus, raidersStatus] = await Promise.all([
-      refreshRosterCache(undefined, rosterOptions),
-      refreshRaidersCache(),
-    ]);
+  const url = new URL(request.url);
+  const rosterOptions = getRosterRefreshOptions({
+    batchSize: url.searchParams.get('detailBatchSize') ? Number.parseInt(url.searchParams.get('detailBatchSize')!, 10) : undefined,
+    questBackfillBatchSize: url.searchParams.get('backfillBatchSize') ? Number.parseInt(url.searchParams.get('backfillBatchSize')!, 10) : undefined,
+  });
 
-    return Response.json({
-      success: true,
-      roster: rosterStatus,
-      raiders: raidersStatus,
-      requestedRosterOptions: rosterOptions,
-    });
-  } catch (err) {
-    return new Response(String(err), { status: 500 });
+  const [rosterResult, raidersResult] = await Promise.allSettled([
+    refreshRosterCache(undefined, rosterOptions),
+    refreshRaidersCache(),
+  ]);
+
+  const failures: string[] = [];
+  if (rosterResult.status === 'rejected') {
+    console.error('Cron roster refresh failed', rosterResult.reason);
+    failures.push('roster');
   }
+  if (raidersResult.status === 'rejected') {
+    console.error('Cron raiders refresh failed', raidersResult.reason);
+    failures.push('raiders');
+  }
+
+  return Response.json({
+    success: failures.length === 0,
+    partial: failures.length > 0,
+    failed: failures,
+    roster: rosterResult.status === 'fulfilled' ? rosterResult.value : null,
+    raiders: raidersResult.status === 'fulfilled' ? raidersResult.value : null,
+    requestedRosterOptions: rosterOptions,
+  });
 };
