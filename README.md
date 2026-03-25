@@ -6,80 +6,40 @@ Official guild website for The Hidden Lodge, a semi-hardcore AOTC/Mythic raiding
 
 The site combines public guild information, Blizzard-authenticated member profiles, cached roster and raider analytics views, curated resource links, a lore archive, and a guild officer admin area for day-to-day operations.
 
-## Release Notes
+## Quick Navigation
 
-### 1.5.5
+- [Quick Start](#quick-start)
+- [Tech Stack](#tech-stack)
+- [Features](#features)
+- [Routes & API](#routes)
+- [Database](#data-model)
+- [Development](#development-details)
+- [Deployment](#deployment)
 
-- Added Nickname field to the `/profile` page so members can set or update their own display name (previously officer-only via the admin panel).
-- Added Preferred Role selector to the `/profile` page; pre-selects the chosen role when signing up for raids.
-- Nickname and Preferred Role settings are displayed side-by-side with descriptive help text on the profile page.
-- Added `POST /api/profile/update-nickname` and `POST /api/profile/update-role` self-service endpoints.
-- Added DB migration `0026_preferred_role.sql` to add `preferred_role` column to `users`.
+## Features
 
-### 1.5.2
+### User-Facing
 
-- Added staged responsive hamburger behavior to the site header so external links, guild/member links, and then the main nav collapse in sequence as the viewport narrows.
-- Tightened top-nav spacing and prevented the site title from wrapping under header compression.
-- Reordered hamburger menu groups to show Main Menu, Guild, External Links, and Profile in a clearer mobile-first order.
-- Added responsive mobile dropdown navigation for the Guild Administration sub-nav.
+- Public home page with guild identity, raiding summary, and external guild links
+- Leadership page with officer bios, portrait lightbox, and dad jokes
+- Raiding page with schedule, expectations, loot notes, addons, and recruitment info
+- Lore archive with story picker, reader, and artwork lightbox
+- Useful Links page (curated, admin-managed, searchable)
+- Live roster page with Blizzard data, caching, search, filters, and collection stats
+- Raiders analytics table with team-scoped metrics (iLvl, M+, crests, preparedness, upgrades, raid progress)
+- Raider detail profile with character render, equipment layout, raid progress matrix, and sim recommendations
+- Authenticated profile with Battle.net login, character sync, main selection, and timezone preferences
+- Guild-member raid signup calendar with recurring and ad-hoc raid support
 
-### 1.5.1
+### Admin Features
 
-- Added `WOWSIM_APP_BASE_URL` and related sim runner vars to `wrangler.toml` so the prod Cloudflare Pages deployment connects to the external WoWSim runner without manual dashboard entry.
-- Added `POST /api/admin/settings/purge-sim-data` endpoint to allow admins to wipe all sim history from the D1 database in one action.
-- Admin Settings page now shows a detailed purge-result flash message (runs, raider summaries, item winners, and legacy table counts) after a sim data purge.
-- Added `0024_sim_runs.sql` to the project migration list; applied to production D1.
-
-### 1.5.0
-
-- Added interactive sim tools to raider detail pages (`RaiderSimTools` component):
-  - Run a full droptimizer sim for any raider directly from their profile page, using site roster data or a pasted SimC addon export.
-  - Live progress bar and stage/detail label update in real time while the sim runs (polling the local WoWSim app via `/api/sim/launch/status`).
-  - Results table shows top upgrade candidates ranked by DPS gain once the run completes.
-  - Purge sim history action clears stored run data for that raider.
-- Added `POST /api/sim/latest` handler for purging a raider's sim history (replaces the previous `/api/sim/purge` route).
-- Sim API fetch calls now use a base-URL-aware helper with automatic 404 fallback, ensuring correct routing under all deploy contexts.
-- Added passive sim task generation endpoint (`/api/sim/passive/tasks`) for machine runners to request stale background work.
-- Added single-target snapshot surfacing to Raiders:
-	- Raiders table now includes Sim DPS.
-	- Spotlight card now highlights Highest Simulated DPS.
-	- Raider profile page includes Sim Freshness badges for Sim DPS and Droptimizer recency.
-- Added stale-task prioritization so missing single-target sims are emitted ahead of droptimizer tasks.
-
-### 1.4.6
-
-- Export JSON now includes each character's currently calculated `preparednessTier` (30-day average with current-value fallback).
-
-### 1.4.5a
-
-- Raider detail pages now show Preparedness as a dedicated collapsible history table (30-day rolling snapshots) instead of separate Gems/Enchants stat cards.
-- Unified right-column panel card styling on raider detail pages so Preparedness History, Raid Progress, Crests Earned, and sync blocks align consistently.
-
-### 1.4.5
-
-- Added 30-day rolling history for gem socket and enchant coverage metrics on the Raiders page.
-- Preparedness Tier scores now reflect a raider's 30-day average rather than a point-in-time snapshot, protecting against temporary oversights on newly acquired gear.
-- Relaxed Preparedness Tier thresholds: S = 100%, A ≥ 85%, B ≥ 70%, C ≥ 40%, D < 40%.
-- Added `raider_preparedness_history` table to persist daily snapshots; 30-day averages are stored back to `raider_metrics_cache` after each refresh cycle.
-- History older than 30 days is automatically pruned on each refresh.
-- Detail pages (Raiders profile) now show Gems and Enchants as 30-day averages.
-- Updated Preparedness column tooltip to describe the rolling-average methodology.
-- Added DB migration `0023_preparedness_history.sql`.
-
-### 1.4.4b
-
-- Added a defensive roster icon fallback path so class icons still render from static fallback URLs when Blizzard class-media lookups fail at runtime.
-
-### 1.4.4a
-
-- Normalized Blizzard class icon media URLs to HTTPS before rendering to prevent mixed-content blocking on production roster class icons.
-
-### 1.4.0
-
-- Added crest tracking to Raiders metrics (Adventurer, Veteran, Champion, Hero, Myth) sourced from Blizzard character statistics.
-- Added missing-upgrades tracking to Raiders metrics as a single total count from equipped-item upgrade-track bonus IDs.
-- Expanded Raiders table and detail views to surface crest and missing-upgrades metrics.
-- Added DB migrations for the new Raiders cache fields: `0019_raider_crests.sql` and `0020_missing_upgrades.sql`.
+- Mains & Alts module for member authentication and nickname management
+- Roster Teams module for multi-team raid setup and role assignment
+- Raid Signups module for schedule creation and signup management
+- Links Management for useful links curation
+- Settings module with raid-progress configuration and cache health
+- Export module for addon-friendly JSON generation
+- Interactive sim tools for droptimizer and single-target analysis
 
 ## Quick Start
 
@@ -109,91 +69,6 @@ http://localhost:4321
 - Blizzard Battle.net OAuth2 and WoW APIs
 - TypeScript
 - astro-icon with Lucide icons
-
-## User-Facing Features
-
-- Public home page with guild identity, raiding summary, and external guild links
-- Leadership page with officer bios, portrait lightbox, and rotating dad-joke flavor text
-- Raiding page with schedule, expectations, loot notes, addons, recruitment guidance, and a Recent Logs card
-- Lore archive with:
-	- story preview cards and thumbnails
-	- story-first navigation via URL query selection
-	- per-story dropdown switcher and back-to-list navigation
-	- full-size image lightbox on story artwork
-	- custom story layouts, including inset and aside artwork treatment
-- Useful Links page backed by D1-managed categories and links
-- Live roster page backed by Blizzard data plus D1 caching, including:
-	- search and class/rank/level filters
-	- sortable columns
-	- pagination controls
-	- stat spotlights for achievements, quests completed, deaths, mounts, pets, and toys
-	- Raider.IO shortcuts per character
-- Raiders analytics page backed by D1 cache with:
-	- team-scoped character list for active roster teams
-	- app-level Blizzard token refreshes so roster-team metrics can populate without each raider linking Battle.net
-	- class/status/search filters and sortable columns
-	- Blizzard class icons in the class column
-	- color-coded equipped iLvl values using WoW quality colors
-	- crest totals by track and total missing upgrades
-	- direct links to per-character raider detail pages
-- Raider detail profile page (`/raiders/:charId`) with:
-	- character portrait and full-body render
-	- status, team tags, and equipment/score/tier/gems/enchants/missing-upgrades summary
-	- crest-earned panel by track
-	- full raid-progress matrix (difficulty rows and raid-name columns)
-- Authenticated profile page where users can:
-	- log in with Battle.net
-	- view their synced WoW characters
-	- choose their guild main character
-	- see their current main summary
-	- set a preferred time zone for raid time display (searchable IANA timezone support)
-- Guild-member-only raid signup calendar where members can:
-	- view recurring primary raids and ad-hoc raids
-	- choose a character (defaulting to their main) and sign up
-	- see raid times rendered in their selected timezone
-	- view signup history ordered by signup time with timestamps
-
-## Admin Features
-
-Admin access is granted by guild rank via middleware. Officer or higher can access the admin area.
-
-- Admin shell with module navigation
-- Mains & Alts module:
-	- see authenticated guild members
-	- view guild characters and non-guild characters tied to an account
-	- identify member mains
-	- set or clear display nicknames
-	- review guild roster members who have not authenticated yet
-- Links Management module:
-	- create, edit, delete, and reorder link categories
-	- browse available Lucide icons for categories
-	- create, edit, delete, and reorder links within categories
-- Roster Teams module:
-	- create and manage multiple raid team setups
-	- toggle each team between Flex and Mythic mode
-	- maintain roster sizes above in-raid participant caps when attendance rotates week to week
-	- add and remove level 90 members regardless of authentication status
-	- keep the member picker open after adding a member for faster bulk assignment
-	- show only members not already assigned to that specific team in the add picker
-	- assign and update Tank, Healer, Melee DPS, or Ranged DPS role per member
-	- review raid buff coverage, class distribution, and token split
-- Raid Signups module:
-	- create recurring primary raid schedules
-	- create ad-hoc raids with separate date and time selection
-	- monitor signup counts and view signup summaries ordered by signup time
-	- infer absent roster members in day summaries when they are not signed up
-	- suppress absent alts when the same authenticated user signed up on another character
-	- override member signup roles inline from the signup calendar
-	- remove outdated raids
-- Settings module:
-	- configure tracked raid-progress expansion/tier bundle
-	- view roster/raiders cache health, raiders data-state breakdown, and raiders catch-up ETA
-	- manually trigger cache refresh for roster and raiders caches
-- Export module:
-	- generate character-to-label export JSON for guild addon workflows
-	- include each character's current Preparedness Tier in the export payload
-	- copy JSON to clipboard
-	- download export as a file
 
 ## Routes
 
@@ -312,110 +187,9 @@ Intended usage: internal website/admin UI reads. These endpoints require an auth
 
 These endpoints require an authenticated guild-member (or admin) session.
 
-### Sim Runner Request/Response Samples
+### API Payload Schema
 
-`GET /api/sim/targets` example response:
-
-```json
-{
-	"roster_revision": "fnv1a-77e16490",
-	"generated_at_utc": "2026-03-22T18:01:12.456Z",
-	"teams": [
-		{
-			"team_id": 1,
-			"team_name": "Mythic Main Team",
-			"raid_mode": "mythic",
-			"difficulty": "mythic",
-			"raiders": [
-				{
-					"blizzard_char_id": 123456789,
-					"name": "Aldren",
-					"realm_slug": "illidan",
-					"region": "us",
-					"level": 90,
-					"guild_rank": 4,
-					"priority": null
-				}
-			]
-		}
-	]
-}
-```
-
-`POST /api/sim/results` request body example:
-
-```json
-{
-	"run_id": "run-2026-03-22-001",
-	"roster_revision": "fnv1a-77e16490",
-	"started_at_utc": "2026-03-22T17:40:00Z",
-	"finished_at_utc": "2026-03-22T17:44:10Z",
-	"site_team_id": 1,
-	"difficulty": "mythic",
-	"simc_version": "1100-03",
-	"runner_version": "sim-runner/1.3.0",
-	"raider_summaries": [
-		{
-			"blizzard_char_id": 123456789,
-			"baseline_dps": 1432200.4,
-			"top_scenario": "Shoulders + Ring",
-			"top_dps": 1489012.7,
-			"gain_dps": 56812.3
-		}
-	],
-	"item_winners": [
-		{
-			"slot": "shoulder",
-			"item_id": 238117,
-			"item_label": "Crystalline Fury Pauldrons",
-			"ilvl": 678,
-			"source": "Mug'Zee",
-			"best_blizzard_char_id": 123456789,
-			"delta_dps": 56812.3,
-			"pct_gain": 3.97,
-			"simc": "head=...\nshoulder=..."
-		}
-	]
-}
-```
-
-`POST /api/sim/results` success response:
-
-```json
-{
-	"success": true,
-	"duplicate": false,
-	"run_id": "run-2026-03-22-001",
-	"site_team_id": 1,
-	"inserted": {
-		"raider_summaries": 1,
-		"item_winners": 1
-	}
-}
-```
-
-Duplicate upload response (same `run_id` + `site_team_id`):
-
-```json
-{
-	"success": true,
-	"duplicate": true,
-	"run_id": "run-2026-03-22-001",
-	"site_team_id": 1
-}
-```
-
-Validation error response example:
-
-```json
-{
-	"error": "Invalid payload",
-	"details": [
-		"site_team_id must be a positive integer.",
-		"raider_summaries must be an array."
-	]
-}
-```
+See type definitions in `src/lib/sim-api.ts` and endpoint implementations in `src/pages/api/sim/` for complete request/response schemas.
 
 ### Sim Runner Local Testing
 
@@ -531,123 +305,18 @@ These handlers remain in the codebase as retired stubs and currently return HTTP
 
 ## Project Structure
 
-```text
-/
-├── migrations/
-│   ├── 0001_initial.sql
-│   ├── 0002_roster_cache.sql
-│   ├── 0003_admin.sql
-│   ├── 0004_nickname.sql
-│   ├── 0005_links.sql
-│   ├── 0006_raid_teams.sql
-│   ├── 0007_split_dps_roles.sql
-│   ├── 0008_raid_signups.sql
-│   ├── 0009_primary_repeat_cycle.sql
-│   ├── 0010_signup_status.sql
-│   ├── 0011_signup_role.sql
-│   ├── 0012_signup_timestamp.sql
-│   ├── 0013_raiders_cache.sql
-│   ├── 0014_raid_progress.sql
-│   ├── 0015_raid_progress_target.sql
-│   ├── 0016_site_settings.sql
-│   ├── 0017_quest_count.sql
-│   ├── 0018_quest_count_backfill.sql
-│   ├── 0019_raider_crests.sql
-│   ├── 0020_missing_upgrades.sql
-│   ├── 0021_deaths_count.sql
-│   ├── 0022_deaths_count_backfill.sql
-│   ├── 0023_preparedness_history.sql
-│   └── 0024_sim_runs.sql
-├── public/
-│   ├── _routes.json
-│   └── images/
-│       ├── leadership/
-│       └── lore/
-├── scripts/
-│   ├── copy-prod-data.mjs
-│   └── patch-wrangler-config.mjs
-├── src/
-│   ├── assets/
-│   ├── components/
-│   │   ├── SectionCard.astro
-│   │   └── Welcome.astro
-│   ├── data/
-│   │   ├── dadJokes.ts
-│   │   ├── externalLinks.ts
-│   │   └── raidProgressTargets.ts
-│   ├── layouts/
-│   │   ├── AdminLayout.astro
-│   │   └── Layout.astro
-│   ├── lib/
-│   │   ├── auth.ts
-│   │   ├── blizzard-app-token.ts
-│   │   ├── blizzard-fetch.ts
-│   │   ├── blizzard.ts
-│   │   ├── class-icons.ts
-│   │   ├── debug-shim.ts
-│   │   ├── raiders.ts
-│   │   ├── roster-cache.ts
-│   │   ├── runtime-env.ts
-│   │   └── wow.ts
-│   ├── pages/
-│   │   ├── index.astro
-│   │   ├── leadership.astro
-│   │   ├── links.astro
-│   │   ├── lore.astro
-│   │   ├── profile.astro
-│   │   ├── raiding.astro
-│   │   ├── raiders.astro
-│   │   ├── roster.astro
-│   │   ├── admin/
-│   │   │   ├── cache.astro
-│   │   │   ├── export.astro
-│   │   │   ├── index.astro
-│   │   │   ├── links.astro
-│   │   │   ├── mains.astro
-│   │   │   ├── roster-teams.astro
-│   │   │   └── settings.astro
-│   │   ├── api/
-│   │   │   ├── set-main.ts
-│   │   │   ├── admin/
-│   │   │   │   ├── assign-character.ts
-│   │   │   │   ├── create-profile.ts
-│   │   │   │   ├── roster-teams/
-│   │   │   │   │   ├── add-member.ts
-│   │   │   │   │   ├── create-team.ts
-│   │   │   │   │   ├── delete-team.ts
-│   │   │   │   │   ├── remove-member.ts
-│   │   │   │   │   ├── update-member-role.ts
-│   │   │   │   │   └── update-team.ts
-│   │   │   │   ├── unassign-character.ts
-│   │   │   │   ├── update-nickname.ts
-│   │   │   │   ├── update-profile.ts
-│   │   │   │   ├── cache/
-│   │   │   │   │   └── refresh.ts
-│   │   │   │   └── settings/
-│   │   │   │       └── raid-progress-target.ts
-│   │   │   │   └── links/
-│   │   │   │       ├── create-category.ts
-│   │   │   │       ├── create-link.ts
-│   │   │   │       ├── delete-category.ts
-│   │   │   │       ├── delete-link.ts
-│   │   │   │       ├── update-category.ts
-│   │   │   │       └── update-link.ts
-│   │   │   └── cron/
-│   │   │       └── refresh-roster.ts
-│   │   ├── raiders/
-│   │   │   └── [charId].astro
-│   │   └── auth/
-│   │       ├── callback.ts
-│   │       ├── login.ts
-│   │       └── logout.ts
-│   ├── env.d.ts
-│   └── middleware.ts
-├── astro.config.mjs
-├── package.json
-├── README.md
-├── tsconfig.json
-└── wrangler.toml
-```
+### Key Folders
+
+- **`migrations/`** — D1 SQL migrations ordered by creation date (0001–0024)
+- **`public/`** — Static assets: images for leadership and lore pages, Cloudflare routing config
+- **`scripts/`** — Build and deployment helper scripts
+- **`src/components/`** — Reusable Astro components (cards, layouts, sections)
+- **`src/data/`** — Static data files (jokes, external links, raid progress targets)
+- **`src/layouts/`** — Layout templates for page rendering
+- **`src/lib/`** — Core modules for auth, Blizzard API integration, roster caching, WoW data
+- **`src/pages/`** — Route definitions (public pages, admin section, API endpoints, auth flow)
+
+See the repository structure for complete file listings.
 
 ## Development Details
 

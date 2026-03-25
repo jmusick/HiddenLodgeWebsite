@@ -241,6 +241,11 @@ async function hasSimRunsTable(db: D1Database): Promise<boolean> {
   return tables.has('sim_runs');
 }
 
+async function hasSimResultTables(db: D1Database): Promise<boolean> {
+  const tables = await getTableNames(db);
+  return tables.has('sim_raider_summaries') && tables.has('sim_item_winners');
+}
+
 async function getSimTableNames(db: D1Database): Promise<SimTableNames> {
   const _ = db;
 
@@ -836,6 +841,9 @@ export async function getLatestSimForRaider(
   db: D1Database,
   charId: number
 ): Promise<RaiderSimRecommendations | null> {
+  if (!(await hasSimRunsTable(db))) return null;
+  if (!(await hasSimResultTables(db))) return null;
+
   const simTables = await getSimTableNames(db);
   await purgeStaleSimData(db, simTables);
 
@@ -929,6 +937,22 @@ export async function purgeSimHistoryForRaider(
   db: D1Database,
   charId: number
 ): Promise<PurgeSimHistoryResult> {
+  if (!(await hasSimRunsTable(db))) {
+    return {
+      deleted_runs: 0,
+      deleted_raider_summaries: 0,
+      deleted_item_winners: 0,
+    };
+  }
+
+  if (!(await hasSimResultTables(db))) {
+    return {
+      deleted_runs: 0,
+      deleted_raider_summaries: 0,
+      deleted_item_winners: 0,
+    };
+  }
+
   const simTables = await getSimTableNames(db);
   const tables = await getTableNames(db);
 
@@ -1060,6 +1084,9 @@ export async function getLatestSimByTeam(
   updated_at: number;
   winners: Array<RaiderSimWinner & { best_blizzard_char_id: number | null }>;
 } | null> {
+  if (!(await hasSimRunsTable(db))) return null;
+  if (!(await hasSimResultTables(db))) return null;
+
   const normalizedDifficulty = normalizeDifficulty(difficulty);
   const simTables = await getSimTableNames(db);
   await purgeStaleSimData(db, simTables);
@@ -1174,6 +1201,14 @@ export async function getPassiveSimTasks(
     };
   }
 
+  if (!(await hasSimResultTables(db))) {
+    return {
+      generated_at_utc: toIsoNow(),
+      max_age_seconds: maxAgeSeconds,
+      tasks: [],
+    };
+  }
+
   const simTables = await getSimTableNames(db);
   await purgeStaleSimData(db, simTables);
 
@@ -1271,6 +1306,7 @@ export async function getLatestDroptimizerForRaiders(
   if (normalizedCharIds.length === 0) return snapshots;
 
   if (!(await hasSimRunsTable(db))) return snapshots;
+  if (!(await hasSimResultTables(db))) return snapshots;
 
   const maxAgeSeconds = Math.max(60 * 60, Math.min(30 * 24 * 60 * 60, options?.maxAgeSeconds ?? 14 * 24 * 60 * 60));
   const cutoff = nowSeconds() - maxAgeSeconds;
@@ -1343,6 +1379,7 @@ export async function getLatestSingleTargetForRaiders(
   if (normalizedCharIds.length === 0) return snapshots;
 
   if (!(await hasSimRunsTable(db))) return snapshots;
+  if (!(await hasSimResultTables(db))) return snapshots;
 
   const maxAgeSeconds = Math.max(60 * 60, Math.min(30 * 24 * 60 * 60, options?.maxAgeSeconds ?? 7 * 24 * 60 * 60));
   const cutoff = nowSeconds() - maxAgeSeconds;
