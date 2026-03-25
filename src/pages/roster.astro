@@ -1,6 +1,7 @@
 ---
 import Layout from '../layouts/Layout.astro';
 import { Icon } from 'astro-icon/components';
+import { env } from 'cloudflare:workers';
 import { loadRosterWithCache } from '../lib/roster-cache';
 
 interface EnrichedMember {
@@ -15,6 +16,7 @@ interface EnrichedMember {
   achievementPoints: number;
   questCount: number;
   deathsCount: number;
+  critterCount: number;
   mountCount: number;
   petCount: number;
   toyCount: number;
@@ -39,10 +41,38 @@ const CLASS_COLORS: Record<string, string> = {
 
 const { members, status, errorMessage } = await loadRosterWithCache();
 
+const mainLinkResult = await env.DB.prepare(
+  `SELECT
+      c.blizzard_char_id AS alt_char_id,
+      main_c.blizzard_char_id AS main_char_id
+   FROM characters c
+   JOIN characters main_c
+     ON main_c.user_id = c.user_id
+    AND main_c.is_main = 1
+   JOIN roster_members_cache alt_rmc
+     ON alt_rmc.blizzard_char_id = c.blizzard_char_id
+   JOIN roster_members_cache main_rmc
+     ON main_rmc.blizzard_char_id = main_c.blizzard_char_id
+   JOIN roster_members_cache rmc
+     ON rmc.blizzard_char_id = c.blizzard_char_id
+   WHERE c.blizzard_char_id <> main_c.blizzard_char_id`
+).all<{ alt_char_id: number; main_char_id: number }>();
+
+const altToMainMap = new Map<number, number>(
+  ((mainLinkResult.results ?? []) as Array<{ alt_char_id: number; main_char_id: number }>).map((row) => [
+    row.alt_char_id,
+    row.main_char_id,
+  ])
+);
+
 const sortedMembers = [...members].sort((a, b) => {
   if (a.rank !== b.rank) return a.rank - b.rank;
   return a.name.localeCompare(b.name);
 });
+
+const membersById = new Map<number, EnrichedMember>(
+  sortedMembers.map((member) => [member.blizzardCharId, member as EnrichedMember])
+);
 
 const classOptions = [...new Set(sortedMembers.map((member) => member.className))].sort((a, b) =>
   a.localeCompare(b)
@@ -87,20 +117,35 @@ function classAbbrev(className: string): string {
   return map[normalized] ?? className.slice(0, 2).toUpperCase();
 }
 
-function topBy(field: keyof Pick<EnrichedMember, 'achievementPoints' | 'questCount' | 'deathsCount' | 'mountCount' | 'petCount' | 'toyCount'>) {
-  return sortedMembers.reduce(
+function topBy(field: keyof Pick<EnrichedMember, 'achievementPoints' | 'questCount' | 'deathsCount' | 'critterCount' | 'mountCount' | 'petCount' | 'toyCount'>) {
+  const winner = sortedMembers.reduce(
     (best, member) =>
       member[field] > (best?.value ?? -1)
-        ? { name: member.name, className: member.className, value: member[field] }
+        ? { member, value: member[field] }
         : best,
-    null as { name: string; className: string; value: number } | null
+    null as { member: EnrichedMember; value: number } | null
   );
+
+  if (!winner) {
+    return null;
+  }
+
+  const mainCharId = altToMainMap.get(winner.member.blizzardCharId);
+  const mainMember = mainCharId ? membersById.get(mainCharId) ?? null : null;
+  const displayMember = mainMember && mainMember[field] === winner.value ? mainMember : winner.member;
+
+  return {
+    name: displayMember.name,
+    className: displayMember.className,
+    value: winner.value,
+  };
 }
 
 const spotlights = [
   { label: 'Achievements', icon: 'lucide:trophy', field: 'achievementPoints' as const, format: (n: number) => n.toLocaleString() },
   { label: 'Quests', icon: 'lucide:scroll-text', field: 'questCount' as const, format: (n: number) => n.toLocaleString() },
   { label: 'Deaths', icon: 'lucide:skull', field: 'deathsCount' as const, format: (n: number) => n.toLocaleString() },
+  { label: 'Critters Killed', icon: 'lucide:bug', field: 'critterCount' as const, format: (n: number) => n.toLocaleString() },
   { label: 'Mounts', icon: 'lucide:dog', field: 'mountCount' as const, format: (n: number) => String(n) },
   { label: 'Pets', icon: 'lucide:paw-print', field: 'petCount' as const, format: (n: number) => String(n) },
   { label: 'Toys', icon: 'lucide:puzzle', field: 'toyCount' as const, format: (n: number) => String(n) },
@@ -112,6 +157,7 @@ const spotlights = [
     name: top?.name ?? '—',
     className: top?.className ?? '',
     value: top ? format(top.value) : '—',
+    showPetaAction: field === 'critterCount',
   };
 });
 
@@ -124,17 +170,40 @@ const spotlights = [
 
   {!errorMessage && (
     <section class="spotlights" aria-label="Top players">
-      {spotlights.map(({ label, icon, name, className, value }) => {
+      {spotlights.map(({ label, icon, name, className, value, showPetaAction }) => {
         const classColor = CLASS_COLORS[className] ?? '#d8e2e8';
         return (
-          <article class="spotlight-card">
-            <header class="spotlight-header">
-              <Icon name={icon} class="spotlight-icon" aria-hidden="true" />
-              <span class="spotlight-label">{label}</span>
-            </header>
-            <p class="spotlight-value">{value}</p>
-            <p class="spotlight-name" style={`color: ${classColor}`}>{name}</p>
-          </article>
+          <div class="spotlight-slot">
+            <div class="spotlight-top-row">
+              {showPetaAction && (
+                <button
+                  type="button"
+                  class="spotlight-joke-btn"
+                  data-peta-button
+                  aria-describedby="peta-snitch-tooltip"
+                >
+                  Report to PETA
+                </button>
+                <span
+                  id="peta-snitch-tooltip"
+                  class="spotlight-tooltip"
+                  data-peta-tooltip
+                  role="tooltip"
+                  aria-hidden="true"
+                >
+                  Minus 50 DKP for snitching
+                </span>
+              )}
+            </div>
+            <article class="spotlight-card">
+              <header class="spotlight-header">
+                <Icon name={icon} class="spotlight-icon" aria-hidden="true" />
+                <span class="spotlight-label">{label}</span>
+              </header>
+              <p class="spotlight-value">{value}</p>
+              <p class="spotlight-name" style={`color: ${classColor}`}>{name}</p>
+            </article>
+          </div>
         );
       })}
     </section>
@@ -211,6 +280,7 @@ const spotlights = [
                 <th><button class="sort-btn" type="button" data-sort-key="achievementPoints">Achieves</button></th>
                 <th><button class="sort-btn" type="button" data-sort-key="questCount">Quests</button></th>
                 <th><button class="sort-btn" type="button" data-sort-key="deathsCount">Deaths</button></th>
+                <th><button class="sort-btn" type="button" data-sort-key="critterCount">Critters</button></th>
                 <th><button class="sort-btn" type="button" data-sort-key="mountCount">Mounts</button></th>
                 <th><button class="sort-btn" type="button" data-sort-key="petCount">Pets</button></th>
                 <th><button class="sort-btn" type="button" data-sort-key="toyCount">Toys</button></th>
@@ -231,6 +301,7 @@ const spotlights = [
                       data-achievement-points={String(member.achievementPoints)}
                       data-quest-count={String(member.questCount)}
                       data-deaths-count={String(member.deathsCount)}
+                      data-critter-count={String(member.critterCount)}
                       data-mount-count={String(member.mountCount)}
                       data-pet-count={String(member.petCount)}
                       data-toy-count={String(member.toyCount)}
@@ -266,6 +337,7 @@ const spotlights = [
                       <td>{member.achievementPoints > 0 ? member.achievementPoints.toLocaleString() : '—'}</td>
                       <td>{member.questCount > 0 ? member.questCount.toLocaleString() : '—'}</td>
                       <td>{member.deathsCount > 0 ? member.deathsCount.toLocaleString() : '—'}</td>
+                      <td>{member.critterCount > 0 ? member.critterCount.toLocaleString() : '—'}</td>
                       <td>{member.mountCount > 0 ? member.mountCount : '—'}</td>
                       <td>{member.petCount > 0 ? member.petCount : '—'}</td>
                       <td>{member.toyCount > 0 ? member.toyCount : '—'}</td>
@@ -351,6 +423,7 @@ const spotlights = [
       sortKey === 'achievementPoints' ||
       sortKey === 'questCount' ||
       sortKey === 'deathsCount' ||
+      sortKey === 'critterCount' ||
       sortKey === 'mountCount' ||
       sortKey === 'petCount' ||
       sortKey === 'toyCount';
@@ -427,6 +500,26 @@ const spotlights = [
 
       applyFiltersAndSort();
     });
+  });
+
+  const petaButton = document.querySelector<HTMLButtonElement>('[data-peta-button]');
+  const petaTooltip = document.querySelector<HTMLSpanElement>('[data-peta-tooltip]');
+  let petaTooltipTimer: number | undefined;
+
+  petaButton?.addEventListener('click', () => {
+    if (!petaTooltip) return;
+
+    petaTooltip.classList.add('is-visible');
+    petaTooltip.setAttribute('aria-hidden', 'false');
+
+    if (petaTooltipTimer) {
+      window.clearTimeout(petaTooltipTimer);
+    }
+
+    petaTooltipTimer = window.setTimeout(() => {
+      petaTooltip?.classList.remove('is-visible');
+      petaTooltip?.setAttribute('aria-hidden', 'true');
+    }, 2200);
   });
 
   applyFiltersAndSort();
@@ -524,7 +617,7 @@ const spotlights = [
 
   .spotlights {
     display: grid;
-    grid-template-columns: repeat(6, minmax(0, 1fr));
+    grid-template-columns: repeat(7, minmax(0, 1fr));
     gap: 0.75rem;
     margin-top: 1rem;
   }
@@ -537,7 +630,23 @@ const spotlights = [
       rgba(11, 21, 32, 0.78);
     padding: 1rem 1.1rem;
     display: grid;
+    grid-template-rows: auto minmax(2.1rem, auto) minmax(1.4rem, auto);
+    align-content: start;
     gap: 0.25rem;
+  }
+
+  .spotlight-slot {
+    display: grid;
+    grid-template-rows: 1rem auto;
+    gap: 0.2rem;
+  }
+
+  .spotlight-top-row {
+    position: relative;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    min-height: 1rem;
   }
 
   .spotlight-header {
@@ -569,6 +678,59 @@ const spotlights = [
     margin: 0.3rem 0 0;
     font-size: 0.97rem;
     font-weight: 600;
+    min-height: 1.4rem;
+  }
+
+  .spotlight-joke-btn {
+    border: 0;
+    background: transparent;
+    font: inherit;
+    color: rgba(241, 217, 169, 0.82);
+    padding: 0;
+    font-size: 0.72rem;
+    font-weight: 600;
+    letter-spacing: 0.01em;
+    cursor: pointer;
+    text-decoration: underline;
+    text-decoration-color: rgba(241, 217, 169, 0.4);
+    text-underline-offset: 0.14rem;
+  }
+
+  .spotlight-joke-btn:hover {
+    color: #f1d9a9;
+    text-decoration-color: rgba(241, 217, 169, 0.78);
+  }
+
+  .spotlight-tooltip {
+    position: absolute;
+    left: 50%;
+    top: calc(100% + 0.45rem);
+    transform: translateX(-50%) translateY(-4px);
+    z-index: 2;
+    min-width: 12rem;
+    max-width: 16rem;
+    border: 1px solid rgba(214, 176, 106, 0.38);
+    border-radius: 0.55rem;
+    background: rgba(8, 14, 22, 0.97);
+    color: #f4e7c7;
+    padding: 0.45rem 0.6rem;
+    font-size: 0.8rem;
+    line-height: 1.3;
+    box-shadow: 0 10px 24px rgba(0, 0, 0, 0.28);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 120ms ease, transform 120ms ease;
+  }
+
+  .spotlight-tooltip.is-visible {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0);
+  }
+
+  @media (max-width: 1200px) {
+    .spotlights {
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+    }
   }
 
   @media (max-width: 860px) {
