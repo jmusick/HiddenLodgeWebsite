@@ -1,6 +1,7 @@
 export const prerender = false;
 
 import type { APIContext } from 'astro';
+import { getRosterRefreshOptions } from '../../../../lib/roster-cache';
 import { refreshRaidersCache } from '../../../../lib/raiders';
 import { refreshRosterCache } from '../../../../lib/roster-cache';
 
@@ -9,8 +10,14 @@ export async function POST(context: APIContext): Promise<Response> {
     return new Response('Forbidden', { status: 403 });
   }
 
+  const url = new URL(context.request.url);
+  const rosterOptions = getRosterRefreshOptions({
+    batchSize: url.searchParams.get('detailBatchSize') ? Number.parseInt(url.searchParams.get('detailBatchSize')!, 10) : undefined,
+    questBackfillBatchSize: url.searchParams.get('backfillBatchSize') ? Number.parseInt(url.searchParams.get('backfillBatchSize')!, 10) : undefined,
+  });
+
   const [rosterResult, raidersResult] = await Promise.allSettled([
-    refreshRosterCache(),
+    refreshRosterCache(undefined, rosterOptions),
     refreshRaidersCache(),
   ]);
 

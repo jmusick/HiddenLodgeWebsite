@@ -130,6 +130,30 @@ export interface RosterCacheStatus {
   pendingDetailCount: number;
 }
 
+export interface RosterRefreshOptions {
+  batchSize?: number;
+  questBackfillBatchSize?: number;
+}
+
+export interface RosterRefreshDiagnostics {
+  totalMembers: number;
+  detailCandidatesSelected: number;
+  detailProcessed: number;
+  detailSkipped: number;
+  detailFailed: number;
+  questBackfillSelected: number;
+  questBackfillProcessed: number;
+  deathsBackfillSelected: number;
+  deathsBackfillProcessed: number;
+  critterBackfillSelected: number;
+  critterBackfillProcessed: number;
+}
+
+export interface RosterRefreshResult {
+  status: RosterCacheStatus;
+  diagnostics: RosterRefreshDiagnostics;
+}
+
 function formatRealmFromSlug(slug: string): string {
   return slug
     .split('-')
@@ -140,6 +164,26 @@ function formatRealmFromSlug(slug: string): string {
 
 function nowInSeconds(): number {
   return Math.floor(Date.now() / 1000);
+}
+
+function parsePositiveInteger(value: string | undefined, fallback: number): number {
+  const parsed = Number.parseInt(String(value ?? ''), 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return fallback;
+  }
+
+  return parsed;
+}
+
+export function getRosterRefreshOptions(overrides?: RosterRefreshOptions): Required<RosterRefreshOptions> {
+  return {
+    batchSize:
+      overrides?.batchSize ??
+      parsePositiveInteger(env.ROSTER_DETAIL_BATCH_SIZE, DETAIL_BATCH_SIZE),
+    questBackfillBatchSize:
+      overrides?.questBackfillBatchSize ??
+      parsePositiveInteger(env.ROSTER_BACKFILL_BATCH_SIZE, QUEST_BACKFILL_BATCH_SIZE),
+  };
 }
 
 function getDatabase(db?: D1Database): D1Database {
@@ -445,9 +489,10 @@ async function listCachedMembers(db: D1Database): Promise<CachedRosterMember[]> 
 
 export async function refreshRosterCache(
   dbInput?: D1Database,
-  options?: { batchSize?: number; questBackfillBatchSize?: number }
-): Promise<RosterCacheStatus> {
+  options?: RosterRefreshOptions
+): Promise<RosterRefreshResult> {
   const db = getDatabase(dbInput);
+  const refreshOptions = getRosterRefreshOptions(options);
   const hasQuestColumn = await hasQuestCountColumn(db);
   const hasQuestCheckedColumn = hasQuestColumn ? await hasQuestCountCheckedColumn(db) : false;
   const hasDeathsColumn = await hasDeathsCountColumn(db);
@@ -457,6 +502,19 @@ export async function refreshRosterCache(
   const accessToken = await fetchAccessToken();
   const rosterMembers = await fetchGuildRoster(accessToken);
   const now = nowInSeconds();
+  const diagnostics: RosterRefreshDiagnostics = {
+    totalMembers: rosterMembers.length,
+    detailCandidatesSelected: 0,
+    detailProcessed: 0,
+    detailSkipped: 0,
+    detailFailed: 0,
+    questBackfillSelected: 0,
+    questBackfillProcessed: 0,
+    deathsBackfillSelected: 0,
+    deathsBackfillProcessed: 0,
+    critterBackfillSelected: 0,
+    critterBackfillProcessed: 0,
+  };
 
   const summaryStatements = rosterMembers.map((member) =>
     db
@@ -528,7 +586,9 @@ export async function refreshRosterCache(
     name: string;
     realm_slug: string;
     details_synced_at: number | null;
-  }>).slice(0, Math.max(1, options?.batchSize ?? DETAIL_BATCH_SIZE));
+  }>).slice(0, Math.max(1, refreshOptions.batchSize));
+
+  diagnostics.detailCandidatesSelected = detailCandidates.length;
 
   const rosterById = new Map(rosterMembers.map((member) => [member.character.id, member]));
 
@@ -538,11 +598,13 @@ export async function refreshRosterCache(
       const rosterMember = rosterById.get(candidateId);
       const href = rosterMember?.character.key?.href;
       if (!href) {
+        diagnostics.detailSkipped += 1;
         continue;
       }
 
       const apiUrls = buildCharacterApiUrls(href);
       if (!apiUrls) {
+        diagnostics.detailSkipped += 1;
         console.error('Roster detail refresh skipped: invalid profile href', {
           candidateId,
           href,
@@ -559,6 +621,7 @@ export async function refreshRosterCache(
       ]);
 
       if (!profile || !stats || !mounts || !pets || !toys) {
+        diagnostics.detailSkipped += 1;
         continue;
       }
 
@@ -612,7 +675,10 @@ export async function refreshRosterCache(
           candidateId
         )
         .run();
+
+      diagnostics.detailProcessed += 1;
     } catch (error) {
+      diagnostics.detailFailed += 1;
       console.error('Roster detail refresh failed for candidate', {
         candidateId: candidate.blizzard_char_id,
         name: candidate.name,
@@ -644,7 +710,9 @@ export async function refreshRosterCache(
       blizzard_char_id: number;
       name: string;
       realm_slug: string;
-    }>).slice(0, Math.max(1, options?.questBackfillBatchSize ?? QUEST_BACKFILL_BATCH_SIZE));
+    }>).slice(0, Math.max(1, refreshOptions.questBackfillBatchSize));
+
+    diagnostics.questBackfillSelected = questBackfillCandidates.length;
 
     for (const candidate of questBackfillCandidates) {
       try {
@@ -679,6 +747,8 @@ export async function refreshRosterCache(
           )
           .bind(extractQuestCount(stats), now, candidateId)
           .run();
+
+        diagnostics.questBackfillProcessed += 1;
       } catch (error) {
         console.error('Roster quest backfill failed for candidate', {
           candidateId: candidate.blizzard_char_id,
@@ -711,7 +781,9 @@ export async function refreshRosterCache(
       blizzard_char_id: number;
       name: string;
       realm_slug: string;
-    }>).slice(0, Math.max(1, options?.questBackfillBatchSize ?? QUEST_BACKFILL_BATCH_SIZE));
+    }>).slice(0, Math.max(1, refreshOptions.questBackfillBatchSize));
+
+    diagnostics.deathsBackfillSelected = deathsBackfillCandidates.length;
 
     for (const candidate of deathsBackfillCandidates) {
       try {
@@ -746,6 +818,8 @@ export async function refreshRosterCache(
           )
           .bind(extractDeathsCount(stats), now, candidateId)
           .run();
+
+        diagnostics.deathsBackfillProcessed += 1;
       } catch (error) {
         console.error('Roster deaths backfill failed for candidate', {
           candidateId: candidate.blizzard_char_id,
@@ -778,7 +852,9 @@ export async function refreshRosterCache(
       blizzard_char_id: number;
       name: string;
       realm_slug: string;
-    }>).slice(0, Math.max(1, options?.questBackfillBatchSize ?? QUEST_BACKFILL_BATCH_SIZE));
+    }>).slice(0, Math.max(1, refreshOptions.questBackfillBatchSize));
+
+    diagnostics.critterBackfillSelected = critterBackfillCandidates.length;
 
     for (const candidate of critterBackfillCandidates) {
       try {
@@ -813,6 +889,8 @@ export async function refreshRosterCache(
           )
           .bind(extractCritterCount(stats), now, candidateId)
           .run();
+
+        diagnostics.critterBackfillProcessed += 1;
       } catch (error) {
         console.error('Roster critter backfill failed for candidate', {
           candidateId: candidate.blizzard_char_id,
@@ -824,7 +902,15 @@ export async function refreshRosterCache(
     }
   }
 
-  return getMeta(db);
+  const status = await getMeta(db);
+
+  console.log('Roster refresh completed', {
+    status,
+    diagnostics,
+    options: refreshOptions,
+  });
+
+  return { status, diagnostics };
 }
 
 export async function loadRosterWithCache(
@@ -842,7 +928,8 @@ export async function loadRosterWithCache(
 
   if (needsSummaryRefresh || needsDetailRefresh) {
     try {
-      status = await refreshRosterCache(db);
+      const refreshResult = await refreshRosterCache(db);
+      status = refreshResult.status;
       members = await listCachedMembers(db);
     } catch (error) {
       if (members.length === 0) {
