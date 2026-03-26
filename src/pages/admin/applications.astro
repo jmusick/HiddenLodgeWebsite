@@ -1,0 +1,702 @@
+---
+export const prerender = false;
+
+import AdminLayout from '../../layouts/AdminLayout.astro';
+import { env } from 'cloudflare:workers';
+
+if (!Astro.locals.isAdmin) {
+	return Astro.redirect('/');
+}
+
+const canDelete = Astro.locals.user?.battleTag === 'Xing#1673';
+
+interface ApplicationRow {
+	id: number;
+	discord_username: string;
+	battletag: string;
+	raid_history: string;
+	goals: string;
+	status: string;
+	submitted_at: number;
+}
+
+interface CharRow {
+	application_id: number;
+	char_name: string;
+	realm: string;
+	realm_slug: string;
+	is_main: number;
+}
+
+interface NoteRow {
+	id: number;
+	application_id: number;
+	author: string;
+	note: string;
+	created_at: number;
+}
+
+const [appsResult, charsResult, notesResult] = await env.DB.batch([
+	env.DB.prepare(
+		`SELECT id, discord_username, battletag, raid_history, goals, status, submitted_at
+		 FROM applications ORDER BY submitted_at DESC`
+	),
+	env.DB.prepare(
+		`SELECT application_id, char_name, realm, realm_slug, is_main
+		 FROM application_characters ORDER BY application_id ASC, is_main DESC, id ASC`
+	),
+	env.DB.prepare(
+		`SELECT id, application_id, author, note, created_at
+		 FROM application_notes ORDER BY application_id ASC, created_at ASC`
+	),
+]);
+
+const applications = (appsResult.results ?? []) as ApplicationRow[];
+const allChars = (charsResult.results ?? []) as CharRow[];
+const allNotes = (notesResult.results ?? []) as NoteRow[];
+
+const charsByApp = new Map<number, CharRow[]>();
+for (const c of allChars) {
+	if (!charsByApp.has(c.application_id)) charsByApp.set(c.application_id, []);
+	charsByApp.get(c.application_id)!.push(c);
+}
+
+const notesByApp = new Map<number, NoteRow[]>();
+for (const n of allNotes) {
+	if (!notesByApp.has(n.application_id)) notesByApp.set(n.application_id, []);
+	notesByApp.get(n.application_id)!.push(n);
+}
+
+const CLOSED = new Set(['rejected', 'trial']);
+const active = applications.filter((a) => !CLOSED.has(a.status));
+const closed = applications.filter((a) => CLOSED.has(a.status));
+
+function formatDate(unix: number): string {
+	return new Date(unix * 1000).toLocaleDateString('en-US', {
+		month: 'short',
+		day: 'numeric',
+		year: 'numeric',
+	});
+}
+
+const STATUS_LABELS: Record<string, string> = {
+	received:  'Received',
+	reviewed:  'Reviewed',
+	contacted: 'Contacted',
+	rejected:  'Rejected',
+	trial:     'Trial',
+};
+---
+
+<AdminLayout title="Applications | Admin | The Hidden Lodge">
+	<div class="page-header">
+		<h1>Applications</h1>
+		<p class="page-desc">{active.length} active · {closed.length} closed</p>
+	</div>
+
+	{applications.length === 0 && (
+		<p class="empty-state">No applications yet.</p>
+	)}
+
+	{active.length > 0 && (
+		<section class="app-section">
+			<h2 class="section-heading">Active</h2>
+			<div class="app-list">
+				{active.map((app) => {
+					const chars = charsByApp.get(app.id) ?? [];
+					const notes = notesByApp.get(app.id) ?? [];
+					const main = chars.find((c) => c.is_main) ?? chars[0];
+					return (
+						<article class="app-card" id={`app-${app.id}`}>
+							<div class="app-summary" role="button" tabindex="0" aria-expanded="false" data-app-id={app.id}>
+								<div class="app-summary-left">
+									<span class="app-discord">{app.discord_username}</span>
+									{app.battletag && <span class="app-btag">{app.battletag}</span>}
+									{main && (
+										<span class="app-main-char">{main.char_name}{main.realm ? ` — ${main.realm}` : ''}</span>
+									)}
+								</div>
+								<div class="app-summary-right">
+									<span class={`status-badge status-${app.status}`}>{STATUS_LABELS[app.status]}</span>
+									<span class="app-date">{formatDate(app.submitted_at)}</span>
+									<span class="app-note-count">{notes.length > 0 ? `${notes.length} note${notes.length !== 1 ? 's' : ''}` : ''}</span>
+									<span class="expand-icon" aria-hidden="true">▸</span>
+								</div>
+							</div>
+
+							<div class="app-detail" hidden data-detail={app.id}>
+								<div class="detail-grid">
+									<div class="detail-col">
+										<h3>Characters</h3>
+										<ul class="char-list">
+											{chars.map((c) => {
+												const slug = c.realm_slug || c.realm.toLowerCase().replace(/'/g, '').replace(/\s+/g, '-');
+												const rioUrl = slug ? `https://raider.io/characters/us/${slug}/${encodeURIComponent(c.char_name)}` : null;
+												const wclUrl = slug ? `https://www.warcraftlogs.com/character/us/${slug}/${encodeURIComponent(c.char_name)}` : null;
+												return (
+													<li class:list={['char-item', { 'char-main': c.is_main }]}>
+														{c.is_main ? <strong>{c.char_name}</strong> : c.char_name}
+														{c.realm && <span class="char-realm-label"> — {c.realm}</span>}
+														{c.is_main && <span class="char-tag">Main</span>}
+														<span class="char-links">
+															{rioUrl && <a href={rioUrl} target="_blank" rel="noopener noreferrer" class="char-link char-link--rio" title="Raider.io">RIO</a>}
+															{wclUrl && <a href={wclUrl} target="_blank" rel="noopener noreferrer" class="char-link char-link--wcl" title="Warcraft Logs">WCL</a>}
+														</span>
+													</li>
+												);
+											})}
+										</ul>
+
+										{app.raid_history && (
+											<>
+												<h3>Raid History</h3>
+												<p class="detail-text">{app.raid_history}</p>
+											</>
+										)}
+
+										{app.goals && (
+											<>
+												<h3>Goals in WoW</h3>
+												<p class="detail-text">{app.goals}</p>
+											</>
+										)}
+									</div>
+
+									<div class="detail-col">
+										<h3>Status</h3>
+										<div class="status-controls">
+											<select class="status-select" data-app-id={app.id} data-current={app.status}>
+												<option value="received"  selected={app.status === 'received'}>Received</option>
+												<option value="reviewed"  selected={app.status === 'reviewed'}>Reviewed</option>
+												<option value="contacted" selected={app.status === 'contacted'}>Contacted</option>
+												<option value="rejected"  selected={app.status === 'rejected'}>Rejected</option>
+												<option value="trial"     selected={app.status === 'trial'}>Trial</option>
+											</select>
+											<button class="btn-set-status" data-app-id={app.id}>Save</button>
+											<span class="status-msg" data-status-msg={app.id} hidden></span>
+										</div>
+										{canDelete && <button class="btn-delete-app" data-app-id={app.id} aria-label="Delete application">Delete Application</button>}
+
+										<h3>Notes</h3>
+										<ul class="notes-list" data-notes-list={app.id}>
+											{notes.map((n) => (
+												<li class="note-item" data-note-id={n.id}>
+													<div class="note-meta">
+														<span class="note-author">{n.author}</span>
+														<span class="note-date">{formatDate(n.created_at)}</span>
+														<button class="btn-delete-note" data-app-id={app.id} data-note-id={n.id} aria-label="Delete note">✕</button>
+													</div>
+													<p class="note-text">{n.note}</p>
+												</li>
+											))}
+										</ul>
+										<div class="add-note-form">
+											<textarea class="note-input" data-note-input={app.id} rows="3" placeholder="Add a note…"></textarea>
+											<button class="btn-add-note" data-app-id={app.id}>Add Note</button>
+										</div>
+									</div>
+								</div>
+							</div>
+						</article>
+					);
+				})}
+			</div>
+		</section>
+	)}
+
+	{closed.length > 0 && (
+		<section class="app-section app-section--closed">
+			<details>
+				<summary class="section-heading section-heading--closed">
+					Closed ({closed.length})
+				</summary>
+				<div class="app-list">
+					{closed.map((app) => {
+						const chars = charsByApp.get(app.id) ?? [];
+						const notes = notesByApp.get(app.id) ?? [];
+						const main = chars.find((c) => c.is_main) ?? chars[0];
+						return (
+							<article class="app-card app-card--closed" id={`app-${app.id}`}>
+								<div class="app-summary" role="button" tabindex="0" aria-expanded="false" data-app-id={app.id}>
+									<div class="app-summary-left">
+										<span class="app-discord">{app.discord_username}</span>
+										{app.battletag && <span class="app-btag">{app.battletag}</span>}
+										{main && (
+											<span class="app-main-char">{main.char_name}{main.realm ? ` — ${main.realm}` : ''}</span>
+										)}
+									</div>
+									<div class="app-summary-right">
+										<span class={`status-badge status-${app.status}`}>{STATUS_LABELS[app.status]}</span>
+										<span class="app-date">{formatDate(app.submitted_at)}</span>
+										<span class="app-note-count">{notes.length > 0 ? `${notes.length} note${notes.length !== 1 ? 's' : ''}` : ''}</span>
+										<span class="expand-icon" aria-hidden="true">▸</span>
+									</div>
+								</div>
+
+								<div class="app-detail" hidden data-detail={app.id}>
+									<div class="detail-grid">
+										<div class="detail-col">
+											<h3>Characters</h3>
+											<ul class="char-list">
+												{chars.map((c) => {
+													const slug = c.realm_slug || c.realm.toLowerCase().replace(/'/g, '').replace(/\s+/g, '-');
+													const rioUrl = slug ? `https://raider.io/characters/us/${slug}/${encodeURIComponent(c.char_name)}` : null;
+													const wclUrl = slug ? `https://www.warcraftlogs.com/character/us/${slug}/${encodeURIComponent(c.char_name)}` : null;
+													return (
+														<li class:list={['char-item', { 'char-main': c.is_main }]}>
+															{c.is_main ? <strong>{c.char_name}</strong> : c.char_name}
+															{c.realm && <span class="char-realm-label"> — {c.realm}</span>}
+															{c.is_main && <span class="char-tag">Main</span>}
+															<span class="char-links">
+																{rioUrl && <a href={rioUrl} target="_blank" rel="noopener noreferrer" class="char-link char-link--rio" title="Raider.io">RIO</a>}
+																{wclUrl && <a href={wclUrl} target="_blank" rel="noopener noreferrer" class="char-link char-link--wcl" title="Warcraft Logs">WCL</a>}
+															</span>
+														</li>
+													);
+												})}
+											</ul>
+											{app.raid_history && (
+												<>
+													<h3>Raid History</h3>
+													<p class="detail-text">{app.raid_history}</p>
+												</>
+											)}
+											{app.goals && (
+												<>
+													<h3>Goals in WoW</h3>
+													<p class="detail-text">{app.goals}</p>
+												</>
+											)}
+										</div>
+										<div class="detail-col">
+											<h3>Status</h3>
+											<div class="status-controls">
+												<select class="status-select" data-app-id={app.id} data-current={app.status}>
+													<option value="received"  selected={app.status === 'received'}>Received</option>
+													<option value="reviewed"  selected={app.status === 'reviewed'}>Reviewed</option>
+													<option value="contacted" selected={app.status === 'contacted'}>Contacted</option>
+													<option value="rejected"  selected={app.status === 'rejected'}>Rejected</option>
+													<option value="trial"     selected={app.status === 'trial'}>Trial</option>
+												</select>
+												<button class="btn-set-status" data-app-id={app.id}>Save</button>
+												<span class="status-msg" data-status-msg={app.id} hidden></span>
+											</div>
+											{canDelete && <button class="btn-delete-app" data-app-id={app.id} aria-label="Delete application">Delete Application</button>}
+											<h3>Notes</h3>
+											<ul class="notes-list" data-notes-list={app.id}>
+												{notes.map((n) => (
+													<li class="note-item" data-note-id={n.id}>
+														<div class="note-meta">
+															<span class="note-author">{n.author}</span>
+															<span class="note-date">{formatDate(n.created_at)}</span>
+															<button class="btn-delete-note" data-app-id={app.id} data-note-id={n.id} aria-label="Delete note">✕</button>
+														</div>
+														<p class="note-text">{n.note}</p>
+													</li>
+												))}
+											</ul>
+											<div class="add-note-form">
+												<textarea class="note-input" data-note-input={app.id} rows="3" placeholder="Add a note…"></textarea>
+												<button class="btn-add-note" data-app-id={app.id}>Add Note</button>
+											</div>
+										</div>
+									</div>
+								</div>
+							</article>
+						);
+					})}
+				</div>
+			</details>
+		</section>
+	)}
+</AdminLayout>
+
+<style>
+	.page-header { margin-bottom: 1.5rem; }
+	.page-header h1 { margin: 0 0 0.25rem; font-size: 1.6rem; color: #e8d8b0; }
+	.page-desc { margin: 0; color: #7a96a8; font-size: 0.88rem; }
+
+	.empty-state { color: #7a96a8; font-style: italic; }
+
+	.app-section { margin-bottom: 2rem; }
+	.app-section--closed { opacity: 0.8; }
+
+	.section-heading {
+		font-size: 1rem;
+		font-weight: 600;
+		color: #9ab0bf;
+		text-transform: uppercase;
+		letter-spacing: 0.06em;
+		margin: 0 0 0.75rem;
+	}
+	.section-heading--closed {
+		cursor: pointer;
+		list-style: none;
+		padding: 0.4rem 0;
+	}
+	.section-heading--closed::-webkit-details-marker { display: none; }
+
+	.app-list { display: flex; flex-direction: column; gap: 0.5rem; }
+
+	.app-card {
+		border: 1px solid rgba(255,255,255,0.08);
+		border-radius: 0.5rem;
+		background: rgba(11, 21, 32, 0.7);
+		overflow: hidden;
+	}
+	.app-card--closed { opacity: 0.7; }
+
+	.app-summary {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		padding: 0.7rem 1rem;
+		cursor: pointer;
+		gap: 1rem;
+		user-select: none;
+	}
+	.app-summary:hover { background: rgba(255,255,255,0.03); }
+
+	.app-summary-left {
+		display: flex;
+		align-items: center;
+		gap: 0.75rem;
+		flex-wrap: wrap;
+		min-width: 0;
+	}
+	.app-discord { font-weight: 600; color: #d8e2e8; }
+	.app-btag { font-size: 0.8rem; color: #5ab4ff; }
+	.app-main-char { font-size: 0.85rem; color: #9ab0bf; }
+
+	.app-summary-right {
+		display: flex;
+		align-items: center;
+		gap: 0.75rem;
+		flex-shrink: 0;
+	}
+	.app-date { font-size: 0.78rem; color: #6a8496; white-space: nowrap; }
+	.app-note-count { font-size: 0.75rem; color: #7a96a8; }
+	.expand-icon {
+		color: #6a8496;
+		font-size: 0.85rem;
+		transition: transform 0.15s;
+	}
+	.app-summary[aria-expanded="true"] .expand-icon { transform: rotate(90deg); }
+
+	/* Status badges */
+	.status-badge {
+		display: inline-block;
+		padding: 0.15rem 0.55rem;
+		border-radius: 999px;
+		font-size: 0.72rem;
+		font-weight: 700;
+		text-transform: uppercase;
+		letter-spacing: 0.04em;
+		white-space: nowrap;
+	}
+	.status-received  { background: rgba(90, 180, 255, 0.18); color: #5ab4ff; border: 1px solid rgba(90,180,255,0.3); }
+	.status-reviewed  { background: rgba(240, 184, 75, 0.18); color: #f0b84b; border: 1px solid rgba(240,184,75,0.3); }
+	.status-contacted { background: rgba(167, 139, 250, 0.18); color: #a78bfa; border: 1px solid rgba(167,139,250,0.3); }
+	.status-rejected  { background: rgba(239, 68, 68, 0.15); color: #f87171; border: 1px solid rgba(239,68,68,0.3); }
+	.status-trial     { background: rgba(34, 197, 94, 0.15); color: #4ade80; border: 1px solid rgba(34,197,94,0.3); }
+
+	/* Detail panel */
+	.app-detail {
+		border-top: 1px solid rgba(255,255,255,0.07);
+		padding: 1rem;
+	}
+
+	.detail-grid {
+		display: grid;
+		grid-template-columns: 1fr 1fr;
+		gap: 1.5rem;
+	}
+	@media (max-width: 640px) { .detail-grid { grid-template-columns: 1fr; } }
+
+	.detail-col h3 {
+		font-size: 0.72rem;
+		font-weight: 700;
+		text-transform: uppercase;
+		letter-spacing: 0.06em;
+		color: #7a96a8;
+		margin: 0.75rem 0 0.35rem;
+	}
+	.detail-col h3:first-child { margin-top: 0; }
+
+	.detail-text {
+		font-size: 0.88rem;
+		color: #c0d0da;
+		line-height: 1.55;
+		white-space: pre-wrap;
+		margin: 0;
+	}
+
+	.char-list { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 0.35rem; }
+	.char-item { font-size: 0.88rem; color: #c0d0da; display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap; }
+	.char-realm-label { color: #7a96a8; }
+	.char-tag {
+		font-size: 0.65rem;
+		background: rgba(214,176,106,0.15);
+		color: #d6b06a;
+		border: 1px solid rgba(214,176,106,0.25);
+		padding: 0.05rem 0.35rem;
+		border-radius: 3px;
+		text-transform: uppercase;
+		letter-spacing: 0.04em;
+	}
+	.char-links { display: inline-flex; gap: 0.25rem; margin-left: 0.1rem; }
+	.char-link {
+		font-size: 0.62rem;
+		font-weight: 700;
+		padding: 0.05rem 0.35rem;
+		border-radius: 3px;
+		text-decoration: none;
+		letter-spacing: 0.04em;
+		text-transform: uppercase;
+	}
+	.char-link--rio { background: rgba(239,68,68,0.15); color: #f87171; border: 1px solid rgba(239,68,68,0.3); }
+	.char-link--rio:hover { background: rgba(239,68,68,0.28); }
+	.char-link--wcl { background: rgba(167,139,250,0.15); color: #c4b5fd; border: 1px solid rgba(167,139,250,0.3); }
+	.char-link--wcl:hover { background: rgba(167,139,250,0.28); }
+
+	/* Status controls */
+	.status-controls { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
+	.status-select {
+		background: rgba(255,255,255,0.05);
+		border: 1px solid rgba(255,255,255,0.12);
+		border-radius: 0.35rem;
+		color: #d8e2e8;
+		padding: 0.3rem 0.6rem;
+		font-size: 0.85rem;
+		font-family: inherit;
+	}
+	.btn-set-status {
+		padding: 0.3rem 0.75rem;
+		background: rgba(214,176,106,0.1);
+		border: 1px solid rgba(214,176,106,0.3);
+		border-radius: 0.35rem;
+		color: #d6b06a;
+		font-size: 0.82rem;
+		font-family: inherit;
+		cursor: pointer;
+	}
+	.btn-set-status:hover { background: rgba(214,176,106,0.2); }
+	.btn-delete-app {
+		padding: 0.3rem 0.75rem;
+		background: rgba(239,68,68,0.12);
+		border: 1px solid rgba(239,68,68,0.3);
+		border-radius: 0.35rem;
+		color: #ff6b6b;
+		font-size: 0.82rem;
+		font-family: inherit;
+		cursor: pointer;
+		margin-top: 0.5rem;
+		display: block;
+	}
+	.btn-delete-app:hover { background: rgba(239,68,68,0.22); }
+	.status-msg { font-size: 0.8rem; color: #4ade80; }
+	.status-msg.err { color: #f87171; }
+
+	/* Notes */
+	.notes-list { list-style: none; padding: 0; margin: 0 0 0.75rem; display: flex; flex-direction: column; gap: 0.5rem; }
+	.note-item {
+		background: rgba(255,255,255,0.03);
+		border: 1px solid rgba(255,255,255,0.07);
+		border-radius: 0.35rem;
+		padding: 0.5rem 0.65rem;
+	}
+	.note-meta {
+		display: flex;
+		align-items: center;
+		gap: 0.5rem;
+		margin-bottom: 0.25rem;
+	}
+	.note-author { font-size: 0.75rem; font-weight: 600; color: #9ab0bf; }
+	.note-date { font-size: 0.72rem; color: #5a7585; flex: 1; }
+	.btn-delete-note {
+		background: none;
+		border: none;
+		color: #5a7585;
+		cursor: pointer;
+		font-size: 0.75rem;
+		padding: 0.1rem 0.25rem;
+		border-radius: 0.2rem;
+		line-height: 1;
+	}
+	.btn-delete-note:hover { color: #f87171; }
+	.note-text { font-size: 0.85rem; color: #c0d0da; margin: 0; white-space: pre-wrap; }
+
+	.add-note-form { display: flex; flex-direction: column; gap: 0.4rem; }
+	.note-input {
+		width: 100%;
+		background: rgba(255,255,255,0.05);
+		border: 1px solid rgba(255,255,255,0.1);
+		border-radius: 0.35rem;
+		color: #d8e2e8;
+		padding: 0.4rem 0.6rem;
+		font-size: 0.85rem;
+		font-family: inherit;
+		resize: vertical;
+		box-sizing: border-box;
+	}
+	.note-input:focus { outline: none; border-color: rgba(214,176,106,0.4); }
+	.btn-add-note {
+		align-self: flex-end;
+		padding: 0.3rem 0.75rem;
+		background: rgba(90,180,255,0.1);
+		border: 1px solid rgba(90,180,255,0.25);
+		border-radius: 0.35rem;
+		color: #5ab4ff;
+		font-size: 0.82rem;
+		font-family: inherit;
+		cursor: pointer;
+	}
+	.btn-add-note:hover { background: rgba(90,180,255,0.18); }
+</style>
+
+<script is:inline>
+(function () {
+	// ── Expand / collapse ───────────────────────────────────────────
+	document.querySelectorAll('.app-summary').forEach(function (summary) {
+		function toggle() {
+			var id = summary.getAttribute('data-app-id');
+			var detail = document.querySelector('[data-detail="' + id + '"]');
+			if (!detail) return;
+			var expanded = summary.getAttribute('aria-expanded') === 'true';
+			summary.setAttribute('aria-expanded', expanded ? 'false' : 'true');
+			detail.hidden = expanded;
+		}
+		summary.addEventListener('click', toggle);
+		summary.addEventListener('keydown', function (e) {
+			if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggle(); }
+		});
+	});
+
+	// ── Status change ───────────────────────────────────────────────
+	document.querySelectorAll('.btn-set-status').forEach(function (btn) {
+		btn.addEventListener('click', async function () {
+			var id = btn.getAttribute('data-app-id');
+			var select = document.querySelector('.status-select[data-app-id="' + id + '"]');
+			var msgEl = document.querySelector('[data-status-msg="' + id + '"]');
+			if (!select || !msgEl) return;
+			var status = select.value;
+			try {
+				var res = await fetch('/api/admin/applications/' + id + '/set-status', {
+					method: 'POST',
+					headers: { 'Content-Type': 'application/json' },
+					body: JSON.stringify({ status: status }),
+				});
+				if (!res.ok) throw new Error();
+				// Update the badge in the summary row
+				var badge = document.querySelector('#app-' + id + ' .status-badge');
+				if (badge) {
+					badge.className = 'status-badge status-' + status;
+					badge.textContent = status.charAt(0).toUpperCase() + status.slice(1);
+				}
+				msgEl.textContent = 'Saved';
+				msgEl.className = 'status-msg';
+				msgEl.hidden = false;
+				setTimeout(function () { msgEl.hidden = true; }, 2500);
+			} catch {
+				msgEl.textContent = 'Error saving';
+				msgEl.className = 'status-msg err';
+				msgEl.hidden = false;
+			}
+		});
+	});
+
+	// ── Add note ────────────────────────────────────────────────────
+	document.querySelectorAll('.btn-add-note').forEach(function (btn) {
+		btn.addEventListener('click', async function () {
+			var id = btn.getAttribute('data-app-id');
+			var textarea = document.querySelector('[data-note-input="' + id + '"]');
+			var list = document.querySelector('[data-notes-list="' + id + '"]');
+			if (!textarea || !list) return;
+			var note = textarea.value.trim();
+			if (!note) return;
+			try {
+				var res = await fetch('/api/admin/applications/' + id + '/add-note', {
+					method: 'POST',
+					headers: { 'Content-Type': 'application/json' },
+					body: JSON.stringify({ note: note }),
+				});
+				if (!res.ok) throw new Error();
+				var data = await res.json();
+				// Append the new note to the list
+				var li = document.createElement('li');
+				li.className = 'note-item';
+				li.setAttribute('data-note-id', data.id);
+				li.innerHTML =
+					'<div class="note-meta">' +
+					'<span class="note-author">' + (data.author || '') + '</span>' +
+					'<span class="note-date">Just now</span>' +
+					'<button class="btn-delete-note" data-app-id="' + id + '" data-note-id="' + data.id + '" aria-label="Delete note">\u2715</button>' +
+					'</div>' +
+					'<p class="note-text">' + note.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;') + '</p>';
+				list.appendChild(li);
+				wireDeleteBtn(li.querySelector('.btn-delete-note'));
+				textarea.value = '';
+			} catch {
+				alert('Failed to add note. Please try again.');
+			}
+		});
+	});
+
+	// ── Delete note ─────────────────────────────────────────────────
+	function wireDeleteBtn(btn) {
+		if (!btn) return;
+		btn.addEventListener('click', async function () {
+			var appId = btn.getAttribute('data-app-id');
+			var noteId = btn.getAttribute('data-note-id');
+			if (!confirm('Delete this note?')) return;
+			try {
+				var res = await fetch('/api/admin/applications/' + appId + '/delete-note', {
+					method: 'POST',
+					headers: { 'Content-Type': 'application/json' },
+					body: JSON.stringify({ noteId: Number(noteId) }),
+				});
+				if (!res.ok) throw new Error();
+				var li = btn.closest('.note-item');
+				if (li) li.remove();
+			} catch {
+				alert('Failed to delete note. Please try again.');
+			}
+		});
+	}
+
+	document.querySelectorAll('.btn-delete-note').forEach(wireDeleteBtn);
+
+	// ── Delete application ──────────────────────────────────────────
+	document.querySelectorAll('.btn-delete-app').forEach(function (btn) {
+		btn.addEventListener('click', async function () {
+			var appId = btn.getAttribute('data-app-id');
+			if (!confirm('Really delete this application? This cannot be undone.')) return;
+			try {
+				var res = await fetch('/api/admin/applications/' + appId + '/delete', {
+					method: 'POST',
+					headers: { 'Content-Type': 'application/json' },
+				});
+				if (!res.ok) {
+					if (res.status === 403) {
+						alert('You do not have permission to delete applications.');
+					} else {
+						throw new Error();
+					}
+					return;
+				}
+				// Remove the application card from the DOM
+				var card = document.querySelector('#app-' + appId);
+				if (card) {
+					card.remove();
+					// If this was the last active app, reload the page
+					if (!document.querySelector('.app-card:not(.app-card--closed)')) {
+						location.reload();
+					}
+				}
+			} catch {
+				alert('Failed to delete application. Please try again.');
+			}
+		});
+	});
+}());
+</script>

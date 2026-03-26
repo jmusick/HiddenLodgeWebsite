@@ -1,0 +1,93 @@
+﻿---
+export const prerender = false;
+
+import { exchangeCode, getUserInfo, getWowCharacters } from '../../lib/blizzard';
+import { getBlizzardAuthConfig } from '../../lib/runtime-env';
+
+const code  = Astro.url.searchParams.get('code');
+const error = Astro.url.searchParams.get('error');
+
+let characters: Awaited<ReturnType<typeof getWowCharacters>> = [];
+let battletag = '';
+let errorMsg  = '';
+
+if (error) {
+  errorMsg = 'Blizzard login was cancelled or denied.';
+} else if (!code) {
+  errorMsg = 'No authorization code received from Blizzard.';
+} else {
+  try {
+    const { clientId, clientSecret } = getBlizzardAuthConfig();
+    const redirectUri = new URL('/auth/blizzard-callback', Astro.url).toString();
+
+    const { access_token: accessToken } = await exchangeCode(clientId, clientSecret, code, redirectUri);
+
+    const [userInfo, chars] = await Promise.all([
+      getUserInfo(accessToken),
+      getWowCharacters(accessToken),
+    ]);
+
+    battletag = userInfo.battletag;
+    characters = chars.filter(c => c.level >= 10).sort((a, b) => b.level - a.level);
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e);
+    if (msg.includes('missing')) {
+      errorMsg = 'Blizzard OAuth is not configured on this server.';
+    } else if (msg.includes('Token exchange')) {
+      errorMsg = 'Failed to exchange authorization code with Blizzard.';
+    } else {
+      errorMsg = 'An unexpected error occurred during Blizzard login.';
+    }
+  }
+}
+
+const payload = { characters, battletag, error: errorMsg };
+---
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Blizzard Login — Hidden Lodge</title>
+  <style>
+    body {
+      font-family: system-ui, sans-serif;
+      background: #0b1520;
+      color: #d8e2e8;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      margin: 0;
+      text-align: center;
+    }
+    p { max-width: 36ch; line-height: 1.5; }
+    .err { color: #eb7070; }
+  </style>
+</head>
+<body>
+  {errorMsg
+    ? <p class="err">{errorMsg}</p>
+    : <p>Logged in — returning to application form…</p>
+  }
+  <script is:inline define:vars={{ payload }}>
+    if (window.opener && window.opener !== window) {
+      try {
+        window.opener.postMessage(
+          { type: 'blizzard-auth', ...payload },
+          window.location.origin
+        );
+      } catch (_) {}
+      window.close();
+    } else {
+      // Popup was blocked or user navigated directly — stash data and redirect
+      if (!payload.error && payload.characters.length > 0) {
+        try {
+          sessionStorage.setItem('blizzard-chars', JSON.stringify(payload));
+        } catch (_) {}
+      }
+      window.location.replace('/raiding#apply');
+    }
+  </script>
+</body>
+</html>

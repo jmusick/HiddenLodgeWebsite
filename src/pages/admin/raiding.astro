@@ -1,0 +1,774 @@
+---
+export const prerender = false;
+
+import AdminLayout from '../../layouts/AdminLayout.astro';
+import { Icon } from 'astro-icon/components';
+import { env } from 'cloudflare:workers';
+import { fallbackClassIconUrl } from '../../lib/class-icons';
+
+if (!Astro.locals.isAdmin) {
+  return Astro.redirect('/');
+}
+
+interface ContentRow { key: string; content: string; }
+interface AddonRow { id: number; name: string; url: string; sort_order: number; }
+interface NeedRow { id: number; class: string; role: string; priority: string; sort_order: number; }
+
+const [contentResult, addonsResult, needsResult] = await env.DB.batch([
+  env.DB.prepare(`SELECT key, content FROM raiding_content WHERE key IN ('schedule','raid_expectations','recruitment')`),
+  env.DB.prepare(`SELECT id, name, url, sort_order FROM raiding_addons ORDER BY sort_order ASC, id ASC`),
+  env.DB.prepare(`SELECT id, class, role, priority, sort_order FROM recruitment_needs ORDER BY sort_order ASC, id ASC`),
+]);
+
+const contentMap = new Map<string, string>();
+for (const row of (contentResult.results ?? []) as ContentRow[]) {
+  contentMap.set(row.key, row.content);
+}
+
+const addons = (addonsResult.results ?? []) as AddonRow[];
+const needs  = (needsResult.results  ?? []) as NeedRow[];
+
+const nextAddonOrder = (addons.at(-1)?.sort_order ?? 0) + 10;
+const nextNeedOrder  = (needs.at(-1)?.sort_order  ?? 0) + 10;
+
+const statusParam = new URL(Astro.request.url).searchParams.get('status');
+const statusMessages: Record<string, { type: 'ok' | 'error'; text: string }> = {
+  'schedule-updated':         { type: 'ok',    text: 'Schedule saved.' },
+  'raid_expectations-updated':{ type: 'ok',    text: 'Raid Expectations saved.' },
+  'recruitment-updated':      { type: 'ok',    text: 'Recruitment text saved.' },
+  'addon-created':            { type: 'ok',    text: 'Addon added.' },
+  'addon-updated':            { type: 'ok',    text: 'Addon updated.' },
+  'addon-deleted':            { type: 'ok',    text: 'Addon removed.' },
+  'need-created':             { type: 'ok',    text: 'Recruitment need added.' },
+  'need-updated':             { type: 'ok',    text: 'Priority updated.' },
+  'need-deleted':             { type: 'ok',    text: 'Recruitment need removed.' },
+  'error':                    { type: 'error', text: 'Something went wrong. Please try again.' },
+};
+const flash = statusParam ? (statusMessages[statusParam] ?? null) : null;
+
+const WOW_CLASSES = [
+  'Death Knight','Demon Hunter','Druid','Evoker','Hunter',
+  'Mage','Monk','Paladin','Priest','Rogue','Shaman','Warlock','Warrior',
+];
+const WOW_ROLES   = ['Tank','Healer','Ranged DPS','Melee DPS'];
+const PRIORITIES  = [
+  { value: 'low',  label: 'Low' },
+  { value: 'mid',  label: 'Mid' },
+  { value: 'high', label: 'High' },
+];
+
+// Default HTML used when DB is empty (mirrors the hardcoded raiding.astro content)
+const DEFAULT_SCHEDULE = `<ul>
+  <li><strong>Thursday:</strong> 9:00 PM – 12:00 AM Eastern</li>
+  <li><strong>Friday:</strong> 9:00 PM – 12:00 AM Eastern</li>
+  <li>Alt raid nights are common and are a solid way to gear up or mess around on alts, but they are never mandatory.</li>
+</ul>`;
+
+const DEFAULT_EXPECTATIONS = `<ul>
+  <li><strong>Come prepared.</strong> Show up on time, fully enchanted, gemmed, and stocked with your own consumables. The guild provides feasts. We pull at 9:00 PM sharp — not 9:05.</li>
+  <li><strong>Keep comms clean.</strong> During progression, voice chat is reserved for the raid lead, tanks, and officers. The only exception is fights that specifically require call-outs from other roles — you'll be told when that applies.</li>
+  <li><strong>BoE guild tax is 20%.</strong> All BoE drops carry a 20% guild tax. These funds go directly into the guild bank and are returned to raiders in the form of cauldrons, feasts, Vantus runes, and other raid consumables.</li>
+  <li><strong>Benching happens — don't take it personally.</strong> There will be nights where someone sits out due to performance needs or tuning requirements. This is a roster decision, not a personal one. Stay positive and be ready to step back in.</li>
+  <li><strong>Loot is distributed via Loot Council (RC LootCouncil addon required).</strong> Priority goes to raiders who show up on time, fill their Great Vault, and perform. Consistent effort is rewarded. If you fall short on any of those fronts, loot priority reflects that.</li>
+  <li><strong>Sign up for raid.</strong> If you can't make it, post in the attendance channel ahead of time. No-shows with no notice are not acceptable.</li>
+  <li><strong>No alts on progression.</strong> The only exception is if your alt is at a comparable item level to your main AND fills a role the team genuinely needs. This requires officer approval.</li>
+  <li><strong>Want to swap classes?</strong> Reach out to an officer first. If approved, we'll do our best to help you gear it up to a competitive level before bringing it to progression.</li>
+</ul>`;
+
+const DEFAULT_RECRUITMENT = `<p>We recruit players who value consistency, preparation, and a positive progression mindset. Exceptional applicants are always welcome.</p>`;
+
+const scheduleHtml     = contentMap.get('schedule')          || DEFAULT_SCHEDULE;
+const expectationsHtml = contentMap.get('raid_expectations') || DEFAULT_EXPECTATIONS;
+const recruitmentHtml  = contentMap.get('recruitment')       || DEFAULT_RECRUITMENT;
+---
+
+<AdminLayout title="Raiding Content | Admin | The Hidden Lodge">
+  <div class="raiding-admin-page">
+
+    <div class="page-header">
+      <div>
+        <h1>Raiding Content</h1>
+        <p class="page-desc">
+          Edit the panels shown on the public <a href="/raiding" target="_blank">/raiding</a> page.
+          Use the toolbar in each editor for <strong>bold</strong>, <em>italic</em>, lists, and links.
+        </p>
+      </div>
+    </div>
+
+    {flash && (
+      <div class:list={['flash', flash.type === 'ok' ? 'flash-ok' : 'flash-error']} role={flash.type === 'ok' ? 'status' : 'alert'}>
+        {flash.text}
+      </div>
+    )}
+
+    <!-- ── Schedule ──────────────────────────────────────────────────── -->
+    <section class="edit-section">
+      <h2 class="section-title"><Icon name="lucide:calendar-days" aria-hidden="true" class="section-icon" />Schedule</h2>
+      <form method="POST" action="/api/admin/raiding/update-content" class="rich-form" data-editor-key="schedule">
+        <input type="hidden" name="key" value="schedule" />
+        <input type="hidden" name="content" class="rich-output" />
+        <div class="quill-toolbar" id="toolbar-schedule">
+          <span class="ql-formats">
+            <button class="ql-bold"></button>
+            <button class="ql-italic"></button>
+            <button class="ql-underline"></button>
+          </span>
+          <span class="ql-formats">
+            <button class="ql-list" value="ordered"></button>
+            <button class="ql-list" value="bullet"></button>
+          </span>
+          <span class="ql-formats">
+            <button class="ql-link"></button>
+            <button class="ql-clean"></button>
+          </span>
+        </div>
+        <div class="quill-editor" id="editor-schedule" set:html={scheduleHtml}></div>
+        <div class="form-actions">
+          <button type="submit" class="btn btn-primary">Save Schedule</button>
+        </div>
+      </form>
+    </section>
+
+    <!-- ── Raid Expectations ──────────────────────────────────────────── -->
+    <section class="edit-section">
+      <h2 class="section-title"><Icon name="lucide:clipboard-check" aria-hidden="true" class="section-icon" />Raid Expectations</h2>
+      <form method="POST" action="/api/admin/raiding/update-content" class="rich-form" data-editor-key="raid_expectations">
+        <input type="hidden" name="key" value="raid_expectations" />
+        <input type="hidden" name="content" class="rich-output" />
+        <div class="quill-toolbar" id="toolbar-raid_expectations">
+          <span class="ql-formats">
+            <button class="ql-bold"></button>
+            <button class="ql-italic"></button>
+            <button class="ql-underline"></button>
+          </span>
+          <span class="ql-formats">
+            <button class="ql-list" value="ordered"></button>
+            <button class="ql-list" value="bullet"></button>
+          </span>
+          <span class="ql-formats">
+            <button class="ql-link"></button>
+            <button class="ql-clean"></button>
+          </span>
+        </div>
+        <div class="quill-editor" id="editor-raid_expectations" set:html={expectationsHtml}></div>
+        <div class="form-actions">
+          <button type="submit" class="btn btn-primary">Save Expectations</button>
+        </div>
+      </form>
+    </section>
+
+    <!-- ── Required Addons ───────────────────────────────────────────── -->
+    <section class="edit-section">
+      <h2 class="section-title"><Icon name="lucide:puzzle" aria-hidden="true" class="section-icon" />Required Addons</h2>
+      <p class="section-hint">Each entry is a named link pointing to the addon download page.</p>
+
+      <div class="addon-list">
+        {addons.length === 0 && (
+          <p class="empty-state">No addons configured yet. Add one below.</p>
+        )}
+        {addons.map((addon) => (
+          <div class="addon-row">
+            <div class="addon-info">
+              <span class="addon-name">{addon.name}</span>
+              <a href={addon.url} target="_blank" rel="noopener noreferrer" class="addon-url">{addon.url}</a>
+              <span class="addon-order">order: {addon.sort_order}</span>
+            </div>
+            <div class="addon-actions">
+              <details class="edit-panel">
+                <summary class="edit-toggle">Edit</summary>
+                <form method="POST" action="/api/admin/raiding/update-addon" class="edit-form">
+                  <input type="hidden" name="id" value={addon.id} />
+                  <div class="form-row">
+                    <label class="field">
+                      <span class="field-label">Name <span class="required">*</span></span>
+                      <input type="text" name="name" class="input-field" required maxlength="200" value={addon.name} />
+                    </label>
+                    <label class="field field-url">
+                      <span class="field-label">URL <span class="required">*</span></span>
+                      <input type="url" name="url" class="input-field" required maxlength="2000" value={addon.url} />
+                    </label>
+                    <label class="field field-order">
+                      <span class="field-label">Sort Order</span>
+                      <input type="number" name="sort_order" class="input-field" value={addon.sort_order} />
+                    </label>
+                  </div>
+                  <div class="form-actions">
+                    <button type="submit" class="btn btn-primary">Save</button>
+                    <button type="button" class="btn btn-cancel" onclick="this.closest('details').removeAttribute('open')">Cancel</button>
+                  </div>
+                </form>
+              </details>
+              <form method="POST" action="/api/admin/raiding/delete-addon" class="delete-form"
+                onsubmit={`return confirm('Remove addon "${addon.name}"?')`}>
+                <input type="hidden" name="id" value={addon.id} />
+                <button type="submit" class="btn btn-danger btn-sm">Remove</button>
+              </form>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <details class="add-panel">
+        <summary class="add-toggle">+ Add Addon</summary>
+        <form method="POST" action="/api/admin/raiding/create-addon" class="add-form">
+          <div class="form-row">
+            <label class="field">
+              <span class="field-label">Name <span class="required">*</span></span>
+              <input type="text" name="name" class="input-field" required maxlength="200" placeholder="e.g. WeakAuras 2" />
+            </label>
+            <label class="field field-url">
+              <span class="field-label">URL <span class="required">*</span></span>
+              <input type="url" name="url" class="input-field" required maxlength="2000" placeholder="https://www.curseforge.com/..." />
+            </label>
+            <label class="field field-order">
+              <span class="field-label">Sort Order</span>
+              <input type="number" name="sort_order" class="input-field" value={nextAddonOrder} />
+            </label>
+          </div>
+          <button type="submit" class="btn btn-primary">Add Addon</button>
+        </form>
+      </details>
+    </section>
+
+    <!-- ── Recruitment ────────────────────────────────────────────────── -->
+    <section class="edit-section">
+      <h2 class="section-title"><Icon name="lucide:users" aria-hidden="true" class="section-icon" />Recruitment</h2>
+      <form method="POST" action="/api/admin/raiding/update-content" class="rich-form" data-editor-key="recruitment">
+        <input type="hidden" name="key" value="recruitment" />
+        <input type="hidden" name="content" class="rich-output" />
+        <div class="quill-toolbar" id="toolbar-recruitment">
+          <span class="ql-formats">
+            <button class="ql-bold"></button>
+            <button class="ql-italic"></button>
+            <button class="ql-underline"></button>
+          </span>
+          <span class="ql-formats">
+            <button class="ql-list" value="ordered"></button>
+            <button class="ql-list" value="bullet"></button>
+          </span>
+          <span class="ql-formats">
+            <button class="ql-link"></button>
+            <button class="ql-clean"></button>
+          </span>
+        </div>
+        <div class="quill-editor" id="editor-recruitment" set:html={recruitmentHtml}></div>
+        <div class="form-actions">
+          <button type="submit" class="btn btn-primary">Save Recruitment</button>
+        </div>
+      </form>
+    </section>
+
+    <!-- ── Current Needs ──────────────────────────────────────────────── -->
+    <section class="edit-section">
+      <h2 class="section-title"><Icon name="lucide:target" aria-hidden="true" class="section-icon" />Current Needs</h2>
+      <p class="section-hint">
+        Class and role combinations displayed on the public Raiding page under "Current Needs".
+        When the list is empty, a default "not actively recruiting" message is shown.
+      </p>
+
+      <div class="needs-list">
+        {needs.length === 0 && (
+          <p class="empty-state">No active needs. The default "not recruiting" message will be shown.</p>
+        )}
+        {needs.map((need) => (
+          <div class="need-row">
+            <div class="need-chips">
+              {(() => { const iconUrl = fallbackClassIconUrl(need.class); return iconUrl ? <img src={iconUrl} alt="" aria-hidden="true" class="need-class-icon" loading="lazy" decoding="async" /> : null; })()}
+              <span class={`class-chip class-${need.class.toLowerCase().replace(/\s+/g, '-')}`}>{need.class}</span>
+              <span class="role-chip">{need.role}</span>
+              <span class={`priority-chip priority-${need.priority}`}>{need.priority.charAt(0).toUpperCase() + need.priority.slice(1)}</span>
+            </div>
+            <div class="need-actions">
+              <details class="edit-panel edit-panel-need">
+                <summary class="edit-toggle">Priority</summary>
+                <form method="POST" action="/api/admin/raiding/update-need" class="priority-form">
+                  <input type="hidden" name="id" value={need.id} />
+                  <select name="priority" class="input-field select-sm">
+                    {PRIORITIES.map((p) => (
+                      <option value={p.value} selected={need.priority === p.value}>{p.label}</option>
+                    ))}
+                  </select>
+                  <button type="submit" class="btn btn-primary btn-sm">Save</button>
+                </form>
+              </details>
+              <form method="POST" action="/api/admin/raiding/delete-need" class="delete-form"
+                onsubmit={`return confirm('Remove ${need.class} ${need.role}?')`}>
+                <input type="hidden" name="id" value={need.id} />
+                <button type="submit" class="btn btn-danger btn-sm">Remove</button>
+              </form>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <details class="add-panel">
+        <summary class="add-toggle">+ Add Need</summary>
+        <form method="POST" action="/api/admin/raiding/create-need" class="add-form">
+          <div class="form-row">
+            <label class="field">
+              <span class="field-label">Class <span class="required">*</span></span>
+              <select name="class" class="input-field" required>
+                {WOW_CLASSES.map((c) => (
+                  <option value={c}>{c}</option>
+                ))}
+              </select>
+            </label>
+            <label class="field">
+              <span class="field-label">Role <span class="required">*</span></span>
+              <select name="role" class="input-field" required>
+                {WOW_ROLES.map((r) => (
+                  <option value={r}>{r}</option>
+                ))}
+              </select>
+            </label>
+            <label class="field field-order-sm">
+              <span class="field-label">Priority</span>
+              <select name="priority" class="input-field">
+                {PRIORITIES.map((p) => (
+                  <option value={p.value} selected={p.value === 'mid'}>{p.label}</option>
+                ))}
+              </select>
+            </label>
+            <label class="field field-order">
+              <span class="field-label">Sort Order</span>
+              <input type="number" name="sort_order" class="input-field" value={nextNeedOrder} />
+            </label>
+          </div>
+          <button type="submit" class="btn btn-primary">Add Need</button>
+        </form>
+      </details>
+    </section>
+
+  </div>
+</AdminLayout>
+
+<!-- Quill 2 from CDN -->
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/quill@2.0.3/dist/quill.snow.css" />
+
+<script is:inline src="https://cdn.jsdelivr.net/npm/quill@2.0.3/dist/quill.js"></script>
+
+<script is:inline>
+  (function () {
+    const EDITOR_KEYS = ['schedule', 'raid_expectations', 'recruitment'];
+
+    EDITOR_KEYS.forEach(function (key) {
+      const editorEl  = document.getElementById('editor-' + key);
+      const toolbarEl = document.getElementById('toolbar-' + key);
+      const form      = editorEl && editorEl.closest('form');
+      if (!editorEl || !toolbarEl || !form) return;
+
+      const quill = new Quill(editorEl, {
+        theme: 'snow',
+        modules: { toolbar: toolbarEl },
+      });
+
+      form.addEventListener('submit', function (e) {
+        const output = form.querySelector('.rich-output');
+        if (output) {
+          output.value = quill.getSemanticHTML();
+        }
+      });
+    });
+  })();
+</script>
+
+<style is:global>
+  /* Override Quill snow theme for the dark admin skin */
+  .ql-toolbar.ql-snow {
+    border: 1px solid rgba(214, 176, 106, 0.35) !important;
+    border-bottom: none !important;
+    border-radius: 0.4rem 0.4rem 0 0;
+    background: rgba(7, 17, 26, 0.6);
+  }
+
+  .ql-container.ql-snow {
+    border: 1px solid rgba(214, 176, 106, 0.35) !important;
+    border-radius: 0 0 0.4rem 0.4rem;
+    background: rgba(7, 17, 26, 0.55);
+    color: #d8e2e8;
+    font-family: var(--font-body, system-ui, sans-serif);
+    font-size: 0.92rem;
+    min-height: 8rem;
+  }
+
+  .ql-editor { min-height: 8rem; padding: 0.6rem 0.8rem; }
+  .ql-editor.ql-blank::before { color: rgba(180, 190, 200, 0.4); font-style: italic; }
+
+  .ql-toolbar.ql-snow .ql-stroke { stroke: #c4b07a !important; }
+  .ql-toolbar.ql-snow .ql-fill  { fill:   #c4b07a !important; }
+  .ql-toolbar.ql-snow button:hover .ql-stroke { stroke: #f3e2be !important; }
+  .ql-toolbar.ql-snow button:hover .ql-fill   { fill:   #f3e2be !important; }
+  .ql-toolbar.ql-snow button.ql-active .ql-stroke { stroke: #ffd97d !important; }
+  .ql-toolbar.ql-snow button.ql-active .ql-fill   { fill:   #ffd97d !important; }
+
+  .ql-snow .ql-picker { color: #c4b07a !important; }
+  .ql-snow .ql-picker-options {
+    background: #1a1008 !important;
+    border: 1px solid rgba(214, 176, 106, 0.35) !important;
+  }
+
+  /* Quill link tooltip dark override */
+  .ql-snow .ql-tooltip {
+    background: #0e1a26 !important;
+    border: 1px solid rgba(214, 176, 106, 0.4) !important;
+    color: #d8e2e8 !important;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.5) !important;
+  }
+  .ql-snow .ql-tooltip input[type=text] {
+    background: rgba(7,17,26,0.8) !important;
+    border: 1px solid rgba(214,176,106,0.3) !important;
+    color: #d8e2e8 !important;
+    border-radius: 0.25rem;
+  }
+  .ql-snow .ql-tooltip a.ql-action,
+  .ql-snow .ql-tooltip a.ql-remove {
+    color: #c4b07a !important;
+  }
+
+  /* Editor content prose */
+  .ql-editor ul, .ql-editor ol { padding-left: 1.4em; }
+  .ql-editor li { margin-bottom: 0.35em; }
+  .ql-editor a { color: #f0d39d; text-decoration: underline; }
+</style>
+
+<style>
+  .raiding-admin-page {
+    display: flex;
+    flex-direction: column;
+    gap: 2rem;
+  }
+
+  /* ── Page header ──────────────────────────────────────────────────── */
+  .page-header h1 {
+    margin: 0 0 0.35rem;
+    font-size: 1.75rem;
+    color: var(--gold-bright);
+  }
+
+  .page-desc {
+    margin: 0;
+    color: var(--muted);
+    font-size: 0.95rem;
+  }
+
+  .page-desc a { color: var(--gold); text-decoration: underline; }
+
+  /* ── Flash ──────────────────────────────────────────────────────── */
+  .flash {
+    padding: 0.6rem 1rem;
+    border-radius: 0.4rem;
+    font-size: 0.95rem;
+    font-weight: 600;
+  }
+  .flash-ok    { background: rgba(0,180,80,0.12);  border: 1px solid rgba(0,180,80,0.4);  color: #6fdb91; }
+  .flash-error { background: rgba(180,30,30,0.12); border: 1px solid rgba(180,30,30,0.4); color: #f47e7e; }
+
+  /* ── Edit sections ────────────────────────────────────────────────── */
+  .edit-section {
+    background: var(--bg-panel, rgba(11,21,32,0.78));
+    border: 1px solid rgba(214,176,106,0.22);
+    border-radius: 0.6rem;
+    padding: 1.25rem 1.25rem 1rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.8rem;
+  }
+
+  .section-title {
+    margin: 0;
+    font-size: 1.15rem;
+    color: var(--gold-bright, #e4c27a);
+    display: inline-flex;
+    align-items: center;
+    gap: 0.45rem;
+  }
+
+  .section-icon { width: 1rem; height: 1rem; }
+
+  .section-hint {
+    margin: 0;
+    font-size: 0.88rem;
+    color: var(--muted, #7a8fa0);
+  }
+
+  /* ── Rich form ────────────────────────────────────────────────────── */
+  .rich-form { display: flex; flex-direction: column; gap: 0; }
+
+  .form-actions {
+    margin-top: 0.75rem;
+    display: flex;
+    gap: 0.5rem;
+    align-items: center;
+  }
+
+  /* ── Shared buttons ───────────────────────────────────────────────── */
+  .btn {
+    border-radius: 0.4rem;
+    font-size: 0.88rem;
+    font-weight: 600;
+    padding: 0.42rem 0.9rem;
+    cursor: pointer;
+    transition: background 120ms ease, border-color 120ms ease;
+    border: 1px solid transparent;
+  }
+
+  .btn-primary {
+    background: rgba(214,176,106,0.18);
+    border-color: rgba(214,176,106,0.55);
+    color: #f3e2be;
+  }
+  .btn-primary:hover { background: rgba(214,176,106,0.28); }
+
+  .btn-danger  { background: rgba(180,30,30,0.2); border-color: rgba(180,30,30,0.5); color: #f47e7e; }
+  .btn-danger:hover { background: rgba(180,30,30,0.32); }
+
+  .btn-cancel  { background: transparent; border-color: rgba(214,176,106,0.22); color: var(--muted); }
+  .btn-cancel:hover { border-color: rgba(214,176,106,0.4); }
+
+  .btn-sm { padding: 0.28rem 0.6rem; font-size: 0.8rem; }
+
+  /* ── Form fields ──────────────────────────────────────────────────── */
+  .form-row {
+    display: flex;
+    gap: 0.75rem;
+    flex-wrap: wrap;
+    align-items: flex-end;
+  }
+
+  .field {
+    display: flex;
+    flex-direction: column;
+    gap: 0.3rem;
+    flex: 1;
+    min-width: 10rem;
+  }
+
+  .field-url      { flex: 2; min-width: 16rem; }
+  .field-order    { max-width: 8rem; min-width: 6rem; }
+  .field-order-sm { max-width: 9rem; min-width: 7rem; }
+
+  .field-label {
+    font-size: 0.75rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--muted);
+  }
+
+  .required { color: #f47e7e; }
+
+  .input-field {
+    background: rgba(7,17,26,0.7);
+    border: 1px solid rgba(214,176,106,0.3);
+    border-radius: 0.35rem;
+    color: var(--text, #d8e2e8);
+    font-family: var(--font-body, system-ui);
+    font-size: 0.88rem;
+    padding: 0.35rem 0.55rem;
+    outline: none;
+    transition: border-color 140ms ease;
+    width: 100%;
+    box-sizing: border-box;
+  }
+  .input-field:focus { border-color: rgba(214,176,106,0.65); }
+
+  .select-sm { max-width: 8rem; }
+
+  /* ── Addon list ───────────────────────────────────────────────────── */
+  .addon-list { display: flex; flex-direction: column; gap: 0; }
+
+  .addon-row {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 0.75rem;
+    padding: 0.55rem 0;
+    border-top: 1px solid rgba(214,176,106,0.1);
+    flex-wrap: wrap;
+  }
+  .addon-row:first-child { border-top: none; }
+
+  .addon-info {
+    display: flex;
+    align-items: baseline;
+    gap: 0.75rem;
+    flex-wrap: wrap;
+    min-width: 0;
+    flex: 1;
+  }
+
+  .addon-name  { font-weight: 600; color: var(--gold-bright, #e4c27a); font-size: 0.92rem; }
+  .addon-url   { font-size: 0.82rem; color: var(--muted); text-decoration: underline; word-break: break-all; }
+  .addon-order { font-size: 0.75rem; color: var(--muted); opacity: 0.7; }
+
+  .addon-actions {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    flex-shrink: 0;
+  }
+
+  /* ── Edit panel (inline details) ─────────────────────────────────── */
+  .edit-panel { position: relative; }
+
+  .edit-toggle {
+    font-size: 0.8rem;
+    font-weight: 600;
+    color: var(--muted);
+    cursor: pointer;
+    list-style: none;
+    padding: 0.28rem 0.6rem;
+    border: 1px solid rgba(214,176,106,0.22);
+    border-radius: 0.35rem;
+    transition: color 120ms ease, border-color 120ms ease;
+  }
+  .edit-toggle:hover { color: var(--text); border-color: rgba(214,176,106,0.4); }
+
+  .edit-form {
+    margin-top: 0.5rem;
+    padding: 0.75rem;
+    background: rgba(7,17,26,0.5);
+    border: 1px solid rgba(214,176,106,0.18);
+    border-radius: 0.4rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+  }
+
+  .edit-panel-need {
+    display: flex;
+    flex-direction: column;
+  }
+
+  /* ── Add panel ────────────────────────────────────────────────────── */
+  .add-panel {
+    border: 1px dashed rgba(214,176,106,0.3);
+    border-radius: 0.5rem;
+    overflow: hidden;
+    margin-top: 0.5rem;
+  }
+
+  .add-toggle {
+    display: block;
+    padding: 0.55rem 1rem;
+    font-size: 0.88rem;
+    font-weight: 700;
+    color: var(--gold, #d6b06a);
+    cursor: pointer;
+    list-style: none;
+    user-select: none;
+    transition: background 140ms ease;
+  }
+  .add-toggle:hover { background: rgba(214,176,106,0.06); }
+  .add-panel[open] .add-toggle { border-bottom: 1px solid rgba(214,176,106,0.15); }
+
+  .add-form {
+    padding: 0.75rem 1rem 1rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+  }
+
+  /* ── Needs list ───────────────────────────────────────────────────── */
+  .needs-list { display: flex; flex-direction: column; gap: 0.5rem; }
+
+  .need-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+    flex-wrap: wrap;
+    padding: 0.5rem 0.75rem;
+    background: rgba(7,17,26,0.35);
+    border: 1px solid rgba(214,176,106,0.12);
+    border-radius: 0.45rem;
+  }
+
+  .need-chips { display: flex; align-items: center; gap: 0.45rem; flex-wrap: wrap; }
+
+  .need-class-icon {
+    width: 1.3rem;
+    height: 1.3rem;
+    border-radius: 50%;
+    border: 1px solid rgba(214, 176, 106, 0.3);
+    background: rgba(4, 10, 16, 0.85);
+    object-fit: cover;
+    flex-shrink: 0;
+  }
+
+  .need-actions {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    flex-shrink: 0;
+  }
+
+  .priority-form {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    margin-top: 0.35rem;
+  }
+
+  /* ── Class chips ──────────────────────────────────────────────────── */
+  .class-chip {
+    display: inline-block;
+    padding: 0.2rem 0.6rem;
+    border-radius: 0.3rem;
+    font-size: 0.8rem;
+    font-weight: 700;
+    background: rgba(255,255,255,0.08);
+    color: #d8e2e8;
+    border: 1px solid rgba(255,255,255,0.12);
+  }
+
+  /* WoW class colors */
+  .class-death-knight   { background: rgba(196,31,59,0.2);  border-color: rgba(196,31,59,0.5);  color: #c41f3b; }
+  .class-demon-hunter   { background: rgba(163,48,201,0.2); border-color: rgba(163,48,201,0.5); color: #a330c9; }
+  .class-druid          { background: rgba(255,125,10,0.2); border-color: rgba(255,125,10,0.5); color: #ff7d0a; }
+  .class-evoker         { background: rgba(51,147,127,0.2); border-color: rgba(51,147,127,0.5); color: #33937f; }
+  .class-hunter         { background: rgba(169,210,113,0.2);border-color: rgba(169,210,113,0.5);color: #a9d271; }
+  .class-mage           { background: rgba(105,204,240,0.2);border-color: rgba(105,204,240,0.5);color: #69ccf0; }
+  .class-monk           { background: rgba(0,255,150,0.2);  border-color: rgba(0,255,150,0.5);  color: #00ff96; }
+  .class-paladin        { background: rgba(245,140,186,0.2);border-color: rgba(245,140,186,0.5);color: #f58cba; }
+  .class-priest         { background: rgba(210,210,210,0.2);border-color: rgba(210,210,210,0.5);color: #d2d2d2; }
+  .class-rogue          { background: rgba(255,245,105,0.2);border-color: rgba(255,245,105,0.5);color: #fff569; }
+  .class-shaman         { background: rgba(0,112,222,0.2);  border-color: rgba(0,112,222,0.5);  color: #0070de; }
+  .class-warlock        { background: rgba(148,130,201,0.2);border-color: rgba(148,130,201,0.5);color: #9482c9; }
+  .class-warrior        { background: rgba(199,156,110,0.2);border-color: rgba(199,156,110,0.5);color: #c79c6e; }
+
+  /* ── Role & priority chips ────────────────────────────────────────── */
+  .role-chip {
+    display: inline-block;
+    padding: 0.2rem 0.55rem;
+    border-radius: 0.3rem;
+    font-size: 0.78rem;
+    font-weight: 600;
+    background: rgba(214,176,106,0.1);
+    border: 1px solid rgba(214,176,106,0.3);
+    color: #d6b06a;
+  }
+
+  .priority-chip {
+    display: inline-block;
+    padding: 0.18rem 0.55rem;
+    border-radius: 0.3rem;
+    font-size: 0.75rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+  .priority-low  { background: rgba(80,160,80,0.15);  border: 1px solid rgba(80,160,80,0.4);  color: #7ecb7e; }
+  .priority-mid  { background: rgba(200,160,40,0.15); border: 1px solid rgba(200,160,40,0.4); color: #e0c060; }
+  .priority-high { background: rgba(200,60,60,0.15);  border: 1px solid rgba(200,60,60,0.4);  color: #eb7070; }
+
+  /* ── Empty / delete ───────────────────────────────────────────────── */
+  .empty-state {
+    margin: 0;
+    font-size: 0.88rem;
+    color: var(--muted);
+    font-style: italic;
+  }
+
+  .delete-form { display: inline; }
+</style>

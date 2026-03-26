@@ -22,6 +22,8 @@ export async function GET(context: APIContext): Promise<Response> {
 		});
 	}
 
+	const isPopup = state.startsWith('popup:');
+
 	let authConfig;
 	try {
 		authConfig = getBlizzardAuthConfig();
@@ -91,10 +93,39 @@ export async function GET(context: APIContext): Promise<Response> {
 				.run();
 		}
 
+		// Create session for both popup and regular flows
 		const sessionId = await createSession(env.DB, user.id);
+		const sessionCookie = makeSessionCookie(sessionId);
+		const clearState = 'hl_oauth_state=; HttpOnly; Path=/; Max-Age=0; SameSite=Lax';
+
+		if (isPopup) {
+			// Popup flow: return HTML that postMessages session ID and battletag to parent
+			// Parent will set the cookie, update button, and reload
+			const html = `<!DOCTYPE html><html><head><title>Blizzard Login</title>
+<style>body{font-family:sans-serif;background:#0b1520;color:#d8e2e8;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0}</style>
+</head><body><p>Logged in — returning to application form…</p>
+<script>(function(){
+var sessionId = '${sessionId}';
+var battletag = '${blizzardUser.battletag}';
+if(window.opener && window.opener !== window) {
+  try{
+    window.opener.postMessage({type:'blizzard-auth',battletag:battletag,characters:[],sessionId:sessionId},window.location.origin);
+  }catch(_){}
+  setTimeout(function(){window.close();},500);
+}
+})();<\/script></body></html>`;
+
+			return new Response(html, {
+				status: 200,
+				headers: {
+					'Content-Type': 'text/html;charset=utf-8',
+					'Set-Cookie': clearState,
+				},
+			});
+		}
 
 		const resHeaders = new Headers({ Location: '/profile' });
-		resHeaders.append('Set-Cookie', makeSessionCookie(sessionId));
+		resHeaders.append('Set-Cookie', sessionCookie);
 		// Clear the state cookie
 		resHeaders.append('Set-Cookie', 'hl_oauth_state=; HttpOnly; Path=/; Max-Age=0; SameSite=Lax');
 

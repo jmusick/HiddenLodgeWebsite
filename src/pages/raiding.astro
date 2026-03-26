@@ -1,7 +1,9 @@
----
+﻿---
 import Layout from '../layouts/Layout.astro';
 import { Icon } from 'astro-icon/components';
 import { env } from 'cloudflare:workers';
+import { fallbackClassIconUrl } from '../lib/class-icons';
+import { getSessionUser } from '../lib/auth';
 
 interface RecentGuildLog {
   title: string;
@@ -283,6 +285,67 @@ async function loadRecentGuildLogs(limit = 5): Promise<RecentLogsResult> {
 
 const recentLogsResult = await loadRecentGuildLogs(5);
 const recentLogs = recentLogsResult.logs;
+
+// ── Raiding page editable content ──────────────────────────────────────────
+interface RaidingContentRow { key: string; content: string; }
+interface RaidingAddonRow   { id: number; name: string; url: string; sort_order: number; }
+interface RecruitmentNeedRow { id: number; class: string; role: string; priority: string; }
+
+const [raidingContentResult, raidingAddonsResult, recruitmentNeedsResult] = await env.DB.batch([
+  env.DB.prepare(`SELECT key, content FROM raiding_content WHERE key IN ('schedule','raid_expectations','recruitment')`),
+  env.DB.prepare(`SELECT id, name, url, sort_order FROM raiding_addons ORDER BY sort_order ASC, id ASC`),
+  env.DB.prepare(`SELECT id, class, role, priority FROM recruitment_needs ORDER BY sort_order ASC, id ASC`),
+]);
+
+const raidingContentMap = new Map<string, string>();
+for (const row of (raidingContentResult.results ?? []) as RaidingContentRow[]) {
+  if (row.content.trim()) raidingContentMap.set(row.key, row.content);
+}
+
+const raidingAddons = (raidingAddonsResult.results ?? []) as RaidingAddonRow[];
+const recruitmentNeeds = (recruitmentNeedsResult.results ?? []) as RecruitmentNeedRow[];
+
+const scheduleHtml     = raidingContentMap.get('schedule')          ?? '';
+const expectationsHtml = raidingContentMap.get('raid_expectations') ?? '';
+const recruitmentHtml  = raidingContentMap.get('recruitment')       ?? '';
+
+const blizzardClientId = readEnv('BLIZZARD_CLIENT_ID') ?? '';
+
+// Check if logged-in Blizzard user has a matching application
+const sessionUser = await getSessionUser(env.DB, Astro.request);
+let myApplication: { id: number; status: string } | null = null;
+if (sessionUser) {
+  const appRow = await env.DB.prepare(
+    `SELECT a.id, a.status
+     FROM applications a
+     WHERE (
+       (a.battletag != '' AND LOWER(a.battletag) = LOWER(?))
+       OR EXISTS (
+         SELECT 1 FROM application_characters ac
+         JOIN characters c ON LOWER(c.name) = LOWER(ac.char_name) AND c.realm_slug = ac.realm_slug
+         WHERE ac.application_id = a.id AND c.user_id = ?
+       )
+     )
+     ORDER BY a.submitted_at DESC
+     LIMIT 1`
+  ).bind(sessionUser.battleTag, sessionUser.id).first<{ id: number; status: string }>();
+  myApplication = appRow ?? null;
+}
+
+const APP_STATUS_LABELS: Record<string, string> = {
+  received:  'Received — we\'ll review your application soon.',
+  reviewed:  'Reviewed — an officer has looked over your application.',
+  contacted: 'Contacted — check your Discord, an officer has reached out!',
+  rejected:  'Not a fit right now — thank you for your interest in The Hidden Lodge.',
+  trial:     'Trial — welcome! Check Discord for next steps.',
+};
+const APP_STATUS_THEME: Record<string, string> = {
+  received:  'blue',
+  reviewed:  'amber',
+  contacted: 'purple',
+  rejected:  'red',
+  trial:     'green',
+};
 ---
 
 <Layout title="The Hidden Lodge | Raiding" description="Raid schedule and expectations for The Hidden Lodge.">
@@ -298,99 +361,44 @@ const recentLogs = recentLogsResult.logs;
     <div class="raiding-column">
       <section class="panel">
         <h2 class="title-row"><Icon name="lucide:calendar-days" class="title-icon" aria-hidden="true" />Schedule</h2>
-        <ul>
-          <li><strong>Thursday:</strong> 9:00 PM – 12:00 AM Eastern</li>
-          <li><strong>Friday:</strong> 9:00 PM – 12:00 AM Eastern</li>
-          <li>Alt raid nights are common and are a solid way to gear up or mess around on alts, but they are never mandatory.</li>
-        </ul>
+        {scheduleHtml ? (
+          <div class="rich-content" set:html={scheduleHtml} />
+        ) : (
+          <ul>
+            <li><strong>Thursday:</strong> 9:00 PM – 12:00 AM Eastern</li>
+            <li><strong>Friday:</strong> 9:00 PM – 12:00 AM Eastern</li>
+            <li>Alt raid nights are common and are a solid way to gear up or mess around on alts, but they are never mandatory.</li>
+          </ul>
+        )}
       </section>
 
       <section class="panel">
         <h2 class="title-row"><Icon name="lucide:clipboard-check" class="title-icon" aria-hidden="true" />Raid Expectations</h2>
-        <ul>
-          <li>
-            <strong>Come prepared.</strong> Show up on time, fully enchanted, gemmed, and stocked with your own
-            consumables. The guild provides feasts. We pull at 9:00 PM sharp — not 9:05.
-          </li>
-          <li>
-            <strong>Keep comms clean.</strong> During progression, voice chat is reserved for the raid lead,
-            tanks, and officers. The only exception is fights that specifically require call-outs from other
-            roles — you'll be told when that applies.
-          </li>
-          <li>
-            <strong>BoE guild tax is 20%.</strong> All BoE drops carry a 20% guild tax. These funds go directly
-            into the guild bank and are returned to raiders in the form of cauldrons, feasts, Vantus runes, and
-            other raid consumables.
-          </li>
-          <li>
-            <strong>Benching happens — don't take it personally.</strong> There will be nights where someone sits
-            out due to performance needs or tuning requirements. This is a roster decision, not a personal one.
-            Stay positive and be ready to step back in.
-          </li>
-          <li>
-            <strong>Loot is distributed via Loot Council (RC LootCouncil addon required).</strong> Priority goes
-            to raiders who show up on time, fill their Great Vault, and perform. Consistent effort is rewarded.
-            If you fall short on any of those fronts, loot priority reflects that.
-          </li>
-          <li>
-            <strong>Sign up for raid.</strong> If you can't make it, post in the attendance channel ahead of
-            time. No-shows with no notice are not acceptable.
-          </li>
-          <li>
-            <strong>No alts on progression.</strong> The only exception is if your alt is at a comparable item
-            level to your main AND fills a role the team genuinely needs. This requires officer approval.
-          </li>
-          <li>
-            <strong>Want to swap classes?</strong> Reach out to an officer first. If approved, we'll do our
-            best to help you gear it up to a competitive level before bringing it to progression.
-          </li>
-        </ul>
+        {expectationsHtml ? (
+          <div class="rich-content" set:html={expectationsHtml} />
+        ) : (
+          <ul>
+            <li><strong>Come prepared.</strong> Show up on time, fully enchanted, gemmed, and stocked with your own consumables. The guild provides feasts. We pull at 9:00 PM sharp — not 9:05.</li>
+            <li><strong>Keep comms clean.</strong> During progression, voice chat is reserved for the raid lead, tanks, and officers. The only exception is fights that specifically require call-outs from other roles — you'll be told when that applies.</li>
+            <li><strong>BoE guild tax is 20%.</strong> All BoE drops carry a 20% guild tax. These funds go directly into the guild bank and are returned to raiders in the form of cauldrons, feasts, Vantus runes, and other raid consumables.</li>
+            <li><strong>Benching happens — don't take it personally.</strong> There will be nights where someone sits out due to performance needs or tuning requirements. This is a roster decision, not a personal one. Stay positive and be ready to step back in.</li>
+            <li><strong>Loot is distributed via Loot Council (RC LootCouncil addon required).</strong> Priority goes to raiders who show up on time, fill their Great Vault, and perform. Consistent effort is rewarded. If you fall short on any of those fronts, loot priority reflects that.</li>
+            <li><strong>Sign up for raid.</strong> If you can't make it, post in the attendance channel ahead of time. No-shows with no notice are not acceptable.</li>
+            <li><strong>No alts on progression.</strong> The only exception is if your alt is at a comparable item level to your main AND fills a role the team genuinely needs. This requires officer approval.</li>
+            <li><strong>Want to swap classes?</strong> Reach out to an officer first. If approved, we'll do our best to help you gear it up to a competitive level before bringing it to progression.</li>
+          </ul>
+        )}
       </section>
 
       <section class="panel">
         <h2 class="title-row"><Icon name="lucide:puzzle" class="title-icon" aria-hidden="true" />Required Addons</h2>
         <ul class="addon-links">
-          <li>
-            <a href="https://www.curseforge.com/wow/addons/deadly-boss-mods" target="_blank" rel="noopener noreferrer">
-              Deadly Boss Mods
-            </a>
-          </li>
-          <li>
-            <a href="https://www.curseforge.com/wow/addons/method-raid-tools" target="_blank" rel="noopener noreferrer">
-              Method Raid Tools
-            </a>
-          </li>
-          <li>
-            <a href="https://www.curseforge.com/wow/addons/northern-sky-raid-tools" target="_blank" rel="noopener noreferrer">
-              Northern Sky Raid Tools
-            </a>
-          </li>
-          <li>
-            <a href="https://www.curseforge.com/wow/addons/rclootcouncil" target="_blank" rel="noopener noreferrer">
-              RCLootCouncil
-            </a>
-          </li>
+          {raidingAddons.map((addon) => (
+            <li>
+              <a href={addon.url} target="_blank" rel="noopener noreferrer">{addon.name}</a>
+            </li>
+          ))}
         </ul>
-      </section>
-    </div>
-
-    <div class="raiding-column">
-      <section class="panel" id="recruitment">
-        <h2 class="title-row"><Icon name="lucide:users" class="title-icon" aria-hidden="true" />Recruitment</h2>
-        <p class="panel-text">
-          We recruit players who value consistency, preparation, and a positive progression mindset.
-          Exceptional applicants are always welcome.
-        </p>
-      </section>
-
-      <section class="panel">
-        <h2 class="title-row"><Icon name="lucide:target" class="title-icon" aria-hidden="true" />Current Needs</h2>
-        <p class="panel-text">We are not actively recruiting for any specific class or role at this time. However, we are always open to exceptional players who bring skill, dedication, and a great attitude.</p>
-      </section>
-
-      <section class="panel">
-        <h2 class="title-row"><Icon name="lucide:scroll-text" class="title-icon" aria-hidden="true" />How to Apply</h2>
-        <p class="panel-text">Head to our <a href="https://raider.io/guilds/us/illidan/Hidden%20Lodge/" target="_blank" rel="noopener noreferrer">Raider.IO guild page</a> and submit an application through there.</p>
       </section>
 
       <section class="panel recent-logs-panel">
@@ -407,11 +415,10 @@ const recentLogs = recentLogsResult.logs;
                 <li>
                   <a href={log.url} target="_blank" rel="noopener noreferrer">{log.title}</a>
                   {recentLogsResult.hasMetadata && (log.owner || log.publishedLabel) && (
-                    <p class="recent-log-meta">
-                      {log.owner && <span>By {log.owner}</span>}
-                      {log.owner && log.publishedLabel && <span aria-hidden="true"> • </span>}
-                      {log.publishedLabel && <span>Published {log.publishedLabel}</span>}
-                    </p>
+                    <span class="recent-log-meta">
+                      {log.owner && <span> — {log.owner}</span>}
+                      {log.publishedLabel && <span>, {log.publishedLabel}</span>}
+                    </span>
                   )}
                 </li>
               ))}
@@ -421,6 +428,150 @@ const recentLogs = recentLogsResult.logs;
             )}
           </>
         )}
+      </section>
+    </div>
+
+    <div class="raiding-column">
+      <section class="panel" id="recruitment">
+        <h2 class="title-row"><Icon name="lucide:users" class="title-icon" aria-hidden="true" />Recruitment</h2>
+        {recruitmentHtml ? (
+          <div class="rich-content" set:html={recruitmentHtml} />
+        ) : (
+          <p class="panel-text">
+            We recruit players who value consistency, preparation, and a positive progression mindset.
+            Exceptional applicants are always welcome.
+          </p>
+        )}
+      </section>
+
+      <section class="panel">
+        <h2 class="title-row"><Icon name="lucide:target" class="title-icon" aria-hidden="true" />Current Needs</h2>
+        {recruitmentNeeds.length === 0 ? (
+          <p class="panel-text">We are not actively recruiting for any specific class or role at this time. However, we are always open to exceptional players who bring skill, dedication, and a great attitude.</p>
+        ) : (
+          <div class="needs-table">
+            <div class="needs-row needs-row--header">
+              <span class="needs-col-header">Class</span>
+              <span class="needs-col-header">Role</span>
+              <span class="needs-col-header">Need</span>
+            </div>
+            {recruitmentNeeds.map((need) => {
+              const iconUrl = fallbackClassIconUrl(need.class);
+              return (
+                <div class="needs-row">
+                  <span class="need-class-identity">
+                    {iconUrl && (
+                      <img src={iconUrl} alt="" aria-hidden="true" class="need-class-icon" loading="lazy" decoding="async" />
+                    )}
+                    <span class="need-class-name">{need.class}</span>
+                  </span>
+                  <span class="need-role">{need.role}</span>
+                  <span class={`need-priority need-priority--${need.priority}`}>
+                    {need.priority.charAt(0).toUpperCase() + need.priority.slice(1)}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+        )}
+        <p class="needs-footnote">We always welcome applications from exceptional and highly qualified players, regardless of current needs.</p>
+      </section>
+
+      <section class="panel" id="apply">
+        <h2 class="title-row"><Icon name="lucide:scroll-text" class="title-icon" aria-hidden="true" />How to Apply</h2>
+        <p class="apply-intro">Fill out the form below and we&rsquo;ll review your application and reach out in game or through Discord using the contact information you provide.</p>
+
+        {myApplication && (
+          <div class={`app-status-banner app-status-banner--${APP_STATUS_THEME[myApplication.status]}`}>
+            <strong>Your application status:</strong> {APP_STATUS_LABELS[myApplication.status] ?? myApplication.status}
+          </div>
+        )}
+
+        <form class="apply-form" id="apply-form" novalidate>
+
+          <fieldset class="apply-fieldset">
+            <legend class="apply-legend">Contact</legend>
+            <div class="form-row">
+              <label for="discord-name" class="form-label">Discord Username</label>
+              <input type="text" id="discord-name" name="discord" class="form-input" placeholder="Username" autocomplete="off" spellcheck="false" />
+            </div>
+          </fieldset>
+
+          <fieldset class="apply-fieldset">
+            <legend class="apply-legend">About You</legend>
+            <div class="form-row">
+              <label for="raid-history" class="form-label">Raid History</label>
+              <textarea id="raid-history" name="raid_history" class="form-input form-textarea" rows="2" placeholder="Briefly summarize your raiding experience — progression tiers, roles, guilds…"></textarea>
+            </div>
+            <div class="form-row">
+              <label for="wow-goals" class="form-label">Goals in WoW</label>
+              <textarea id="wow-goals" name="wow_goals" class="form-input form-textarea" rows="2" placeholder="What are you looking to accomplish in WoW?"></textarea>
+            </div>
+          </fieldset>
+
+          <fieldset class="apply-fieldset">
+            <legend class="apply-legend">WoW Info</legend>
+
+            <div class="form-row">
+              <label for="battletag" class="form-label">Battle.net Tag</label>
+              <div class="battletag-row">
+                <input type="text" id="battletag" name="battletag" class="form-input" placeholder="YourName#1234 (required)" autocomplete="off" spellcheck="false" />
+                <span class="battletag-or">or</span>
+                <button type="button" class="btn-blizzard" id="blizzard-login-btn"
+                  data-client-id={blizzardClientId}
+                  title={blizzardClientId ? 'Login with Blizzard to auto-fill your characters' : 'Blizzard OAuth not configured'}
+                  disabled={!blizzardClientId || undefined}>
+                  <svg class="blizzard-icon" viewBox="0 0 24 24" aria-hidden="true" fill="currentColor" xmlns="http://www.w3.org/2000/svg"><path d="M12 2C6.477 2 2 6.477 2 12s4.477 10 10 10 10-4.477 10-10S17.523 2 12 2zm0 2.5a7.5 7.5 0 1 1 0 15 7.5 7.5 0 0 1 0-15zm-.5 3v5.25l4.5 2.25-.75 1.5L10 13.75V7.5h1.5z"/></svg>
+                  <span id="blizzard-btn-label">Login with Blizzard</span>
+                </button>
+              </div>
+              <p class="battletag-help">Logging in with Blizzard lets us verify your characters and allows you to <a href="/raiding#apply" class="battletag-help-link">check your application status</a> on this page after submitting. <a href="https://community.developer.battle.net/documentation/guides/using-oauth" target="_blank" rel="noopener noreferrer" class="battletag-help-link">Learn about Blizzard OAuth&nbsp;&nearr;</a></p>
+            </div>
+
+            <div id="char-blocks">
+              <div class="char-block">
+                <div class="char-block-header">
+                  <span class="char-block-label">Main Character</span>
+                  <button type="button" class="btn-remove-char" hidden aria-label="Remove character">✕ Remove</button>
+                </div>
+                <div class="char-block-fields">
+                  <div class="form-row char-blizzard-row" hidden style="grid-column: 1 / -1">
+                    <label class="form-label">Select Character</label>
+                    <select class="form-input char-blizzard-select">
+                      <option value="">— Select a character —</option>
+                    </select>
+                  </div>
+                  <div class="form-row char-manual-row">
+                    <label class="form-label">Character Name</label>
+                    <input type="text" name="char_name" class="form-input char-name" autocomplete="off" spellcheck="false" />
+                  </div>
+                  <div class="form-row char-manual-row">
+                    <label class="form-label">Realm</label>
+                    <input type="text" name="char_realm" class="form-input char-realm" list="realm-list" autocomplete="off" spellcheck="false" placeholder="Type to search…" />
+                  </div>
+                </div>
+                <div class="char-status-area">
+                  <p class="char-checking" hidden aria-live="polite">Looking up character…</p>
+                  <div class="char-links">
+                    <a class="char-link char-link--rio char-link--disabled" href="#" target="_blank" rel="noopener noreferrer" aria-disabled="true" tabindex="-1"><span class="char-link-check" hidden aria-hidden="true">✓ </span>Raider.io <span class="ext-icon" aria-hidden="true">↗</span></a>
+                    <a class="char-link char-link--wcl char-link--disabled" href="#" target="_blank" rel="noopener noreferrer" aria-disabled="true" tabindex="-1"><span class="char-link-check" hidden aria-hidden="true">✓ </span>Warcraft Logs <span class="ext-icon" aria-hidden="true">↗</span></a>
+                  </div>
+                  <p class="char-not-found" hidden aria-live="polite">Character not found — double-check the name and realm spelling.</p>
+                </div>
+              </div>
+            </div>
+
+            <button type="button" id="add-char-btn" class="btn-add-char">+ Add Another Character</button>
+          </fieldset>
+
+          <div class="apply-actions">
+            <button type="submit" class="btn-submit" id="apply-submit-btn">Submit Application</button>
+            <span class="apply-feedback" id="apply-feedback" hidden></span>
+          </div>
+
+        </form>
+
+        <datalist id="realm-list"></datalist>
       </section>
     </div>
   </div>
@@ -507,7 +658,13 @@ const recentLogs = recentLogsResult.logs;
   .recent-logs-list {
     margin: 0.75rem 0 0;
     padding-left: 1.1rem;
-    line-height: 1.55;
+    line-height: 1.7;
+  }
+
+  .recent-logs-list li {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 
   .recent-logs-list a {
@@ -523,10 +680,8 @@ const recentLogs = recentLogsResult.logs;
   }
 
   .recent-log-meta {
-    margin: 0.2rem 0 0;
-    color: #b9c9d4;
-    font-size: 0.88rem;
-    line-height: 1.35;
+    color: #7a8fa0;
+    font-size: 0.8rem;
   }
 
   .recent-logs-note {
@@ -554,4 +709,937 @@ const recentLogs = recentLogsResult.logs;
   .panel-text a:focus-visible {
     color: #ffe6b5;
   }
+
+  /* Rich content blocks from WYSIWYG editor */
+  .rich-content {
+    margin: 0.8rem 0 0;
+    line-height: 1.6;
+    color: #d8e2e8;
+  }
+
+  .rich-content ul,
+  .rich-content ol {
+    margin: 0;
+    padding-left: 1.1rem;
+  }
+
+  .rich-content li { margin-bottom: 0.35em; }
+
+  .rich-content a {
+    color: #f0d39d;
+    text-decoration: underline;
+    text-decoration-color: rgba(240, 211, 157, 0.55);
+    text-underline-offset: 0.14em;
+  }
+
+  .rich-content a:hover { color: #ffe6b5; }
+
+  .rich-content p { margin: 0 0 0.5em; }
+  .rich-content p:last-child { margin-bottom: 0; }
+
+  /* Current needs table */
+  .needs-table {
+    margin: 0.75rem 0 0;
+    display: grid;
+    grid-template-columns: auto 1fr 1fr;
+    row-gap: 0.35rem;
+    column-gap: 0.5rem;
+    align-items: center;
+  }
+
+  .needs-row {
+    display: contents;
+  }
+
+  .needs-col-header {
+    font-size: 0.7rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.07em;
+    color: var(--muted, #7a8fa0);
+    padding-bottom: 0.15rem;
+    border-bottom: 1px solid rgba(214, 176, 106, 0.15);
+  }
+
+  /* All three header cells get the bottom border */
+  .needs-row--header .needs-col-header:first-child {
+    grid-column: 1;
+  }
+
+  .need-class-identity {
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+  }
+
+  .need-class-icon {
+    width: 1.3rem;
+    height: 1.3rem;
+    border-radius: 50%;
+    border: 1px solid rgba(214, 176, 106, 0.3);
+    background: rgba(4, 10, 16, 0.85);
+    object-fit: cover;
+    flex-shrink: 0;
+    display: block;
+  }
+
+  .need-class-name {
+    font-size: 0.85rem;
+    font-weight: 600;
+    color: #d8e2e8;
+    white-space: nowrap;
+  }
+
+  .need-role {
+    display: block;
+    padding: 0.18rem 0.5rem;
+    border-radius: 0.3rem;
+    font-size: 0.78rem;
+    font-weight: 600;
+    background: rgba(214, 176, 106, 0.1);
+    border: 1px solid rgba(214, 176, 106, 0.28);
+    color: #d6b06a;
+    text-align: center;
+  }
+
+  .need-priority {
+    display: block;
+    padding: 0.15rem 0.5rem;
+    border-radius: 0.3rem;
+    font-size: 0.72rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    text-align: center;
+  }
+
+  .need-priority--low  { background: rgba(80,160,80,0.14);  border: 1px solid rgba(80,160,80,0.38);  color: #7ecb7e; }
+  .need-priority--mid  { background: rgba(200,160,40,0.14); border: 1px solid rgba(200,160,40,0.38); color: #dfb855; }
+  .need-priority--high { background: rgba(200,60,60,0.14);  border: 1px solid rgba(200,60,60,0.38);  color: #eb7070; }
+
+  .needs-footnote {
+    margin: 0.9rem 0 0;
+    font-size: 0.8rem;
+    font-style: italic;
+    color: var(--muted, #7a8fa0);
+  }
+
+  /* ── Application form ────────────────────────────────────────────────── */
+  .apply-form {
+    margin-top: 0.85rem;
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+  }
+
+  .apply-fieldset {
+    border: none;
+    padding: 0;
+    margin: 0;
+  }
+
+  .apply-legend {
+    font-size: 0.75rem;
+    font-weight: 700;
+    color: #d6b06a;
+    text-transform: uppercase;
+    letter-spacing: 0.07em;
+    padding: 0;
+    margin-bottom: 0.65rem;
+  }
+
+  .form-row {
+    display: flex;
+    flex-direction: column;
+    gap: 0.28rem;
+    margin-bottom: 0.5rem;
+  }
+
+  .form-row[hidden] { display: none; }
+
+  .form-row:last-child { margin-bottom: 0; }
+
+  .form-label {
+    font-size: 0.72rem;
+    font-weight: 600;
+    color: #9ab0bf;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+
+  .form-input {
+    width: 100%;
+    padding: 0.42rem 0.65rem;
+    background: rgba(4, 10, 16, 0.65);
+    border: 1px solid rgba(214, 176, 106, 0.28);
+    border-radius: 0.4rem;
+    color: #d8e2e8;
+    font-size: 0.88rem;
+    outline: none;
+    transition: border-color 0.15s;
+    box-sizing: border-box;
+    font-family: inherit;
+  }
+
+  .form-input:focus {
+    border-color: rgba(214, 176, 106, 0.65);
+  }
+
+  .form-input::placeholder {
+    color: rgba(216, 226, 232, 0.3);
+  }
+
+  /* Character block */
+  .char-block {
+    border: 1px solid rgba(214, 176, 106, 0.14);
+    border-radius: 0.5rem;
+    padding: 0.65rem 0.7rem 0.55rem;
+    margin-bottom: 0.5rem;
+    background: rgba(4, 10, 16, 0.3);
+  }
+
+  .char-block-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 0.55rem;
+  }
+
+  .char-block-label {
+    font-size: 0.75rem;
+    font-weight: 700;
+    color: #d6b06a;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+  }
+
+  .char-block-fields {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0.5rem;
+  }
+
+  @media (max-width: 480px) {
+    .char-block-fields { grid-template-columns: 1fr; }
+  }
+
+  /* Character status area */
+  .char-status-area { margin-top: 0.45rem; }
+
+  .char-checking,
+  .char-not-found {
+    margin: 0;
+    max-width: none;
+    font-size: 0.8rem;
+    line-height: 1.4;
+  }
+
+  .char-checking { font-style: italic; color: #9ab0bf; }
+  .char-not-found { color: #eb7070; }
+
+  .char-links {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0.45rem;
+  }
+
+  .char-link {
+    display: block;
+    padding: 0.28rem 0.6rem;
+    border-radius: 0.3rem;
+    font-size: 0.78rem;
+    font-weight: 600;
+    text-decoration: none;
+    text-align: center;
+    transition: opacity 0.15s;
+  }
+
+  .char-link--rio {
+    background: rgba(214, 176, 106, 0.1);
+    border: 1px solid rgba(214, 176, 106, 0.32);
+    color: #d6b06a;
+  }
+
+  .char-link--wcl {
+    background: rgba(255, 140, 0, 0.08);
+    border: 1px solid rgba(255, 140, 0, 0.28);
+    color: #ff9a20;
+  }
+
+  .char-link:hover { opacity: 0.75; }
+
+  .char-link-check {
+    color: #7ecb7e;
+    font-weight: 700;
+  }
+
+  /* Buttons */
+  .btn-remove-char {
+    background: none;
+    border: none;
+    color: #7a8fa0;
+    cursor: pointer;
+    font-size: 0.75rem;
+    font-weight: 600;
+    padding: 0.1rem 0.25rem;
+    border-radius: 0.25rem;
+    transition: color 0.15s;
+    font-family: inherit;
+  }
+
+  .btn-remove-char:hover { color: #eb7070; }
+
+  .btn-add-char {
+    width: 100%;
+    margin-top: 0.1rem;
+    padding: 0.35rem 0.75rem;
+    background: none;
+    border: 1px dashed rgba(214, 176, 106, 0.3);
+    border-radius: 0.4rem;
+    color: #d6b06a;
+    font-size: 0.82rem;
+    font-family: inherit;
+    cursor: pointer;
+    transition: border-color 0.15s, background 0.15s;
+  }
+
+  .btn-add-char:hover {
+    border-color: rgba(214, 176, 106, 0.6);
+    background: rgba(214, 176, 106, 0.04);
+  }
+
+  .apply-actions {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+  }
+
+  .btn-submit {
+    padding: 0.5rem 1.3rem;
+    background: rgba(214, 176, 106, 0.12);
+    border: 1px solid rgba(214, 176, 106, 0.38);
+    border-radius: 0.4rem;
+    color: #e4c27a;
+    font-size: 0.9rem;
+    font-weight: 700;
+    font-family: inherit;
+    cursor: pointer;
+    transition: background 0.15s, border-color 0.15s;
+  }
+  .btn-submit:hover:not(:disabled) {
+    background: rgba(214, 176, 106, 0.22);
+    border-color: rgba(214, 176, 106, 0.6);
+  }
+  .btn-submit:disabled {
+    cursor: not-allowed;
+    opacity: 0.45;
+  }
+
+  .apply-feedback {
+    font-size: 0.82rem;
+  }
+  .apply-feedback.ok  { color: #4ade80; }
+  .apply-feedback.err { color: #f87171; }
+
+  .app-status-banner {
+    padding: 0.65rem 0.9rem;
+    border-radius: 0.45rem;
+    margin-bottom: 1rem;
+    font-size: 0.88rem;
+    line-height: 1.4;
+  }
+  .app-status-banner--blue   { background: rgba(90,180,255,0.1); border: 1px solid rgba(90,180,255,0.3); color: #7cc8ff; }
+  .app-status-banner--amber  { background: rgba(240,184,75,0.1); border: 1px solid rgba(240,184,75,0.3); color: #f0c96a; }
+  .app-status-banner--purple { background: rgba(167,139,250,0.1); border: 1px solid rgba(167,139,250,0.3); color: #b9a0fb; }
+  .app-status-banner--red    { background: rgba(239,68,68,0.1); border: 1px solid rgba(239,68,68,0.3); color: #f87171; }
+  .app-status-banner--green  { background: rgba(34,197,94,0.1); border: 1px solid rgba(34,197,94,0.3); color: #4ade80; }
+
+  .apply-intro {
+    margin: 0 0 1.25rem;
+    color: #8fa8bf;
+    font-size: 0.9rem;
+    line-height: 1.5;
+  }
+
+  .battletag-help {
+    margin: 0.45rem 0 0;
+    font-size: 0.78rem;
+    color: #6a8099;
+    line-height: 1.4;
+  }
+
+  .battletag-help-link {
+    color: #5b9bd5;
+    text-decoration: none;
+  }
+
+  .battletag-help-link:hover {
+    text-decoration: underline;
+  }
+
+  /* Battle.net tag row with Blizzard OAuth option */
+  .battletag-row {
+    display: flex;
+    align-items: center;
+    gap: 0.55rem;
+  }
+
+  .battletag-row .form-input {
+    flex: 1;
+  }
+
+  .battletag-or {
+    flex-shrink: 0;
+    font-size: 0.72rem;
+    color: #7a8fa0;
+    font-style: italic;
+    user-select: none;
+  }
+
+  .btn-blizzard {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0.38rem 0.75rem;
+    background: rgba(20, 142, 255, 0.1);
+    border: 1px solid rgba(20, 142, 255, 0.35);
+    border-radius: 0.4rem;
+    color: #5ab4ff;
+    font-size: 0.8rem;
+    font-weight: 600;
+    font-family: inherit;
+    cursor: pointer;
+    white-space: nowrap;
+    flex-shrink: 0;
+    transition: background 0.15s, border-color 0.15s;
+  }
+  .btn-blizzard:hover:not(:disabled) {
+    background: rgba(20, 142, 255, 0.2);
+    border-color: rgba(20, 142, 255, 0.6);
+  }
+  .btn-blizzard:disabled {
+    cursor: not-allowed;
+    opacity: 0.45;
+  }
+
+  .btn-blizzard--logout {
+    background: rgba(20, 142, 255, 0.18);
+    border-color: rgba(20, 142, 255, 0.55);
+    color: #7ecaff;
+  }
+  .btn-blizzard--logout:hover {
+    background: rgba(235, 80, 80, 0.15);
+    border-color: rgba(235, 80, 80, 0.5);
+    color: #eb7070;
+  }
+
+  .blizzard-icon {
+    width: 1rem;
+    height: 1rem;
+    flex-shrink: 0;
+  }
+
+  /* Disabled char profile links */
+  .char-link--disabled {
+    opacity: 0.35;
+    pointer-events: none;
+    cursor: default;
+  }
+
+  .ext-icon {
+    font-size: 0.7em;
+    vertical-align: top;
+    margin-top: 0.05em;
+  }
+
+  /* Textarea */
+  .form-textarea {
+    resize: vertical;
+    min-height: 3.5rem;
+    line-height: 1.5;
+  }
 </style>
+
+<script is:inline>
+// Handle postMessage from OAuth popup (session ID and auth data)
+window.addEventListener('message', function(event) {
+  if (event.origin !== window.location.origin) return;
+  if (!event.data) return;
+  
+  // Handle session ID from popup (set cookie)
+  if (event.data.type === 'blizzard-session' && event.data.sessionId) {
+    var expiresDate = new Date();
+    expiresDate.setTime(expiresDate.getTime() + (7 * 24 * 60 * 60 * 1000)); // 7 days
+    document.cookie = 'hl_session=' + encodeURIComponent(event.data.sessionId) + '; path=/; expires=' + expiresDate.toUTCString();
+    setTimeout(function() { window.location.reload(); }, 100);
+    return;
+  }
+  
+  // Handle blizzard-auth from popup (has battletag, may have sessionId)
+  if (event.data.type === 'blizzard-auth') {
+    if (event.data.sessionId) {
+      var expiresDate = new Date();
+      expiresDate.setTime(expiresDate.getTime() + (7 * 24 * 60 * 60 * 1000));
+      document.cookie = 'hl_session=' + encodeURIComponent(event.data.sessionId) + '; path=/; expires=' + expiresDate.toUTCString();
+    }
+    applyBlizzardData(event.data);
+  }
+});
+
+// ── US / OCE WoW realm list ────────────────────────────────────────────────
+const WOW_REALMS = [
+  'Aegwynn', 'Aerie Peak', 'Agamaggan', 'Aggramar', 'Akama', 'Alexstrasza',
+  'Alleria', 'Altar of Storms', 'Alterac Mountains', "Aman'Thul", 'Andorhal',
+  'Anetheron', 'Antonidas', "Anub'arak", 'Anvilmar', 'Arathor', 'Archimonde',
+  'Area 52', 'Argent Dawn', 'Arthas', 'Arygos', 'Auchindoun', 'Azgalor',
+  'Azjol-Nerub', 'Azshara', 'Azuremyst', 'Baelgun', 'Balnazzar', 'Barthilas',
+  'Black Dragonflight', 'Blackhand', 'Blackrock', 'Blackwater Raiders',
+  'Blackwing Lair', "Blade's Edge", 'Bladefist', 'Bleeding Hollow',
+  'Blood Furnace', 'Bloodhoof', 'Bloodscalp', 'Bonechewer', 'Borean Tundra',
+  'Boulderfist', 'Bronze Dragonflight', 'Bronzebeard', 'Burning Blade',
+  'Burning Legion', 'Caelestrasz', 'Cairne', 'Cenarion Circle', 'Cenarius',
+  "Cho'gall", 'Chromaggus', 'Coilfang', 'Crushridge', 'Daggerspine',
+  'Dalaran', 'Dalvengyr', 'Dark Iron', 'Darkspear', 'Darrowmere', "Dath'Remar",
+  'Dawnbringer', 'Deadwind Pass', 'Deathwing', 'Demon Soul', 'Dentarg',
+  'Destromath', 'Detheroc', 'Doomhammer', 'Draenor', 'Dragonblight', 'Dragonmaw',
+  "Drak'Tharon", "Drak'thul", 'Draka', 'Dunemaul', 'Durotan', 'Duskwood',
+  'Earthen Ring', 'Echo Isles', 'Eitrigg', "Eldre'Thalas", 'Elune',
+  'Emerald Dream', 'Eonar', 'Eredar', 'Executus', 'Exodar', 'Farstriders',
+  'Feathermoon', 'Fenris', 'Firetree', 'Fizzcrank', 'Frostmane', 'Frostmourne',
+  'Frostwolf', 'Galakrond', 'Garona', 'Garithos', 'Garrosh', 'Ghostlands',
+  'Gilneas', 'Gnomeregan', 'Gorefiend', 'Gorgonnash', 'Greymane', 'Grizzly Hills',
+  "Gul'dan", 'Gundrak', 'Gurubashi', 'Hakkar', 'Haomarush', 'Hellscream',
+  'Hydraxis', 'Hyjal', 'Icecrown', 'Illidan', 'Jaedenar', "Jubei'Thos",
+  "Kael'thas", 'Kalecgos', 'Kargath', "Kel'Thuzad", 'Khaz Modan', "Khaz'goroth",
+  'Khadgar', "Kil'jaeden", 'Kilrogg', 'Kirin Tor', 'Korgath', 'Korialstrasz',
+  'Kul Tiras', 'Laughing Skull', 'Lethon', 'Lightbringer', "Lightning's Blade",
+  'Lightninghoof', 'Llane', 'Lothar', 'Madoran', 'Maelstrom', 'Magtheridon',
+  'Maiev', "Mal'Ganis", 'Malfurion', 'Malorne', 'Malygos', 'Mannoroth',
+  'Medivh', 'Misha', "Mok'Nathal", 'Moon Guard', 'Moonrunner', 'Muradin',
+  'Nagrand', 'Nathrezim', 'Nazgrel', 'Nazjatar', "Ner'zhul", 'Nesingwary',
+  'Netherstorm', 'Nordrassil', 'Norgannon', 'Perenolde', 'Proudmoore',
+  "Quel'dorei", 'Ravenholdt', 'Rexxar', 'Rivendare', 'Runetotem', 'Sargeras',
+  'Saurfang', 'Scarlet Crusade', 'Scilla', "Sen'jin", 'Sentinels',
+  'Shadow Council', 'Shadowmoon', 'Shadowsong', 'Shandris', 'Shattered Halls',
+  "Shu'halo", 'Silver Hand', 'Silvermoon', 'Sisters of Elune', 'Skullcrusher',
+  'Skywall', 'Smolderthorn', 'Spinebreaker', 'Spirestone', 'Staghelm',
+  'Steamwheedle Cartel', 'Stonemaul', 'Stormrage', 'Stormreaver', 'Stormscale',
+  'Suramar', 'Tanaris', 'Terenas', 'Terokkar', 'The Forgotten Coast',
+  'The Scryers', 'The Underbog', 'The Venture Co', 'Thorium Brotherhood',
+  'Thrall', 'Thunderhorn', 'Thunderlord', 'Tichondrius', 'Tortheldrin',
+  'Trollbane', 'Turalyon', 'Twisting Nether', 'Uldum', 'Undermine', 'Ursin',
+  'Uther', 'Vashj', "Vek'nilash", 'Velen', 'Warsong', 'Whisperwind',
+  'Wildhammer', 'Windrunner', 'Winterhoof', 'Wyrmrest Accord', 'Ysera',
+  'Zuluhed', "Zul'jin",
+];
+
+// Populate the datalist once on load
+(function () {
+  const datalist = document.getElementById('realm-list');
+  if (!datalist) return;
+  const frag = document.createDocumentFragment();
+  WOW_REALMS.forEach(function (name) {
+    const opt = document.createElement('option');
+    opt.value = name;
+    frag.appendChild(opt);
+  });
+  datalist.appendChild(frag);
+})();
+
+// Convert a realm display name to an API/URL slug
+function realmToSlug(name) {
+  return name.toLowerCase().replace(/'/g, '').replace(/\s+/g, '-');
+}
+
+// Enable/disable the RIO + WCL profile link badges
+function setLinksDisabled(block, disabled) {
+  var rioLink = block.querySelector('.char-link--rio');
+  var wclLink = block.querySelector('.char-link--wcl');
+  [rioLink, wclLink].forEach(function (link) {
+    if (!link) return;
+    if (disabled) {
+      link.classList.add('char-link--disabled');
+      link.setAttribute('aria-disabled', 'true');
+      link.setAttribute('tabindex', '-1');
+      link.href = '#';
+      var check = link.querySelector('.char-link-check');
+      if (check) check.hidden = true;
+    } else {
+      link.classList.remove('char-link--disabled');
+      link.removeAttribute('aria-disabled');
+      link.setAttribute('tabindex', '0');
+    }
+  });
+}
+
+function lookupChar(block) {
+  var nameEl  = block.querySelector('.char-name');
+  var realmEl = block.querySelector('.char-realm');
+  var name    = nameEl  ? nameEl.value.trim()  : '';
+  var realm   = realmEl ? realmEl.value.trim() : '';
+  var checkingEl = block.querySelector('.char-checking');
+  var notFoundEl = block.querySelector('.char-not-found');
+
+  function hide(el) { if (el) el.hidden = true; }
+  function show(el) { if (el) el.hidden = false; }
+
+  if (!name || !realm) {
+    setLinksDisabled(block, true);
+    hide(checkingEl);
+    hide(notFoundEl);
+    return;
+  }
+
+  var slug = realmToSlug(realm);
+  setLinksDisabled(block, true);
+  show(checkingEl);
+  hide(notFoundEl);
+
+  var apiUrl = 'https://raider.io/api/v1/characters/profile'
+    + '?region=us'
+    + '&realm=' + encodeURIComponent(slug)
+    + '&name=' + encodeURIComponent(name)
+    + '&fields=gear';
+
+  var controller = new AbortController();
+  var timer = setTimeout(function () { controller.abort(); }, 8000);
+
+  fetch(apiUrl, { signal: controller.signal })
+    .then(function (res) {
+      clearTimeout(timer);
+      hide(checkingEl);
+      if (res.ok) {
+        var encodedName = encodeURIComponent(name.toLowerCase());
+        var rioLink = block.querySelector('.char-link--rio');
+        var wclLink = block.querySelector('.char-link--wcl');
+        if (rioLink) rioLink.href = 'https://raider.io/characters/us/' + slug + '/' + encodedName;
+        if (wclLink) wclLink.href = 'https://www.warcraftlogs.com/character/us/' + slug + '/' + encodedName;
+        setLinksDisabled(block, false);
+        block.querySelectorAll('.char-link-check').forEach(function (el) { el.hidden = false; });
+        block.dataset.validated = '1';
+      } else {
+        delete block.dataset.validated;
+        show(notFoundEl);
+      }
+    })
+    .catch(function () {
+      clearTimeout(timer);
+      hide(checkingEl);
+      // Network error: silently reset
+      delete block.dataset.validated;
+    });
+}
+
+function wireBlock(block) {
+  var nameInput  = block.querySelector('.char-name');
+  var realmInput = block.querySelector('.char-realm');
+
+  // Blizzard character picker inside this block
+  var bSelect = block.querySelector('.char-blizzard-select');
+  if (bSelect) {
+    bSelect.addEventListener('change', function () {
+      if (!bSelect.value) {
+        delete block.dataset.validated;
+        return;
+      }
+      try {
+        var char = JSON.parse(bSelect.value);
+        if (nameInput)  nameInput.value  = char.name;
+        if (realmInput) realmInput.value = char.realm;
+        block.dataset.validated = '1'; // Blizzard OAuth character — inherently valid
+        lookupChar(block); // also kicks off Raider.io lookup for the links
+      } catch (_) {}
+    });
+  }
+
+  // Clear disabled state immediately when either field is emptied while typing
+  function onInput(el) {
+    if (!el.value.trim()) {
+      setLinksDisabled(block, true);
+      delete block.dataset.validated;
+      var notFoundEl = block.querySelector('.char-not-found');
+      if (notFoundEl) notFoundEl.hidden = true;
+    }
+  }
+  if (nameInput)  nameInput.addEventListener('input',  function () { onInput(nameInput); });
+  if (realmInput) realmInput.addEventListener('input',  function () { onInput(realmInput); });
+
+  // Lookup fires only on blur (tab-out), so we don't search prematurely
+  if (nameInput)  nameInput.addEventListener('blur',   function () { lookupChar(block); });
+  if (realmInput) realmInput.addEventListener('blur',   function () { lookupChar(block); });
+}
+
+// Wire the initial block
+var _initialBlock = document.querySelector('.char-block');
+if (_initialBlock) wireBlock(_initialBlock);
+
+// "Add Another Character"
+var _altCount = 0;
+var addBtn = document.getElementById('add-char-btn');
+if (addBtn) {
+  addBtn.addEventListener('click', function () {
+    var template = document.querySelector('.char-block');
+    if (!template) return;
+
+    _altCount++;
+    var newBlock = template.cloneNode(true);
+
+    // Label
+    var label = newBlock.querySelector('.char-block-label');
+    if (label) label.textContent = _altCount > 1 ? 'Alt Character ' + _altCount : 'Alt Character';
+
+    // Show remove button and wire it
+    var removeBtn = newBlock.querySelector('.btn-remove-char');
+    if (removeBtn) {
+      removeBtn.hidden = false;
+      removeBtn.addEventListener('click', function () {
+        newBlock.remove();
+        renumberBlocks();
+      });
+    }
+
+    // Reset inputs, status, and Blizzard picker
+    newBlock.querySelectorAll('.char-name, .char-realm').forEach(function (el) { el.value = ''; });
+    var newSelect = newBlock.querySelector('.char-blizzard-select');
+    if (newSelect && _blizzardChars.length) {
+      switchToBlizzardPicker(newBlock);
+    }
+    setLinksDisabled(newBlock, true);
+    var notFoundEl = newBlock.querySelector('.char-not-found');
+    var checkingEl = newBlock.querySelector('.char-checking');
+    if (notFoundEl) notFoundEl.hidden = true;
+    if (checkingEl) checkingEl.hidden = true;
+
+    wireBlock(newBlock);
+    var container = document.getElementById('char-blocks');
+    if (container) container.appendChild(newBlock);
+  });
+}
+
+function renumberBlocks() {
+  document.querySelectorAll('.char-block').forEach(function (block, i) {
+    var label     = block.querySelector('.char-block-label');
+    var removeBtn = block.querySelector('.btn-remove-char');
+    if (i === 0) {
+      if (label)     label.textContent = 'Main Character';
+      if (removeBtn) removeBtn.hidden  = true;
+    } else {
+      if (label) label.textContent = i > 1 ? 'Alt Character ' + i : 'Alt Character';
+    }
+  });
+  _altCount = document.querySelectorAll('.char-block').length - 1;
+}
+
+// ── Blizzard OAuth popup flow ───────────────────────────────────────────────
+var _blizzardChars = [];
+
+function populateCharSelect(select) {
+  select.innerHTML = '<option value="">\u2014 Select a character \u2014</option>';
+  _blizzardChars.forEach(function (char) {
+    var opt = document.createElement('option');
+    opt.value = JSON.stringify({ name: char.name, realm: char.realm, realmSlug: char.realmSlug });
+    opt.textContent = char.name + ' \u2013 ' + char.realm + ' (' + char.className + ', ' + char.level + ')';
+    select.appendChild(opt);
+  });
+}
+
+function switchToBlizzardPicker(block) {
+  var select = block.querySelector('.char-blizzard-select');
+  var row    = block.querySelector('.char-blizzard-row');
+  if (select) populateCharSelect(select);
+  if (row)    row.hidden = false;
+  block.querySelectorAll('.char-manual-row').forEach(function (el) { el.hidden = true; });
+}
+
+(function () {
+  var bnetBtn = document.getElementById('blizzard-login-btn');
+
+  function onLogin() {
+    var loginUrl = '/auth/login?popup=1';
+    var popup = window.open(loginUrl, 'blizzard-login', 'width=600,height=720,left=200,top=80');
+    if (!popup) {
+      window.location.href = loginUrl;
+    }
+  }
+
+  if (bnetBtn) {
+    bnetBtn.addEventListener('click', onLogin);
+  }
+
+  function applyBlizzardData(data) {
+    if (!data || data.error) return;
+
+    // Populate battletag field
+    if (data.battletag) {
+      var btagInput = document.getElementById('battletag');
+      if (btagInput) btagInput.value = data.battletag;
+    }
+
+    // Switch button to logout mode
+    var btn = document.getElementById('blizzard-login-btn');
+    var btnLabel = document.getElementById('blizzard-btn-label');
+    if (btn) {
+      btn.removeEventListener('click', onLogin);
+      btn.title = data.battletag ? ('Logged in as ' + data.battletag + ' \u2014 click to log out') : 'Logged in \u2014 click to log out';
+      btn.classList.add('btn-blizzard--logout');
+      if (btnLabel) btnLabel.textContent = data.battletag || 'Logged in';
+      btn.addEventListener('click', function onLogout() {
+        btn.removeEventListener('click', onLogout);
+        btn.classList.remove('btn-blizzard--logout');
+        btn.title = 'Login with Blizzard to auto-fill your characters';
+        if (btnLabel) btnLabel.textContent = 'Login with Blizzard';
+        _blizzardChars = [];
+        // Restore manual fields on all blocks
+        document.querySelectorAll('.char-block').forEach(function (block) {
+          var row = block.querySelector('.char-blizzard-row');
+          if (row) row.hidden = true;
+          block.querySelectorAll('.char-manual-row').forEach(function (el) { el.hidden = false; });
+          block.querySelectorAll('.char-name, .char-realm').forEach(function (el) { el.value = ''; });
+          setLinksDisabled(block, true);
+          delete block.dataset.validated;
+        });
+        btn.addEventListener('click', onLogin);
+      });
+    }
+
+    var chars = data.characters;
+    if (!chars || !chars.length) return;
+    _blizzardChars = chars;
+
+    // Populate the select inside every existing char-block and hide manual fields
+    document.querySelectorAll('.char-block').forEach(function (block) {
+      switchToBlizzardPicker(block);
+    });
+  }
+
+  // Handle postMessage from popup callback
+  window.addEventListener('message', function (event) {
+    if (event.origin !== window.location.origin) return;
+    if (!event.data || event.data.type !== 'blizzard-auth') return;
+    applyBlizzardData(event.data);
+  });
+
+  // Handle fallback via sessionStorage (when popup was blocked)
+  try {
+    var stored = sessionStorage.getItem('blizzard-chars');
+    if (stored) {
+      sessionStorage.removeItem('blizzard-chars');
+      applyBlizzardData(JSON.parse(stored));
+    }
+  } catch (_) {}
+}());
+
+// ── Application form submission ─────────────────────────────────────────────
+(function () {
+  var form = document.getElementById('apply-form');
+  var submitBtn = document.getElementById('apply-submit-btn');
+  var feedback = document.getElementById('apply-feedback');
+
+  if (!form || !submitBtn || !feedback) return;
+
+  form.addEventListener('submit', async function (e) {
+    e.preventDefault();
+
+    // Collect basic fields
+    var discord = (form.querySelector('#discord-name') || {}).value || '';
+    discord = discord.trim();
+    if (!discord) {
+      showFeedback('Discord username is required.', false);
+      return;
+    }
+
+    var battletag = (form.querySelector('#battletag') || {}).value || '';
+    battletag = battletag.trim();
+    if (!battletag) {
+      showFeedback('A Battle.net Tag is required. Enter it manually or use Login with Blizzard.', false);
+      return;
+    }
+    var raidHistory = (form.querySelector('#raid-history') || {}).value || '';
+    var goals = (form.querySelector('#wow-goals') || {}).value || '';
+
+    // Collect characters from all char-blocks
+    var characters = [];
+    form.querySelectorAll('.char-block').forEach(function (block, i) {
+      // If the Blizzard picker row is visible, read from the select
+      var blizzardRow = block.querySelector('.char-blizzard-row');
+      var blizzardSelect = block.querySelector('.char-blizzard-select');
+      if (blizzardRow && !blizzardRow.hidden && blizzardSelect && blizzardSelect.value) {
+        try {
+          var parsed = JSON.parse(blizzardSelect.value);
+          if (parsed && parsed.name) {
+            characters.push({ name: parsed.name, realm: parsed.realm || '', realmSlug: parsed.realmSlug || '', isMain: i === 0 });
+          }
+        } catch (_) {}
+        return;
+      }
+      // Fall back to manual inputs
+      var nameEl  = block.querySelector('.char-name');
+      var realmEl = block.querySelector('.char-realm');
+      var name  = nameEl  ? nameEl.value.trim()  : '';
+      var realm = realmEl ? realmEl.value.trim() : '';
+      if (!name) return;
+      var realmSlug = block.dataset.realmSlug || realmToSlug(realm);
+      characters.push({ name: name, realm: realm, realmSlug: realmSlug, isMain: i === 0 });
+    });
+
+    if (!characters.length) {
+      showFeedback('Please enter at least one character name.', false);
+      return;
+    }
+
+    // At least one character must be validated (Raider.io found or Blizzard OAuth)
+    var anyValidated = Array.prototype.some.call(
+      form.querySelectorAll('.char-block'),
+      function (b) { return !!b.dataset.validated; }
+    );
+    if (!anyValidated) {
+      showFeedback('Please verify at least one character — enter a name and realm so Raider.io can confirm it, or use Login with Blizzard.', false);
+      return;
+    }
+
+    submitBtn.disabled = true;
+    submitBtn.textContent = 'Submitting\u2026';
+    feedback.hidden = true;
+
+    try {
+      var res = await fetch('/api/apply', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          discord_username: discord,
+          battletag: battletag.trim(),
+          raid_history: raidHistory.trim(),
+          goals: goals.trim(),
+          characters: characters,
+        }),
+      });
+      var data;
+      try { data = await res.json(); } catch (_) { data = {}; }
+      if (!res.ok) {
+        showFeedback(data.error || ('Submission failed (' + res.status + '). Please try again.'), false);
+        submitBtn.disabled = false;
+        submitBtn.textContent = 'Submit Application';
+        return;
+      }
+      // Success
+      showFeedback('Application submitted! We\u2019ll be in touch via Discord.', true);
+      submitBtn.disabled = true;
+      submitBtn.textContent = 'Submitted';
+    } catch {
+      showFeedback('Network error. Please try again.', false);
+      submitBtn.disabled = false;
+      submitBtn.textContent = 'Submit Application';
+    }
+  });
+
+  function realmToSlug(name) {
+    return name.toLowerCase().replace(/'/g, '').replace(/\s+/g, '-');
+  }
+
+  function showFeedback(msg, ok) {
+    feedback.textContent = msg;
+    feedback.className = 'apply-feedback ' + (ok ? 'ok' : 'err');
+    feedback.hidden = false;
+  }
+}());
+</script>

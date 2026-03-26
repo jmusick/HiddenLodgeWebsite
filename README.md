@@ -40,6 +40,8 @@ The site combines public guild information, Blizzard-authenticated member profil
 - Settings module with raid-progress configuration and cache health
 - Export module for addon-friendly JSON generation
 - Interactive sim tools for droptimizer and single-target analysis
+- **Raiding Content editor** for managing the schedule, raid expectations, required addons, and open recruitment needs displayed on the public Raiding page
+- **Applications module** for reviewing guild applications; admins can triage with a status workflow (Received → Reviewed → Contacted → Rejected → Trial), add and delete officer notes, and view all submitted characters with Raider.io and Warcraft Logs profile links
 
 ## Quick Start
 
@@ -99,6 +101,8 @@ http://localhost:4321
 | `/admin/cache` | Yes + Admin | Backward-compatible redirect to `/admin/settings` |
 | `/admin/links` | Yes + Admin | Public links category/link management |
 | `/admin/export` | Yes + Admin | Export JSON for guild labels and addon workflows |
+| `/admin/raiding` | Yes + Admin | Edit schedule, raid expectations, addon list, and recruitment needs |
+| `/admin/applications` | Yes + Admin | Review, triage, and manage guild applications |
 
 ### Auth Routes
 
@@ -118,6 +122,8 @@ http://localhost:4321
 | `/api/profile/update-timezone` | POST | Sets the authenticated user's preferred timezone |
 | `/api/signup/create` | POST | Creates or updates a member signup for a raid |
 | `/api/signup/cancel` | POST | Cancels a member signup for a raid |
+| `/api/apply` | POST | Submit a guild application from the Raiding page |
+| `/api/application/status` | GET | Returns current application status for the logged-in user |
 
 ### Admin API
 
@@ -143,6 +149,17 @@ http://localhost:4321
 | `/api/admin/links/create-link` | POST | Create a link inside a category |
 | `/api/admin/links/update-link` | POST | Update link name, URL, or sort order |
 | `/api/admin/links/delete-link` | POST | Delete a link |
+| `/api/admin/raiding/update-content` | POST | Update a raiding page content panel (schedule, expectations, or recruitment) |
+| `/api/admin/raiding/create-addon` | POST | Add a required addon |
+| `/api/admin/raiding/update-addon` | POST | Update addon name, URL, or sort order |
+| `/api/admin/raiding/delete-addon` | POST | Delete a required addon |
+| `/api/admin/raiding/create-need` | POST | Add an open recruitment need |
+| `/api/admin/raiding/update-need` | POST | Update a recruitment need class, role, or priority |
+| `/api/admin/raiding/delete-need` | POST | Delete a recruitment need |
+| `/api/admin/applications/[id]/set-status` | POST | Update an application's triage status |
+| `/api/admin/applications/[id]/add-note` | POST | Add an officer note to an application |
+| `/api/admin/applications/[id]/delete-note` | POST | Delete an officer note from an application |
+| `/api/admin/applications/[id]/delete` | POST | Permanently delete an application and all associated data |
 
 ### Sim Runner API
 
@@ -290,6 +307,12 @@ These handlers remain in the codebase as retired stubs and currently return HTTP
 | `link_categories` | Public Useful Links page categories |
 | `links` | Public Useful Links entries |
 | `site_settings` | Small key-value settings store (e.g., tracked raid-progress target) |
+| `raiding_content` | Key-value store for admin-editable raiding page sections (schedule, expectations, recruitment) |
+| `raiding_addons` | Ordered list of required addons displayed on the Raiding page |
+| `recruitment_needs` | Open recruitment class/role/priority entries displayed on the Raiding page |
+| `applications` | Guild applications submitted from the Raiding page |
+| `application_characters` | Characters attached to each application |
+| `application_notes` | Officer notes attached to each application |
 
 ### Roster Cache Behavior
 
@@ -307,7 +330,7 @@ These handlers remain in the codebase as retired stubs and currently return HTTP
 
 ### Key Folders
 
-- **`migrations/`** — D1 SQL migrations ordered by creation date (0001–0024)
+- **`migrations/`** — D1 SQL migrations ordered by creation date (0001–0038)
 - **`public/`** — Static assets: images for leadership and lore pages, Cloudflare routing config
 - **`scripts/`** — Build and deployment helper scripts
 - **`src/components/`** — Reusable Astro components (cards, layouts, sections)

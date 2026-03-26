@@ -13,7 +13,8 @@ export async function GET(context: APIContext): Promise<Response> {
 		return new Response('Server auth configuration is incomplete.', { status: 500 });
 	}
 
-	const state = crypto.randomUUID();
+	const isPopup = new URL(context.request.url).searchParams.get('popup') === '1';
+	const state = (isPopup ? 'popup:' : '') + crypto.randomUUID();
 	const redirectUri = getBlizzardRedirectUri(context.request.url);
 	const url = buildAuthUrl(authConfig.clientId, redirectUri, state);
 
