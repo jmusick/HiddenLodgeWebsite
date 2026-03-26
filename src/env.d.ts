@@ -14,6 +14,9 @@ interface CloudflareEnv {
 	WOWSIM_APP_TRIGGER_PATH?: string;
 	WOWSIM_APP_STATUS_PATH?: string;
 	RAID_PROGRESS_TARGET?: string;
+	RAIDER_IO_ACCESS_KEY?: string;
+	ROSTER_DETAIL_BATCH_SIZE?: string;
+	ROSTER_BACKFILL_BATCH_SIZE?: string;
 }
 
 interface Env extends CloudflareEnv {}

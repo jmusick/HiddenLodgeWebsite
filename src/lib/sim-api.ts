@@ -246,9 +246,7 @@ async function hasSimResultTables(db: D1Database): Promise<boolean> {
   return tables.has('sim_raider_summaries') && tables.has('sim_item_winners');
 }
 
-async function getSimTableNames(db: D1Database): Promise<SimTableNames> {
-  const _ = db;
-
+async function getSimTableNames(_db: D1Database): Promise<SimTableNames> {
   return {
     raiderSummaries: 'sim_raider_summaries',
     itemWinners: 'sim_item_winners',

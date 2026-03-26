@@ -6,7 +6,7 @@ import { Icon } from 'astro-icon/components';
 import { classColor } from '../lib/wow';
 import { loadRaidersViewData } from '../lib/raiders';
 
-const { raiders, totalMembers, readyCount, unavailableCount } = await loadRaidersViewData();
+const { raiders, totalMembers, readyCount } = await loadRaidersViewData();
 
 const sortedRaiders = [...raiders].sort((a, b) => {
   const scoreA = a.mythicScore ?? -1;
@@ -103,20 +103,6 @@ function crestSortValue(raider: (typeof sortedRaiders)[number]): number {
   );
 }
 
-function formatCrestSummary(raider: (typeof sortedRaiders)[number]): string {
-  const parts = [
-    ['A', raider.adventurerCrests],
-    ['V', raider.veteranCrests],
-    ['C', raider.championCrests],
-    ['H', raider.heroCrests],
-    ['M', raider.mythCrests],
-  ].filter(([, value]) => value !== null) as Array<[string, number]>;
-
-  if (parts.length === 0) return '—';
-
-  return parts.map(([label, value]) => `${label}:${value}`).join(' ');
-}
-
 function crestColor(label: string): string {
   if (label === 'M') return '#ff8000';
   if (label === 'H') return '#a335ee';
@@ -177,6 +163,10 @@ const topMythicScore = sortedRaiders.reduce((best, raider) =>
   (raider.mythicScore ?? -1) > (best?.mythicScore ?? -1) ? raider : best,
   null as (typeof sortedRaiders)[number] | null
 );
+const topMythicPlusWeekly = sortedRaiders.reduce((best, raider) =>
+  (raider.mythicPlusWeeklyRuns ?? -1) > (best?.mythicPlusWeeklyRuns ?? -1) ? raider : best,
+  null as (typeof sortedRaiders)[number] | null
+);
 const topSingleTarget = sortedRaiders.reduce((best, raider) =>
   (raider.singleTargetDps ?? -1) > (best?.singleTargetDps ?? -1) ? raider : best,
   null as (typeof sortedRaiders)[number] | null
@@ -212,6 +202,15 @@ const spotlightCards = [
     value: topMythicScore?.mythicScore ? topMythicScore.mythicScore.toLocaleString(undefined, { maximumFractionDigits: 0 }) : '—',
     detail: topMythicScore?.name ?? '—',
     className: topMythicScore?.className ?? '',
+  },
+  {
+    label: 'Most M+ Runs This Week',
+    icon: 'lucide:pickaxe',
+    value: topMythicPlusWeekly?.mythicPlusWeeklyRuns
+      ? String(topMythicPlusWeekly.mythicPlusWeeklyRuns)
+      : '—',
+    detail: topMythicPlusWeekly?.name ?? '—',
+    className: topMythicPlusWeekly?.className ?? '',
   },
 ];
 ---
@@ -283,6 +282,8 @@ const spotlightCards = [
             <th><button class="sort-btn" type="button" data-sort-key="equippedItemLevel">iLvl</button></th>
             <th><button class="sort-btn" type="button" data-sort-key="singleTargetDps">Sim DPS</button></th>
             <th><button class="sort-btn" type="button" data-sort-key="mythicScore">M+ Score</button></th>
+            <th><button class="sort-btn" type="button" data-sort-key="mythicPlusWeeklyRuns" data-tooltip="Number of unique dungeons keystoned this reset week per Raider.IO (max 8). One entry per dungeon regardless of how many times it was run." data-tooltip-dir="right">M+ This Week</button></th>
+            <th><button class="sort-btn" type="button" data-sort-key="mythicPlusPrevWeeklyRuns" data-tooltip="Number of unique dungeons keystoned last reset week per Raider.IO (max 8). One entry per dungeon regardless of how many times it was run." data-tooltip-dir="right">M+ Last Week</button></th>
             <th><button class="sort-btn" type="button" data-sort-key="tierPiecesEquipped">Tier</button></th>
             <th><button class="sort-btn" type="button" data-sort-key="crestSort">Crests Earned</button></th>
             <th><button class="sort-btn" type="button" data-sort-key="totalUpgradesMissing">Missing Upgrades</button></th>
@@ -306,6 +307,9 @@ const spotlightCards = [
                 data-equipped-item-level={String(raider.equippedItemLevel ?? -1)}
                 data-raid-progress-kills={String(raider.raidProgressKills ?? -1)}
                 data-mythic-score={String(raider.mythicScore ?? -1)}
+                data-mythic-plus-weekly-runs={String(raider.mythicPlusWeeklyRuns ?? -1)}
+                data-mythic-plus-prev-weekly-runs={String(raider.mythicPlusPrevWeeklyRuns ?? -1)}
+                data-mythic-plus-season-total={String((raider.mythicPlusSeasonRuns ?? 0) + (raider.mythicPlusWeeklyRuns ?? 0))}
                 data-single-target-dps={String(raider.singleTargetDps ?? -1)}
                 data-tier-pieces-equipped={String(raider.tierPiecesEquipped ?? -1)}
                 data-crest-sort={String(crestSortValue(raider))}
@@ -347,6 +351,8 @@ const spotlightCards = [
                 </td>
                 <td>{raider.singleTargetDps ? raider.singleTargetDps.toLocaleString(undefined, { maximumFractionDigits: 0 }) : '—'}</td>
                 <td>{raider.mythicScore ? raider.mythicScore.toLocaleString(undefined, { maximumFractionDigits: 0 }) : '—'}</td>
+                <td>{raider.mythicPlusWeeklyRuns ?? '—'}</td>
+                <td>{raider.mythicPlusPrevWeeklyRuns ?? '—'}</td>
                 <td>{raider.tierPiecesEquipped ?? '—'}</td>
                 <td>
                   <span class="crest-summary" title={`Adventurer ${raider.adventurerCrests ?? '—'}, Veteran ${raider.veteranCrests ?? '—'}, Champion ${raider.championCrests ?? '—'}, Hero ${raider.heroCrests ?? '—'}, Myth ${raider.mythCrests ?? '—'}`}>
@@ -416,7 +422,7 @@ const spotlightCards = [
       return matchesSearch && matchesClass && matchesTeam;
     });
 
-    const numericKeys = new Set(['equippedItemLevel', 'raidProgressKills', 'mythicScore', 'singleTargetDps', 'tierPiecesEquipped', 'crestSort', 'totalUpgradesMissing', 'preparednessScore']);
+    const numericKeys = new Set(['equippedItemLevel', 'raidProgressKills', 'mythicScore', 'mythicPlusWeeklyRuns', 'mythicPlusPrevWeeklyRuns', 'mythicPlusSeasonTotal', 'singleTargetDps', 'tierPiecesEquipped', 'crestSort', 'totalUpgradesMissing', 'preparednessScore']);
 
     visibleRows.sort((rowA, rowB) => {
       const toAttr = (key: string) => key.replace(/[A-Z]/g, (char) => `-${char.toLowerCase()}`);
@@ -751,6 +757,12 @@ const spotlightCards = [
     pointer-events: none;
   }
 
+  .sort-btn[data-tooltip-dir='right']:hover::before,
+  .sort-btn[data-tooltip-dir='right']:focus-visible::before {
+    right: auto;
+    left: 0;
+  }
+
   .sort-btn[aria-sort='asc']::after {
     content: ' ▲';
     font-size: 0.7rem;
@@ -862,6 +874,24 @@ const spotlightCards = [
 
   .score-val {
     font-weight: 600;
+  }
+
+  .mp-week-cell {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.1rem;
+  }
+
+  .mp-count {
+    font-weight: 600;
+  }
+
+  .vault-slots {
+    font-size: 0.72em;
+    color: #8ecfff;
+    white-space: nowrap;
+    cursor: default;
   }
 
   .crest-summary {

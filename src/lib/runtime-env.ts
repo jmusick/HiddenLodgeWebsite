@@ -5,6 +5,10 @@ interface BlizzardAuthConfig {
 	clientSecret: string;
 }
 
+interface RaiderIoConfig {
+	accessKey: string | null;
+}
+
 function readEnv(key: string): string | undefined {
 	const runtimeValue = (cloudflareEnv as unknown as Record<string, string | undefined>)[key];
 	if (runtimeValue && runtimeValue.trim()) {
@@ -61,4 +65,12 @@ export function getBlizzardRedirectUri(requestUrl: string): string {
 	}
 
 	return fallback;
+}
+
+export function getRaiderIoConfig(): RaiderIoConfig {
+	const accessKey = readEnv('RAIDER_IO_ACCESS_KEY');
+
+	return {
+		accessKey: accessKey?.trim() || null,
+	};
 }

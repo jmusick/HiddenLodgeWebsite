@@ -5,6 +5,7 @@ import { fallbackClassIconUrl } from './class-icons';
 import { getLatestDroptimizerForRaiders, getLatestSingleTargetForRaiders } from './sim-api';
 import { getBlizzardAppAccessToken as getSharedBlizzardAppAccessToken } from './blizzard-app-token';
 import { fetchBlizzardJsonWithRetry } from './blizzard-fetch';
+import { getCharacterMythicPlusRunCounts } from './raider-io';
 
 const API_BASE = 'https://us.api.blizzard.com';
 const PROFILE_NAMESPACE = 'profile-us';
@@ -52,6 +53,42 @@ const ALWAYS_ENCHANTABLE_SLOTS = new Set([
 // and must not be counted as tier pieces.
 const TIER_SET_SLOTS = new Set(['HEAD', 'SHOULDER', 'CHEST', 'HANDS', 'LEGS']);
 
+// Season 16 Great Vault ilvl reward by keystone level.
+// Levels > 10 are capped to 10; levels < 2 are not valid keystone levels
+// from Raider.IO (which only returns actual keystone runs).
+const GREAT_VAULT_DUNGEON_ILVL = new Map<number, number>([
+  [10, 272], [9, 269], [8, 269], [7, 269], [6, 266],
+  [5, 263],  [4, 263], [3, 259], [2, 259],
+]);
+
+// Blizzard achievement stat IDs for all Season 16 tracked Mythic+ dungeons.
+// The `quantity` field is the lifetime completion count per dungeon.
+// Pit of Saron has no stat ID (mythic_id = 0) so it is omitted.
+const SEASON_16_MYTHIC_DUNGEON_STAT_IDS = new Set([
+  61652, 61217, 61275, 41295, 61655, 61658, 61661, 61513, // expansion dungeons
+  16088, 12613, 10195,                                      // legacy keystones
+]);
+
+// US weekly reset: Tuesday 15:00 UTC.
+function getUsWeeklyResetTimestamp(): number {
+  const now = new Date();
+  const day = now.getUTCDay(); // 0=Sun, 1=Mon, 2=Tue, …
+  const daysSinceTuesday = (day - 2 + 7) % 7;
+  const resetDate = new Date(Date.UTC(
+    now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() - daysSinceTuesday, 15, 0, 0, 0
+  ));
+  if (resetDate > now) resetDate.setUTCDate(resetDate.getUTCDate() - 7);
+  return Math.floor(resetDate.getTime() / 1000);
+}
+
+// Look up Great Vault ilvl for a keystone level at the given sorted-desc slot index.
+function computeVaultIlvl(sortedLevels: number[], slotIndex: 0 | 3 | 7): number | null {
+  const level = sortedLevels[slotIndex];
+  if (level === undefined) return null;
+  const clamped = Math.min(level, 10);
+  return GREAT_VAULT_DUNGEON_ILVL.get(clamped) ?? null;
+}
+
 type RaiderAuthState = 'ready' | 'missing' | 'expired' | 'unavailable';
 
 interface RaiderSourceRow {
@@ -84,6 +121,13 @@ interface CachedRaiderRow {
   champion_crests: number | null;
   hero_crests: number | null;
   myth_crests: number | null;
+  mythic_plus_run_count: number | null;
+  mythic_plus_weekly_runs: number | null;
+  mythic_plus_prev_weekly_runs: number | null;
+  mythic_plus_season_runs: number | null;
+  mythic_plus_vault_ilvl_1: number | null;
+  mythic_plus_vault_ilvl_2: number | null;
+  mythic_plus_vault_ilvl_3: number | null;
   total_upgrades_missing: number | null;
   raid_progress_raid_name: string | null;
   raid_progress_label: string | null;
@@ -370,6 +414,14 @@ export interface RaiderRecord {
   championCrests: number | null;
   heroCrests: number | null;
   mythCrests: number | null;
+  mythicPlusRunCount: number | null;
+  mythicPlusWeeklyRuns: number | null;
+  mythicPlusPrevWeeklyRuns: number | null;
+  mythicPlusSeasonRuns: number | null;
+  mythicPlusVaultIlvl1: number | null;
+  mythicPlusVaultIlvl2: number | null;
+  mythicPlusVaultIlvl3: number | null;
+  mythicPlusLifetimeTotal: number | null;
   totalUpgradesMissing: number | null;
   raidProgressRaidName: string | null;
   raidProgressLabel: string | null;
@@ -442,6 +494,20 @@ function extractCrestCounts(stats: BlizzardAchievementStatisticsResponse | null)
     heroCrests: read(CREST_STAT_IDS.hero),
     mythCrests: read(CREST_STAT_IDS.myth),
   };
+}
+
+// Sums the lifetime `quantity` for all Season 16 tracked dungeons across every
+// achievement statistics category. Used to compute weekly run deltas.
+function extractMythicPlusLifetimeTotal(stats: BlizzardAchievementStatisticsResponse | null): number {
+  let total = 0;
+  for (const category of stats?.categories ?? []) {
+    for (const stat of category.statistics ?? []) {
+      if (stat.id !== undefined && SEASON_16_MYTHIC_DUNGEON_STAT_IDS.has(stat.id)) {
+        total += Number(stat.quantity ?? 0);
+      }
+    }
+  }
+  return total;
 }
 
 function countTierPieces(items: BlizzardEquippedItem[]): number {
@@ -623,6 +689,14 @@ async function enrichRaider(row: RaiderSourceRow, now: number, raidProgressTarge
     championCrests: null,
     heroCrests: null,
     mythCrests: null,
+    mythicPlusRunCount: null,
+    mythicPlusWeeklyRuns: null,
+    mythicPlusPrevWeeklyRuns: null,
+    mythicPlusSeasonRuns: null,
+    mythicPlusVaultIlvl1: null,
+    mythicPlusVaultIlvl2: null,
+    mythicPlusVaultIlvl3: null,
+    mythicPlusLifetimeTotal: null,
     totalUpgradesMissing: null,
     raidProgressRaidName: null,
     raidProgressLabel: null,
@@ -642,7 +716,7 @@ async function enrichRaider(row: RaiderSourceRow, now: number, raidProgressTarge
     return { ...baseRecord, authState: 'unavailable' };
   }
 
-  const [summary, equipment, mythicProfile, achievementStatistics, raidEncounters] = await Promise.all([
+  const [summary, equipment, mythicProfile, achievementStatistics, raidEncounters, mythicPlusRunCount] = await Promise.all([
     fetchBlizzardJsonWithRetry<BlizzardSummaryResponse>(buildCharacterUrl(row.realm_slug, row.name), accessToken),
     fetchBlizzardJsonWithRetry<BlizzardEquipmentResponse>(buildCharacterUrl(row.realm_slug, row.name, '/equipment'), accessToken),
     fetchBlizzardJsonWithRetry<BlizzardMythicProfileResponse>(
@@ -657,6 +731,7 @@ async function enrichRaider(row: RaiderSourceRow, now: number, raidProgressTarge
       buildCharacterUrl(row.realm_slug, row.name, '/encounters/raids'),
       accessToken
     ),
+    getCharacterMythicPlusRunCounts(row.realm_slug, row.name).catch(() => ({ total: null, thisWeek: null, lastWeek: null, thisWeekKeyLevels: [] as number[] })),
   ]);
 
   if (!summary || !equipment) {
@@ -687,6 +762,14 @@ async function enrichRaider(row: RaiderSourceRow, now: number, raidProgressTarge
     championCrests: crestCounts.championCrests,
     heroCrests: crestCounts.heroCrests,
     mythCrests: crestCounts.mythCrests,
+    mythicPlusRunCount: mythicPlusRunCount.total,
+    mythicPlusWeeklyRuns: null, // computed in update loop via Blizzard stat delta
+    mythicPlusPrevWeeklyRuns: mythicPlusRunCount.lastWeek,
+    mythicPlusSeasonRuns: null, // computed in update loop from old DB values
+    mythicPlusVaultIlvl1: computeVaultIlvl(mythicPlusRunCount.thisWeekKeyLevels, 0),
+    mythicPlusVaultIlvl2: computeVaultIlvl(mythicPlusRunCount.thisWeekKeyLevels, 3),
+    mythicPlusVaultIlvl3: computeVaultIlvl(mythicPlusRunCount.thisWeekKeyLevels, 7),
+    mythicPlusLifetimeTotal: extractMythicPlusLifetimeTotal(achievementStatistics),
     totalUpgradesMissing,
     raidProgressRaidName: raidProgress.raidName,
     raidProgressLabel: raidProgress.label,
@@ -770,6 +853,13 @@ async function listCachedRaiders(db: D1Database): Promise<RaiderRecord[]> {
           champion_crests,
           hero_crests,
           myth_crests,
+          mythic_plus_run_count,
+          mythic_plus_weekly_runs,
+          mythic_plus_prev_weekly_runs,
+          mythic_plus_season_runs,
+          mythic_plus_vault_ilvl_1,
+          mythic_plus_vault_ilvl_2,
+          mythic_plus_vault_ilvl_3,
           total_upgrades_missing,
           raid_progress_raid_name,
           raid_progress_label,
@@ -808,6 +898,14 @@ async function listCachedRaiders(db: D1Database): Promise<RaiderRecord[]> {
     championCrests: row.champion_crests,
     heroCrests: row.hero_crests,
     mythCrests: row.myth_crests,
+    mythicPlusRunCount: row.mythic_plus_run_count,
+    mythicPlusWeeklyRuns: row.mythic_plus_weekly_runs,
+    mythicPlusPrevWeeklyRuns: row.mythic_plus_prev_weekly_runs,
+    mythicPlusSeasonRuns: row.mythic_plus_season_runs,
+    mythicPlusVaultIlvl1: row.mythic_plus_vault_ilvl_1,
+    mythicPlusVaultIlvl2: row.mythic_plus_vault_ilvl_2,
+    mythicPlusVaultIlvl3: row.mythic_plus_vault_ilvl_3,
+    mythicPlusLifetimeTotal: null,
     totalUpgradesMissing: row.total_upgrades_missing,
     raidProgressRaidName: row.raid_progress_raid_name,
     raidProgressLabel: row.raid_progress_label,
@@ -1074,9 +1172,48 @@ export async function refreshRaidersCache(
     enrichRaider(row, now, effectiveRaidProgressTierId)
   );
 
+  // Fetch old M+ data to compute season accumulation on weekly rollover.
+  const weeklyResetTs = getUsWeeklyResetTimestamp();
+  type OldMythicRow = { blizzard_char_id: number; mythic_plus_weekly_runs: number | null; mythic_plus_season_runs: number | null; details_synced_at: number | null; mythic_plus_quantity_snapshot: number | null };
+  const oldMythicMap = new Map<number, { weekly: number | null; season: number | null; syncedAt: number | null; snapshot: number | null }>();
+  if (detailCandidates.length > 0) {
+    const placeholders = detailCandidates.map(() => '?').join(',');
+    const oldRows = await db
+      .prepare(`SELECT blizzard_char_id, mythic_plus_weekly_runs, mythic_plus_season_runs, details_synced_at, mythic_plus_quantity_snapshot FROM raider_metrics_cache WHERE blizzard_char_id IN (${placeholders})`)
+      .bind(...detailCandidates.map((c) => c.blizzard_char_id))
+      .all<OldMythicRow>();
+    for (const r of oldRows.results ?? []) {
+      oldMythicMap.set(r.blizzard_char_id, { weekly: r.mythic_plus_weekly_runs, season: r.mythic_plus_season_runs, syncedAt: r.details_synced_at, snapshot: r.mythic_plus_quantity_snapshot });
+    }
+  }
+
   for (let i = 0; i < detailCandidates.length; i += 1) {
     const source = detailCandidates[i];
     const detailed = detailedRaiders[i];
+
+    // Compute true weekly runs as delta from the start-of-week Blizzard stat snapshot.
+    // On weekly rollover: accumulate old weekly into season and reset the snapshot.
+    const old = oldMythicMap.get(source.blizzard_char_id);
+    const currentLifetime = detailed.mythicPlusLifetimeTotal;
+    let newSeasonRuns: number | null = old?.season ?? null;
+    let newSnapshot: number | null = old?.snapshot ?? null;
+    let newWeeklyRuns: number | null = null;
+
+    if (currentLifetime !== null) {
+      if (old && old.syncedAt !== null && old.syncedAt < weeklyResetTs) {
+        // New week detected: commit previous week's count into season and reset baseline.
+        newSeasonRuns = (old.season ?? 0) + (old.weekly ?? 0);
+        newSnapshot = currentLifetime;
+        newWeeklyRuns = 0;
+      } else if (newSnapshot !== null) {
+        // Same week: delta from snapshot gives true run count (uncapped).
+        newWeeklyRuns = Math.max(0, currentLifetime - newSnapshot);
+      } else {
+        // First capture ever: establish snapshot, weekly starts at 0.
+        newSnapshot = currentLifetime;
+        newWeeklyRuns = 0;
+      }
+    }
 
     await db
       .prepare(
@@ -1095,6 +1232,14 @@ export async function refreshRaidersCache(
              champion_crests = ?,
              hero_crests = ?,
              myth_crests = ?,
+             mythic_plus_run_count = ?,
+             mythic_plus_weekly_runs = ?,
+             mythic_plus_prev_weekly_runs = ?,
+             mythic_plus_season_runs = ?,
+             mythic_plus_vault_ilvl_1 = ?,
+             mythic_plus_vault_ilvl_2 = ?,
+             mythic_plus_vault_ilvl_3 = ?,
+             mythic_plus_quantity_snapshot = ?,
              total_upgrades_missing = ?,
              raid_progress_raid_name = ?,
              raid_progress_label = ?,
@@ -1120,6 +1265,14 @@ export async function refreshRaidersCache(
         detailed.championCrests,
         detailed.heroCrests,
         detailed.mythCrests,
+        detailed.mythicPlusRunCount,
+        newWeeklyRuns,
+        detailed.mythicPlusPrevWeeklyRuns,
+        newSeasonRuns,
+        detailed.mythicPlusVaultIlvl1,
+        detailed.mythicPlusVaultIlvl2,
+        detailed.mythicPlusVaultIlvl3,
+        newSnapshot,
         detailed.totalUpgradesMissing,
         detailed.raidProgressRaidName,
         detailed.raidProgressLabel,
@@ -1332,6 +1485,13 @@ export async function getRaiderByCharId(charId: number, dbInput?: D1Database): P
            champion_crests,
            hero_crests,
            myth_crests,
+          mythic_plus_run_count,
+          mythic_plus_weekly_runs,
+          mythic_plus_prev_weekly_runs,
+          mythic_plus_season_runs,
+          mythic_plus_vault_ilvl_1,
+          mythic_plus_vault_ilvl_2,
+          mythic_plus_vault_ilvl_3,
           total_upgrades_missing,
           raid_progress_raid_name,
            raid_progress_label,
@@ -1373,6 +1533,14 @@ export async function getRaiderByCharId(charId: number, dbInput?: D1Database): P
     championCrests: row.champion_crests,
     heroCrests: row.hero_crests,
     mythCrests: row.myth_crests,
+    mythicPlusRunCount: row.mythic_plus_run_count,
+    mythicPlusWeeklyRuns: row.mythic_plus_weekly_runs,
+    mythicPlusPrevWeeklyRuns: row.mythic_plus_prev_weekly_runs,
+    mythicPlusSeasonRuns: row.mythic_plus_season_runs,
+    mythicPlusVaultIlvl1: row.mythic_plus_vault_ilvl_1,
+    mythicPlusVaultIlvl2: row.mythic_plus_vault_ilvl_2,
+    mythicPlusVaultIlvl3: row.mythic_plus_vault_ilvl_3,
+    mythicPlusLifetimeTotal: null,
     totalUpgradesMissing: row.total_upgrades_missing,
     raidProgressRaidName: row.raid_progress_raid_name,
     raidProgressLabel: row.raid_progress_label,

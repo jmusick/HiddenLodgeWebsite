@@ -42,7 +42,7 @@ export async function POST(context: APIContext): Promise<Response> {
     return redirectWith('must-be-90');
   }
 
-  const existsRow = await env.DB.prepare(
+  await env.DB.prepare(
     `SELECT 1 AS found FROM raid_team_members WHERE team_id = ? AND blizzard_char_id = ?`
   )
     .bind(teamId, blizzardCharId)

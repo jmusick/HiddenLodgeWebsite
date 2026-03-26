@@ -10,7 +10,7 @@ interface Props {
   charClass: string;
 }
 
-const { charId, charName, charClass } = Astro.props as Props;
+const { charId, charClass } = Astro.props as Props;
 const accent = classColor(charClass);
 const latest = await getLatestSimForRaider(env.DB, charId);
 

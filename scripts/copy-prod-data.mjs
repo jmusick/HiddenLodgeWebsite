@@ -5,7 +5,6 @@
  */
 
 import { execSync } from 'child_process';
-import fs from 'fs';
 import { fileURLToPath } from 'url';
 import { dirname } from 'path';
 
