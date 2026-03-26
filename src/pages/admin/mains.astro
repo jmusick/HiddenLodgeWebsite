@@ -51,7 +51,16 @@ interface UnauthedRosterRow {
 	rank: number;
 }
 
-const [usersResult, charsResult, unauthedResult] = await env.DB.batch([
+interface NoteRow {
+	id: number;
+	blizzard_char_id: number;
+	linked_user_id: number | null;
+	note_text: string;
+	created_at: number;
+	author_name: string;
+}
+
+const [usersResult, charsResult, unauthedResult, notesResult] = await env.DB.batch([
 	env.DB.prepare(`
 		SELECT DISTINCT u.id AS user_id, u.battle_tag, u.nickname
 		FROM users u
@@ -78,11 +87,21 @@ const [usersResult, charsResult, unauthedResult] = await env.DB.batch([
 		)
 		ORDER BY rmc.rank ASC, rmc.name ASC
 	`),
+	env.DB.prepare(`
+		SELECT rn.id, rn.blizzard_char_id, rn.note_text, rn.created_at,
+		       COALESCE(au.nickname, au.battle_tag) AS author_name,
+		       c.user_id AS linked_user_id
+		FROM raider_notes rn
+		LEFT JOIN characters c ON c.blizzard_char_id = rn.blizzard_char_id
+		JOIN users au ON au.id = rn.author_user_id
+		ORDER BY rn.blizzard_char_id ASC, rn.created_at DESC
+	`),
 ]);
 
 const guildUsers = (usersResult.results ?? []) as GuildUserRow[];
 const allChars = (charsResult.results ?? []) as CharRow[];
 const unauthed = (unauthedResult.results ?? []) as UnauthedRosterRow[];
+const allNotes = (notesResult.results ?? []) as NoteRow[];
 
 const charsByUser = new Map<number, CharRow[]>();
 for (const char of allChars) {
@@ -91,7 +110,40 @@ for (const char of allChars) {
 	charsByUser.set(char.user_id, arr);
 }
 
-const statusParam = new URL(Astro.request.url).searchParams.get('status');
+const notesByUser = new Map<number, NoteRow[]>();
+const notesByChar = new Map<number, NoteRow[]>();
+for (const note of allNotes) {
+	// Always index by char (for unauthed display)
+	const charArr = notesByChar.get(note.blizzard_char_id) ?? [];
+	charArr.push(note);
+	notesByChar.set(note.blizzard_char_id, charArr);
+	// Also aggregate by user when the char is linked (for authed display)
+	if (note.linked_user_id !== null) {
+		const userArr = notesByUser.get(note.linked_user_id) ?? [];
+		userArr.push(note);
+		notesByUser.set(note.linked_user_id, userArr);
+	}
+}
+
+function formatNoteDate(unixTs: number): string {
+	return new Date(unixTs * 1000).toLocaleString('en-GB', {
+		year: 'numeric', month: 'short', day: 'numeric',
+		hour: '2-digit', minute: '2-digit',
+	});
+}
+
+const canDeleteNotes = Astro.locals.user?.battleTag === 'Xing#1673';
+
+const params = new URL(Astro.request.url).searchParams;
+const statusParam = params.get('status');
+
+const statusMessages: Record<string, { type: 'ok' | 'error'; text: string }> = {
+	'ok':           { type: 'ok',    text: 'Nickname saved.' },
+	'note-added':   { type: 'ok',    text: 'Note saved.' },
+	'note-deleted': { type: 'ok',    text: 'Note deleted.' },
+	'error':        { type: 'error', text: 'Something went wrong. Please try again.' },
+};
+const flash = statusParam ? (statusMessages[statusParam] ?? null) : null;
 ---
 
 <AdminLayout title="Mains & Alts | Admin | The Hidden Lodge">
@@ -104,17 +156,25 @@ const statusParam = new URL(Astro.request.url).searchParams.get('status');
 					You can assign a nickname that displays alongside their characters.
 				</p>
 			</div>
-			<div class="page-stats">
-				<span class="stat"><strong>{guildUsers.length}</strong> authenticated</span>
-				<span class="stat"><strong>{unauthed.length}</strong> not yet logged in</span>
+			<div class="page-right">
+				<div class="page-stats">
+					<span class="stat"><strong>{guildUsers.length}</strong> authenticated</span>
+					<span class="stat"><strong>{unauthed.length}</strong> not yet logged in</span>
+				</div>
+				<input
+					id="member-search"
+					type="search"
+					placeholder="Search nickname, main, character…"
+					class="search-input"
+					autocomplete="off"
+				/>
 			</div>
 		</div>
 
-		{statusParam === 'ok' && (
-			<div class="flash flash-ok" role="alert">Nickname saved.</div>
-		)}
-		{statusParam === 'error' && (
-			<div class="flash flash-error" role="alert">Something went wrong. Please try again.</div>
+		{flash && (
+			<div class:list={['flash', flash.type === 'ok' ? 'flash-ok' : 'flash-error']} role="alert">
+				{flash.text}
+			</div>
 		)}
 
 		<!-- ── Authenticated Guild Members ──────────────────────────────────── -->
@@ -134,10 +194,19 @@ const statusParam = new URL(Astro.request.url).searchParams.get('status');
 						const guildChars = chars.filter((c) => c.guild_rank !== null);
 						const otherChars = chars.filter((c) => c.guild_rank === null);
 						const displayName = guildUser.nickname ?? guildUser.battle_tag;
+						const notes = notesByUser.get(guildUser.user_id) ?? [];
+							// Use main char's id as the note target; fall back to first guild char
+							const noteCharId = (mainChar ?? guildChars[0])?.blizzard_char_id;
 
-						return (
-							<div class="profile-card">
-								<div class="card-header">
+									const searchTerms = [
+									guildUser.nickname,
+									guildUser.battle_tag,
+									...chars.map((c) => c.name),
+								].filter(Boolean).join(' ').toLowerCase();
+
+								return (
+									<div class="profile-card" data-search={searchTerms}>
+									<div class="card-header">
 									<div class="card-identity">
 										<span class="card-display-name">{displayName}</span>
 										{guildUser.nickname && (
@@ -191,6 +260,51 @@ const statusParam = new URL(Astro.request.url).searchParams.get('status');
 									</details>
 								)}
 
+								<!-- Notes -->
+								<div class="notes-section">
+									<div class="notes-header">
+										<span class="notes-label">Notes</span>
+										{notes.length > 0 && (
+											<span class="notes-count">{notes.length}</span>
+										)}
+									</div>
+									{notes.length > 0 && (
+										<ul class="notes-list">
+											{notes.map((note) => (
+												<li class="note-item">
+													<div class="note-meta">
+														<span class="note-author">{note.author_name}</span>
+														<span class="note-date">{formatNoteDate(note.created_at)}</span>
+													</div>
+													<p class="note-body">{note.note_text}</p>
+														{canDeleteNotes && (
+															<form method="POST" action="/api/admin/raider-notes/delete" class="note-delete-form">
+																<input type="hidden" name="id" value={note.id} />
+																<button type="submit" class="btn-delete" title="Delete note"
+																	onclick="return confirm('Delete this note?')">&times;</button>
+															</form>
+														)}
+												</li>
+											))}
+										</ul>
+									)}
+									<details class="add-note-panel">
+										<summary class="add-note-toggle">Add note&hellip;</summary>
+										<form method="POST" action="/api/admin/raider-notes/create" class="add-note-form">
+											<input type="hidden" name="blizzard_char_id" value={noteCharId} />
+											<textarea
+												name="note_text"
+												class="note-textarea"
+												rows="3"
+												placeholder={`Note about ${displayName}…`}
+												maxlength="1000"
+												required
+											></textarea>
+											<button type="submit" class="btn btn-primary">Save Note</button>
+										</form>
+									</details>
+								</div>
+
 								<details class="edit-panel">
 									<summary class="edit-toggle">Set Nickname</summary>
 									<form method="POST" action="/api/admin/update-nickname" class="edit-inner">
@@ -210,6 +324,7 @@ const statusParam = new URL(Astro.request.url).searchParams.get('status');
 						);
 					})}
 				</div>
+				<p class="search-empty empty-state" style="display:none">No members match your search.</p>
 			)}
 		</section>
 
@@ -221,39 +336,98 @@ const statusParam = new URL(Astro.request.url).searchParams.get('status');
 					<span class="count-badge">{unauthed.length}</span>
 				</h2>
 				<p class="section-desc">
-					These roster members haven't authenticated with Battle.net yet. Their mains and alts will
-					appear automatically once they log in and set their main via their profile.
+					These roster members haven't authenticated with Battle.net yet. Notes added here will
+					automatically appear on their profile once they log in and link their character.
 				</p>
-				<div class="table-wrap unauthed-wrap">
-					<table class="data-table">
-						<thead>
-							<tr>
-								<th>Character</th>
-								<th>Class</th>
-								<th>Realm</th>
-								<th>Guild Rank</th>
-							</tr>
-						</thead>
-						<tbody>
-							{unauthed.map((char) => (
-								<tr>
-									<td>
-										<span class="char-name" style={`color: ${classColor(char.class_name)}`}>
+				<div class="profiles-grid">
+					{unauthed.map((char) => {
+						const notes = notesByChar.get(char.blizzard_char_id) ?? [];
+						const unauthedSearch = char.name.toLowerCase();
+							return (
+								<div class="profile-card unauthed-card" data-search={unauthedSearch}>
+									<div class="card-header">
+									<div class="card-identity">
+										<span class="card-display-name" style={`color: ${classColor(char.class_name)}`}>
 											{char.name}
 										</span>
-									</td>
-									<td class="text-muted">{char.class_name}</td>
-									<td class="text-muted">{char.realm}</td>
-									<td class="text-muted">{rankLabel(char.rank)}</td>
-								</tr>
-							))}
-						</tbody>
-					</table>
+										<span class="card-battletag">{char.class_name} &middot; {char.realm}</span>
+									</div>
+									<span class="no-main-pill">{rankLabel(char.rank)}</span>
+								</div>
+
+								<!-- Notes -->
+								<div class="notes-section">
+									<div class="notes-header">
+										<span class="notes-label">Notes</span>
+										{notes.length > 0 && (
+											<span class="notes-count">{notes.length}</span>
+										)}
+									</div>
+									{notes.length > 0 && (
+										<ul class="notes-list">
+											{notes.map((note) => (
+												<li class="note-item">
+													<div class="note-meta">
+														<span class="note-author">{note.author_name}</span>
+														<span class="note-date">{formatNoteDate(note.created_at)}</span>
+													</div>
+													<p class="note-body">{note.note_text}</p>
+													{canDeleteNotes && (
+														<form method="POST" action="/api/admin/raider-notes/delete" class="note-delete-form">
+															<input type="hidden" name="id" value={note.id} />
+															<button type="submit" class="btn-delete" title="Delete note"
+																onclick="return confirm('Delete this note?')">&times;</button>
+														</form>
+													)}
+												</li>
+											))}
+										</ul>
+									)}
+									<details class="add-note-panel">
+										<summary class="add-note-toggle">Add note&hellip;</summary>
+										<form method="POST" action="/api/admin/raider-notes/create" class="add-note-form">
+											<input type="hidden" name="blizzard_char_id" value={char.blizzard_char_id} />
+											<textarea
+												name="note_text"
+												class="note-textarea"
+												rows="3"
+												placeholder={`Note about ${char.name}…`}
+												maxlength="1000"
+												required
+											></textarea>
+											<button type="submit" class="btn btn-primary">Save Note</button>
+										</form>
+									</details>
+								</div>
+							</div>
+						);
+					})}
 				</div>
+				<p class="search-empty empty-state" style="display:none">No members match your search.</p>
 			</section>
 		)}
 	</div>
 </AdminLayout>
+
+<script>
+	const input = document.getElementById('member-search') as HTMLInputElement | null;
+	if (input) {
+		input.addEventListener('input', () => {
+			const q = input.value.trim().toLowerCase();
+			document.querySelectorAll<HTMLElement>('.profiles-grid').forEach((grid) => {
+				let visible = 0;
+				grid.querySelectorAll<HTMLElement>('.profile-card').forEach((card) => {
+					const match = !q || (card.dataset.search ?? '').includes(q);
+					card.style.display = match ? '' : 'none';
+					if (match) visible++;
+				});
+				// Show/hide the empty-state sibling if all cards are hidden
+				const emptyEl = grid.parentElement?.querySelector<HTMLElement>('.search-empty');
+				if (emptyEl) emptyEl.style.display = visible === 0 ? '' : 'none';
+			});
+		});
+	}
+</script>
 
 <style>
 	.mains-page {
@@ -275,6 +449,30 @@ const statusParam = new URL(Astro.request.url).searchParams.get('status');
 		font-size: 1.75rem;
 		color: var(--gold-bright);
 	}
+
+	.page-right {
+		display: flex;
+		flex-direction: column;
+		align-items: flex-end;
+		gap: 0.6rem;
+		flex-shrink: 0;
+	}
+
+	.search-input {
+		width: 18rem;
+		max-width: 100%;
+		background: rgba(7, 17, 26, 0.7);
+		border: 1px solid rgba(214, 176, 106, 0.3);
+		border-radius: 0.4rem;
+		color: var(--text);
+		font-family: var(--font-body);
+		font-size: 0.88rem;
+		padding: 0.35rem 0.65rem;
+		outline: none;
+		transition: border-color 140ms ease;
+	}
+	.search-input:focus { border-color: rgba(214, 176, 106, 0.65); }
+	.search-input::placeholder { color: var(--muted); opacity: 0.7; }
 
 	.page-desc {
 		margin: 0;
@@ -434,6 +632,12 @@ const statusParam = new URL(Astro.request.url).searchParams.get('status');
 		display: flex;
 		flex-direction: column;
 		gap: 0.25rem;
+		/* ~5 rows visible: each row ≈ 1.9rem tall */
+		max-height: calc(5 * 1.9rem + 4 * 0.25rem);
+		overflow-y: auto;
+		overflow-x: hidden;
+		scrollbar-width: thin;
+		scrollbar-color: rgba(214, 176, 106, 0.25) transparent;
 	}
 
 	.char-list-dim { opacity: 0.65; }
@@ -444,18 +648,18 @@ const statusParam = new URL(Astro.request.url).searchParams.get('status');
 		gap: 0.5rem;
 		flex-wrap: wrap;
 		padding: 0.2rem 0;
+		min-width: 0;
 	}
 
 	.char-row.is-main {
 		background: rgba(214, 176, 106, 0.05);
 		border-radius: 0.3rem;
 		padding-inline: 0.35rem;
-		margin-inline: -0.35rem;
 	}
 
-	.char-name { font-weight: 600; font-size: 0.92rem; }
-	.char-meta { font-size: 0.8rem; color: var(--muted); }
-	.char-rank { margin-left: auto; font-size: 0.75rem; color: var(--muted); white-space: nowrap; }
+	.char-name { font-weight: 600; font-size: 0.92rem; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+	.char-meta { font-size: 0.8rem; color: var(--muted); white-space: nowrap; }
+	.char-rank { margin-left: auto; font-size: 0.75rem; color: var(--muted); white-space: nowrap; flex-shrink: 0; }
 
 	.main-badge {
 		display: inline-block;
@@ -601,6 +805,154 @@ const statusParam = new URL(Astro.request.url).searchParams.get('status');
 
 	.data-table tr:hover td { background: rgba(214, 176, 106, 0.04); }
 	.text-muted { color: var(--muted); }
+
+	/* ── Focus highlight ────────────────────────────────────────────── */
+	/* ── Notes ──────────────────────────────────────────────────────── */
+	.notes-section {
+		display: flex;
+		flex-direction: column;
+		gap: 0.5rem;
+		padding: 0.65rem 1rem 0.6rem;
+		border-top: 1px solid rgba(214, 176, 106, 0.1);
+	}
+
+	.notes-header {
+		display: flex;
+		align-items: center;
+		gap: 0.45rem;
+	}
+
+	.notes-label {
+		font-size: 0.72rem;
+		font-weight: 700;
+		text-transform: uppercase;
+		letter-spacing: 0.07em;
+		color: var(--muted);
+	}
+
+	.notes-count {
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		min-width: 1.3rem;
+		height: 1.3rem;
+		padding-inline: 0.35rem;
+		border-radius: 999px;
+		background: rgba(214, 176, 106, 0.12);
+		border: 1px solid rgba(214, 176, 106, 0.3);
+		color: var(--gold);
+		font-size: 0.7rem;
+		font-weight: 700;
+	}
+
+	.notes-list {
+		list-style: none;
+		margin: 0;
+		padding: 0;
+		display: flex;
+		flex-direction: column;
+		gap: 0.45rem;
+	}
+
+	.note-item {
+		position: relative;
+		background: rgba(255, 255, 255, 0.03);
+		border: 1px solid rgba(255, 255, 255, 0.07);
+		border-radius: 0.4rem;
+		padding: 0.45rem 2rem 0.45rem 0.6rem;
+	}
+
+	.note-meta {
+		display: flex;
+		align-items: center;
+		gap: 0.5rem;
+		margin-bottom: 0.2rem;
+		flex-wrap: wrap;
+	}
+
+	.note-author {
+		font-size: 0.76rem;
+		font-weight: 700;
+		color: var(--gold);
+	}
+
+	.note-date {
+		font-size: 0.7rem;
+		color: var(--muted);
+	}
+
+	.note-body {
+		margin: 0;
+		font-size: 0.84rem;
+		color: var(--text);
+		white-space: pre-wrap;
+		word-break: break-word;
+		line-height: 1.45;
+	}
+
+	.note-delete-form {
+		position: absolute;
+		top: 0.3rem;
+		right: 0.3rem;
+	}
+
+	.btn-delete {
+		background: none;
+		border: none;
+		cursor: pointer;
+		color: var(--muted);
+		font-size: 1.1rem;
+		line-height: 1;
+		padding: 0.1rem 0.3rem;
+		border-radius: 0.25rem;
+		transition: color 0.15s, background 0.15s;
+	}
+	.btn-delete:hover {
+		color: #f47e7e;
+		background: rgba(244, 126, 126, 0.1);
+	}
+
+	.add-note-panel { margin-top: 0.1rem; }
+
+	.add-note-toggle {
+		font-size: 0.8rem;
+		color: var(--gold);
+		cursor: pointer;
+		list-style: none;
+		display: inline-flex;
+		align-items: center;
+		padding: 0.15rem 0;
+		user-select: none;
+	}
+	.add-note-toggle::-webkit-details-marker { display: none; }
+	.add-note-toggle:hover { text-decoration: underline; }
+
+	.add-note-form {
+		display: flex;
+		flex-direction: column;
+		gap: 0.5rem;
+		margin-top: 0.45rem;
+	}
+
+	.note-textarea {
+		width: 100%;
+		resize: vertical;
+		background: rgba(255, 255, 255, 0.05);
+		border: 1px solid rgba(214, 176, 106, 0.3);
+		border-radius: 0.35rem;
+		color: var(--text);
+		font-family: var(--font-body);
+		font-size: 0.875rem;
+		padding: 0.45rem 0.6rem;
+		line-height: 1.45;
+		min-height: 4.5rem;
+		box-sizing: border-box;
+	}
+	.note-textarea:focus {
+		outline: none;
+		border-color: rgba(214, 176, 106, 0.6);
+	}
+	.note-textarea::placeholder { color: var(--muted); opacity: 0.7; }
 
 	@media (max-width: 640px) {
 		.profiles-grid { grid-template-columns: 1fr; }

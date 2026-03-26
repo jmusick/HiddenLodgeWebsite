@@ -33,7 +33,7 @@ The site combines public guild information, Blizzard-authenticated member profil
 
 ### Admin Features
 
-- Mains & Alts module for member authentication and nickname management
+- Mains & Alts module for member authentication, nickname management, and searchable member list (by nickname, main, or any character name); officer notes per member with author and timestamp, stored by character so notes on un-authenticated roster members automatically merge once they log in
 - Roster Teams module for multi-team raid setup and role assignment
 - Raid Signups module for schedule creation and signup management
 - Links Management for useful links curation
