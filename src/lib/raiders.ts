@@ -13,7 +13,7 @@ const LOCALE = 'en_US';
 const REQUEST_CONCURRENCY = 3;
 const DETAILS_TTL_SECONDS = 12 * 60 * 60;
 const DETAIL_BATCH_SIZE = 6;
-const PREPAREDNESS_HISTORY_WINDOW_SECONDS = 30 * 24 * 60 * 60; // 30 days
+const PREPAREDNESS_HISTORY_WINDOW_SECONDS = 14 * 24 * 60 * 60; // 14 days (2 weeks)
 
 const CREST_STAT_IDS = {
   adventurer: 62292,
@@ -1285,12 +1285,12 @@ export async function refreshRaidersCache(
       )
       .run();
 
-    // Record preparedness history and calculate 30-day averages
+    // Record preparedness history and calculate 2-week averages
     await recordPreparednessHistory(db, detailed, now);
     await calculateAndUpdatePreparednessAverages(db, detailed.blizzardCharId, now);
   }
 
-  // Prune preparedness history older than 30 days
+  // Prune preparedness history older than 2 weeks
   const cutoff = now - PREPAREDNESS_HISTORY_WINDOW_SECONDS;
   await prunePreparednessHistory(db, cutoff);
 

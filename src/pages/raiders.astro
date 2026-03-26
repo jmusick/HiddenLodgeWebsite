@@ -38,7 +38,7 @@ function formatScore(filled: number | null, total: number | null): string {
 }
 
 function preparednessTotals(raider: (typeof sortedRaiders)[number]): { filled: number | null; total: number | null } {
-  // Use 30-day averages if available, otherwise fall back to current values
+  // Use 2-week averages if available, otherwise fall back to current values
   const socketedGems = raider.avg30dSocketedGems ?? raider.socketedGems;
   const totalSockets = raider.avg30dTotalSockets ?? raider.totalSockets;
   const enchantedSlots = raider.avg30dEnchantedSlots ?? raider.enchantedSlots;
@@ -163,10 +163,6 @@ const topMythicScore = sortedRaiders.reduce((best, raider) =>
   (raider.mythicScore ?? -1) > (best?.mythicScore ?? -1) ? raider : best,
   null as (typeof sortedRaiders)[number] | null
 );
-const topMythicPlusWeekly = sortedRaiders.reduce((best, raider) =>
-  (raider.mythicPlusWeeklyRuns ?? -1) > (best?.mythicPlusWeeklyRuns ?? -1) ? raider : best,
-  null as (typeof sortedRaiders)[number] | null
-);
 const topSingleTarget = sortedRaiders.reduce((best, raider) =>
   (raider.singleTargetDps ?? -1) > (best?.singleTargetDps ?? -1) ? raider : best,
   null as (typeof sortedRaiders)[number] | null
@@ -202,15 +198,6 @@ const spotlightCards = [
     value: topMythicScore?.mythicScore ? topMythicScore.mythicScore.toLocaleString(undefined, { maximumFractionDigits: 0 }) : '—',
     detail: topMythicScore?.name ?? '—',
     className: topMythicScore?.className ?? '',
-  },
-  {
-    label: 'Most M+ Runs This Week',
-    icon: 'lucide:pickaxe',
-    value: topMythicPlusWeekly?.mythicPlusWeeklyRuns
-      ? String(topMythicPlusWeekly.mythicPlusWeeklyRuns)
-      : '—',
-    detail: topMythicPlusWeekly?.name ?? '—',
-    className: topMythicPlusWeekly?.className ?? '',
   },
 ];
 ---
@@ -282,14 +269,12 @@ const spotlightCards = [
             <th><button class="sort-btn" type="button" data-sort-key="equippedItemLevel">iLvl</button></th>
             <th><button class="sort-btn" type="button" data-sort-key="singleTargetDps">Sim DPS</button></th>
             <th><button class="sort-btn" type="button" data-sort-key="mythicScore">M+ Score</button></th>
-            <th><button class="sort-btn" type="button" data-sort-key="mythicPlusWeeklyRuns" data-tooltip="Number of unique dungeons keystoned this reset week per Raider.IO (max 8). One entry per dungeon regardless of how many times it was run." data-tooltip-dir="right">M+ This Week</button></th>
-            <th><button class="sort-btn" type="button" data-sort-key="mythicPlusPrevWeeklyRuns" data-tooltip="Number of unique dungeons keystoned last reset week per Raider.IO (max 8). One entry per dungeon regardless of how many times it was run." data-tooltip-dir="right">M+ Last Week</button></th>
             <th><button class="sort-btn" type="button" data-sort-key="tierPiecesEquipped">Tier</button></th>
             <th><button class="sort-btn" type="button" data-sort-key="crestSort">Crests Earned</button></th>
             <th><button class="sort-btn" type="button" data-sort-key="totalUpgradesMissing">Missing Upgrades</button></th>
             <th>Gems</th>
             <th>Enchants</th>
-            <th><button class="sort-btn" type="button" data-sort-key="preparednessScore" data-tooltip="Preparedness = 30-day rolling average of (Socketed Gems + Enchanted Slots) / (Total Sockets + Enchantable Slots). Falls back to current snapshot until history accumulates. Tiers: S = 100%, A >= 85%, B >= 70%, C >= 40%, D < 40%." aria-label="Preparedness. Based on a 30-day rolling average of gem and enchant coverage. Formula: (Socketed Gems + Enchanted Slots) / (Total Sockets + Enchantable Slots). Tiers: S equals 100 percent, A 85 percent or higher, B 70 percent or higher, C 40 percent or higher, D below 40 percent.">Preparedness</button></th>
+            <th><button class="sort-btn" type="button" data-sort-key="preparednessScore" data-tooltip="Preparedness = 2-week rolling average of (Socketed Gems + Enchanted Slots) / (Total Sockets + Enchantable Slots). Falls back to current snapshot until history accumulates. Tiers: S = 100%, A >= 85%, B >= 70%, C >= 40%, D < 40%." aria-label="Preparedness. Based on a 2-week rolling average of gem and enchant coverage. Formula: (Socketed Gems + Enchanted Slots) / (Total Sockets + Enchantable Slots). Tiers: S equals 100 percent, A 85 percent or higher, B 70 percent or higher, C 40 percent or higher, D below 40 percent.">Preparedness</button></th>
           </tr>
         </thead>
         <tbody>
@@ -307,9 +292,6 @@ const spotlightCards = [
                 data-equipped-item-level={String(raider.equippedItemLevel ?? -1)}
                 data-raid-progress-kills={String(raider.raidProgressKills ?? -1)}
                 data-mythic-score={String(raider.mythicScore ?? -1)}
-                data-mythic-plus-weekly-runs={String(raider.mythicPlusWeeklyRuns ?? -1)}
-                data-mythic-plus-prev-weekly-runs={String(raider.mythicPlusPrevWeeklyRuns ?? -1)}
-                data-mythic-plus-season-total={String((raider.mythicPlusSeasonRuns ?? 0) + (raider.mythicPlusWeeklyRuns ?? 0))}
                 data-single-target-dps={String(raider.singleTargetDps ?? -1)}
                 data-tier-pieces-equipped={String(raider.tierPiecesEquipped ?? -1)}
                 data-crest-sort={String(crestSortValue(raider))}
@@ -351,8 +333,6 @@ const spotlightCards = [
                 </td>
                 <td>{raider.singleTargetDps ? raider.singleTargetDps.toLocaleString(undefined, { maximumFractionDigits: 0 }) : '—'}</td>
                 <td>{raider.mythicScore ? raider.mythicScore.toLocaleString(undefined, { maximumFractionDigits: 0 }) : '—'}</td>
-                <td>{raider.mythicPlusWeeklyRuns ?? '—'}</td>
-                <td>{raider.mythicPlusPrevWeeklyRuns ?? '—'}</td>
                 <td>{raider.tierPiecesEquipped ?? '—'}</td>
                 <td>
                   <span class="crest-summary" title={`Adventurer ${raider.adventurerCrests ?? '—'}, Veteran ${raider.veteranCrests ?? '—'}, Champion ${raider.championCrests ?? '—'}, Hero ${raider.heroCrests ?? '—'}, Myth ${raider.mythCrests ?? '—'}`}>
@@ -422,7 +402,7 @@ const spotlightCards = [
       return matchesSearch && matchesClass && matchesTeam;
     });
 
-    const numericKeys = new Set(['equippedItemLevel', 'raidProgressKills', 'mythicScore', 'mythicPlusWeeklyRuns', 'mythicPlusPrevWeeklyRuns', 'mythicPlusSeasonTotal', 'singleTargetDps', 'tierPiecesEquipped', 'crestSort', 'totalUpgradesMissing', 'preparednessScore']);
+    const numericKeys = new Set(['equippedItemLevel', 'raidProgressKills', 'mythicScore', 'singleTargetDps', 'tierPiecesEquipped', 'crestSort', 'totalUpgradesMissing', 'preparednessScore']);
 
     visibleRows.sort((rowA, rowB) => {
       const toAttr = (key: string) => key.replace(/[A-Z]/g, (char) => `-${char.toLowerCase()}`);
