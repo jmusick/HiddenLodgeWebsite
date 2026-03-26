@@ -268,9 +268,17 @@ function extractStatisticCount(
   const visit = (node: any): number | null => {
     if (!node || typeof node !== 'object') return null;
 
-    const name = String(node.name ?? '').toLowerCase();
-    const type = String(node.type ?? '').toLowerCase();
-    const quantity = Number(node.quantity ?? node.value ?? NaN);
+    const name = String(node.name ?? node.description ?? node.display_string ?? '').toLowerCase();
+    const type = String(node.type ?? node.key ?? node.statistic?.type ?? '').toLowerCase();
+    const quantity = Number(
+      node.quantity ??
+        node.value ??
+        node.count ??
+        node.total ??
+        node.statistic?.quantity ??
+        node.statistic?.value ??
+        NaN
+    );
     if (Number.isFinite(quantity) && quantity >= 0 && matcher(name, type, node)) {
       return quantity;
     }
@@ -317,10 +325,18 @@ function extractDeathsCount(statsPayload: any): number {
 function extractCritterCount(statsPayload: any): number {
   return extractStatisticCount(
     statsPayload,
-    ['critter_count', 'critters_killed', 'critter_kills'],
+    ['critter_count', 'critters_killed', 'critter_kills', 'total_critters_killed'],
     (name, type, node) => {
       const statisticId = Number(node?.id ?? NaN);
-      return statisticId === 108 || name.includes('critters killed') || type.includes('critters_killed');
+      const normalized = `${name} ${type}`;
+      return (
+        statisticId === 108 ||
+        normalized.includes('critters killed') ||
+        normalized.includes('critter kills') ||
+        normalized.includes('total critters killed') ||
+        normalized.includes('wild pets slain') ||
+        normalized.includes('critter')
+      );
     }
   );
 }
