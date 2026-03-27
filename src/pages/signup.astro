@@ -244,12 +244,28 @@ interface CalendarRaid {
 }
 
 const raidsByUtcDay = new Map<string, CalendarRaid[]>();
+const allRaids: CalendarRaid[] = [];
+const canonicalPrimaryRaidKeyByOccurrenceKey = new Map<string, string>();
+
+function primaryRaidKey(scheduleId: number, occurrenceStartUtc: number): string {
+  return `primary:${scheduleId}:${occurrenceStartUtc}`;
+}
+
+function resolveRaidKey(raidKind: 'primary' | 'adhoc', scheduleOrRaidId: number, occurrenceStartUtc?: number | null): string {
+  if (raidKind === 'primary') {
+    const key = primaryRaidKey(scheduleOrRaidId, occurrenceStartUtc ?? 0);
+    return canonicalPrimaryRaidKeyByOccurrenceKey.get(key) ?? key;
+  }
+
+  return `adhoc:${scheduleOrRaidId}`;
+}
 
 function addRaidToDay(raid: CalendarRaid): void {
   const dayKey = new Date(raid.startsAtUtc * 1000).toISOString().slice(0, 10);
   const arr = raidsByUtcDay.get(dayKey) ?? [];
   arr.push(raid);
   raidsByUtcDay.set(dayKey, arr);
+  allRaids.push(raid);
 }
 
 for (let cursor = new Date(grid.gridStart); cursor < grid.gridEndExclusive; cursor = new Date(cursor.getTime() + 86400000)) {
@@ -260,12 +276,17 @@ for (let cursor = new Date(grid.gridStart); cursor < grid.gridEndExclusive; curs
     if (!parsedTime) continue;
 
     const startsAtUtc = dayStartEpoch + parsedTime.hour * 3600 + parsedTime.minute * 60;
+    const displayStartsAtUtc = adjustedPrimaryDisplayStartUtc(schedule, startsAtUtc);
+    const canonicalKey = primaryRaidKey(schedule.id, startsAtUtc);
+    canonicalPrimaryRaidKeyByOccurrenceKey.set(canonicalKey, canonicalKey);
+    canonicalPrimaryRaidKeyByOccurrenceKey.set(primaryRaidKey(schedule.id, displayStartsAtUtc), canonicalKey);
+
     addRaidToDay({
-      key: `primary:${schedule.id}:${startsAtUtc}`,
+      key: canonicalKey,
       kind: 'primary',
       title: schedule.name,
       startsAtUtc,
-      displayStartsAtUtc: adjustedPrimaryDisplayStartUtc(schedule, startsAtUtc),
+      displayStartsAtUtc,
       durationMinutes: schedule.duration_minutes,
       notes: null,
       primaryScheduleId: schedule.id,
@@ -296,10 +317,10 @@ for (const [key, raids] of raidsByUtcDay.entries()) {
 const signupsByRaidKey = new Map<string, SignupRow>();
 for (const row of signupRows) {
   if (row.raid_kind === 'primary' && row.primary_schedule_id && row.occurrence_start_utc) {
-    signupsByRaidKey.set(`primary:${row.primary_schedule_id}:${row.occurrence_start_utc}`, row);
+    signupsByRaidKey.set(resolveRaidKey('primary', row.primary_schedule_id, row.occurrence_start_utc), row);
   }
   if (row.raid_kind === 'adhoc' && row.ad_hoc_raid_id) {
-    signupsByRaidKey.set(`adhoc:${row.ad_hoc_raid_id}`, row);
+    signupsByRaidKey.set(resolveRaidKey('adhoc', row.ad_hoc_raid_id), row);
   }
 }
 
@@ -318,7 +339,15 @@ const monthTitle = grid.monthStart.toLocaleDateString('en-US', { month: 'long', 
 const statusParam = new URL(Astro.request.url).searchParams.get('status');
 const selectedDay = new URL(Astro.request.url).searchParams.get('day');
 const selectedDayCell = selectedDay ? dayCells.find((cell) => cell.isoDate === selectedDay) ?? null : null;
-const selectedDayRaids = selectedDayCell?.raids ?? [];
+const selectedDayRaids = selectedDay
+  ? allRaids
+      .filter((raid) => {
+        const utcDay = new Date(raid.startsAtUtc * 1000).toISOString().slice(0, 10);
+        const displayDay = dayKeyInTimeZone(raid.displayStartsAtUtc, userTimeZone);
+        return utcDay === selectedDay || displayDay === selectedDay;
+      })
+      .sort((a, b) => a.displayStartsAtUtc - b.displayStartsAtUtc || a.title.localeCompare(b.title))
+  : [];
 
 let selectedDaySummaryRows: DaySummarySignupRow[] = [];
 let allRosterMembers: RosterMemberRow[] = [];
@@ -326,6 +355,8 @@ const mainCharacterNameByUserId = new Map<number, string>();
 if (selectedDayCell) {
   const selectedDayStart = Math.floor(new Date(`${selectedDayCell.isoDate}T00:00:00.000Z`).getTime() / 1000);
   const selectedDayEnd = selectedDayStart + 86400;
+  const summaryWindowStart = selectedDayStart - 86400;
+  const summaryWindowEnd = selectedDayEnd + 86400;
 
   const [result, rosterResult, mainsResult] = await env.DB.batch([
     env.DB.prepare(
@@ -360,7 +391,7 @@ if (selectedDayCell) {
         AND ahr.starts_at_utc >= ?
         AND ahr.starts_at_utc < ?
       )`
-    ).bind(selectedDayStart, selectedDayEnd, selectedDayStart, selectedDayEnd),
+    ).bind(summaryWindowStart, summaryWindowEnd, summaryWindowStart, summaryWindowEnd),
     env.DB.prepare(
       `SELECT DISTINCT
         rtm.blizzard_char_id,
@@ -405,9 +436,9 @@ const daySummaryByRaidKey = new Map<string, DaySummarySignupRow[]>();
 for (const row of selectedDaySummaryRows) {
   const raidKey =
     row.raid_kind === 'primary' && row.primary_schedule_id && row.occurrence_start_utc
-      ? `primary:${row.primary_schedule_id}:${row.occurrence_start_utc}`
+      ? resolveRaidKey('primary', row.primary_schedule_id, row.occurrence_start_utc)
       : row.raid_kind === 'adhoc' && row.ad_hoc_raid_id
-        ? `adhoc:${row.ad_hoc_raid_id}`
+        ? resolveRaidKey('adhoc', row.ad_hoc_raid_id)
         : null;
 
   if (!raidKey) continue;
