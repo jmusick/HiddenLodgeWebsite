@@ -245,6 +245,7 @@ interface CalendarRaid {
 
 const raidsByUtcDay = new Map<string, CalendarRaid[]>();
 const allRaids: CalendarRaid[] = [];
+const raidsByKey = new Map<string, CalendarRaid>();
 const canonicalPrimaryRaidKeyByOccurrenceKey = new Map<string, string>();
 const primaryRaidsByScheduleId = new Map<number, CalendarRaid[]>();
 
@@ -289,6 +290,14 @@ function addRaidToDay(raid: CalendarRaid): void {
   arr.push(raid);
   raidsByUtcDay.set(dayKey, arr);
   allRaids.push(raid);
+  raidsByKey.set(raid.key, raid);
+}
+
+function signupDeltaForRaid(raidKey: string, occurrenceStartUtc?: number | null): number {
+  if (!occurrenceStartUtc) return Number.POSITIVE_INFINITY;
+  const raid = raidsByKey.get(raidKey);
+  if (!raid) return Number.POSITIVE_INFINITY;
+  return Math.abs(raid.startsAtUtc - occurrenceStartUtc);
 }
 
 for (let cursor = new Date(grid.gridStart); cursor < grid.gridEndExclusive; cursor = new Date(cursor.getTime() + 86400000)) {
@@ -345,7 +354,18 @@ for (const [key, raids] of raidsByUtcDay.entries()) {
 const signupsByRaidKey = new Map<string, SignupRow>();
 for (const row of signupRows) {
   if (row.raid_kind === 'primary' && row.primary_schedule_id && row.occurrence_start_utc) {
-    signupsByRaidKey.set(resolveRaidKey('primary', row.primary_schedule_id, row.occurrence_start_utc), row);
+    const raidKey = resolveRaidKey('primary', row.primary_schedule_id, row.occurrence_start_utc);
+    const existing = signupsByRaidKey.get(raidKey);
+    if (!existing) {
+      signupsByRaidKey.set(raidKey, row);
+      continue;
+    }
+
+    const existingDelta = signupDeltaForRaid(raidKey, existing.occurrence_start_utc);
+    const nextDelta = signupDeltaForRaid(raidKey, row.occurrence_start_utc);
+    if (nextDelta < existingDelta || (nextDelta === existingDelta && row.id > existing.id)) {
+      signupsByRaidKey.set(raidKey, row);
+    }
   }
   if (row.raid_kind === 'adhoc' && row.ad_hoc_raid_id) {
     signupsByRaidKey.set(resolveRaidKey('adhoc', row.ad_hoc_raid_id), row);
@@ -471,7 +491,25 @@ for (const row of selectedDaySummaryRows) {
 
   if (!raidKey) continue;
   const arr = daySummaryByRaidKey.get(raidKey) ?? [];
-  arr.push(row);
+  const rowIdentity = row.blizzard_char_id ?? row.character_id;
+  const existingIndex = arr.findIndex((entry) => (entry.blizzard_char_id ?? entry.character_id) === rowIdentity);
+
+  if (existingIndex === -1) {
+    arr.push(row);
+    daySummaryByRaidKey.set(raidKey, arr);
+    continue;
+  }
+
+  const existing = arr[existingIndex];
+  const existingDelta = signupDeltaForRaid(raidKey, existing.occurrence_start_utc);
+  const nextDelta = signupDeltaForRaid(raidKey, row.occurrence_start_utc);
+  if (
+    nextDelta < existingDelta ||
+    (nextDelta === existingDelta && (row.signed_up_at > existing.signed_up_at || row.id! > existing.id!))
+  ) {
+    arr[existingIndex] = row;
+  }
+
   daySummaryByRaidKey.set(raidKey, arr);
 }
 
