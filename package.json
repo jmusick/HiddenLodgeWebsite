@@ -1,7 +1,7 @@
 {
   "name": "hiddenlodgewebsite",
   "type": "module",
-  "version": "1.5.15b",
+  "version": "1.5.15c",
   "engines": {
     "node": ">=22.12.0"
   },

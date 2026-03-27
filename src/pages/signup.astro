@@ -285,7 +285,7 @@ function resolveRaidKey(raidKind: 'primary' | 'adhoc', scheduleOrRaidId: number,
 }
 
 function addRaidToDay(raid: CalendarRaid): void {
-  const dayKey = new Date(raid.startsAtUtc * 1000).toISOString().slice(0, 10);
+  const dayKey = dayKeyInTimeZone(raid.displayStartsAtUtc, userTimeZone);
   const arr = raidsByUtcDay.get(dayKey) ?? [];
   arr.push(raid);
   raidsByUtcDay.set(dayKey, arr);
@@ -387,15 +387,13 @@ const monthTitle = grid.monthStart.toLocaleDateString('en-US', { month: 'long', 
 const statusParam = new URL(Astro.request.url).searchParams.get('status');
 const selectedDay = new URL(Astro.request.url).searchParams.get('day');
 const selectedDayCell = selectedDay ? dayCells.find((cell) => cell.isoDate === selectedDay) ?? null : null;
-const selectedDayRaids = selectedDay
-  ? allRaids
-      .filter((raid) => {
-        const utcDay = new Date(raid.startsAtUtc * 1000).toISOString().slice(0, 10);
-        const displayDay = dayKeyInTimeZone(raid.displayStartsAtUtc, userTimeZone);
-        return utcDay === selectedDay || displayDay === selectedDay;
-      })
-      .sort((a, b) => a.displayStartsAtUtc - b.displayStartsAtUtc || a.title.localeCompare(b.title))
+const selectedDayDisplayRaids = selectedDay
+  ? allRaids.filter((raid) => dayKeyInTimeZone(raid.displayStartsAtUtc, userTimeZone) === selectedDay)
   : [];
+const selectedDayRaids = (selectedDayDisplayRaids.length > 0
+  ? selectedDayDisplayRaids
+  : selectedDayCell?.raids ?? []
+).sort((a, b) => a.displayStartsAtUtc - b.displayStartsAtUtc || a.title.localeCompare(b.title));
 
 let selectedDaySummaryRows: DaySummarySignupRow[] = [];
 let allRosterMembers: RosterMemberRow[] = [];
