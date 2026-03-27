@@ -52,6 +52,57 @@ const stories = [
     ]
   },
   {
+    id: 'blinky-the-misunderstood',
+    title: 'Blinky, the Misunderstood',
+    lead: 'Kivara sees a loyal cuddle-monster where everyone else sees a two-headed raid-night trauma event.',
+    imageSrc: '/images/lore/blinky-the-misunderstood-kivaras-vision.png',
+    imageAlt: "Kivara hugs Blinky in a dreamy, heart-filled vision where the two-headed beast looks happy and gentle.",
+    imageLayout: 'inline',
+    characters: ['Kivara', 'Blinky', 'The Raid'],
+    inlineImages: [
+      {
+        src: '/images/lore/blinky-the-misunderstood-kivaras-vision.png',
+        alt: 'Kivara cuddles Blinky in a pink, heart-filled daydream while Blinky grins with both heads.',
+        afterParagraph: 5,
+        caption: "In Kivara's head, Blinky was less eldritch horror and more emotional support goblin-dog."
+      },
+      {
+        src: '/images/lore/blinky-the-misunderstood-raid-reality.png',
+        alt: 'Raid members carve up Blinky after a kill while Kivara looks miserable beside the body.',
+        afterParagraph: 8,
+        caption: 'Reality was a lot more knives, yelling, and post-kill leather economics.'
+      }
+    ],
+    paragraphs: [
+      "No one in the raid quite remembers when Kivara first decided Blinky was 'cute.'",
+      'It might have been after the third wipe. Or the fourth. Possibly somewhere between being devoured and being launched off a platform.',
+      'Regardless, while the rest of the raid saw a two-headed nightmare stitched together from teeth, eyes, and poor life choices... Kivara saw something else entirely.',
+      '"Aww," she said the first time, tilting her head mid-pull. "Look at him!"',
+      '"LOOK AT-" someone screamed over comms before being immediately deleted.',
+      "But in Kivara's mind, Blinky wasn't a grotesque, slobbering horror. He was soft. Loyal. A misunderstood little guy who just needed a friend. While the rest of the raid dodged mechanics and questioned their life decisions, she imagined herself curled up beside him, patting one head while the other drooled happily.",
+      '"Who\'s a good Blinky?" she whispered once.',
+      'That was also the pull where healers gave up.',
+      'Reality, however, was less... cuddly.',
+      'Blinky died every raid night.',
+      'Violently.',
+      'Loudly.',
+      'And usually while half the group yelled, "JUST KILL IT THIS TIME."',
+      'The creature would collapse in a heap of twitching limbs and far too many teeth, its many eyes dimming one by one. The raid would gather, weapons still drawn, catching their breath.',
+      'Then the leather workers would step forward.',
+      '"Well," one of them would say, cracking their knuckles. "Time to get paid."',
+      'Kivara lingered at the edge of the group, her glaives lowered, her expression somewhere between sadness and quiet betrayal.',
+      '"Do we... have to?" she\'d mutter.',
+      '"Yes," came the immediate reply.',
+      'Every. Single. Time.',
+      'With a sigh, she would kneel beside what remained of Blinky-her Blinky-and reluctantly begin the work. Her movements were slower than the others. Careful. Almost respectful.',
+      '"Sorry," she whispered once, under her breath, as she made the first cut.',
+      'Behind her, someone looted gold.',
+      'Another complained about drops.',
+      'Someone else asked if they could pull trash.',
+      'No one else noticed.'
+    ]
+  },
+  {
     id: 'disengage-protocol',
     title: 'Disengage Protocol',
     lead: 'Rhox is certain Silver is an international assassin hiding behind hot dogs, public Wi-Fi, and suspiciously bad hunter movement.',
@@ -130,9 +181,12 @@ const stories = [
 ];
 
 const featuredStoryId = 'the-hidden-lodge-a-safe-space-away-from-the-floor';
+const lastStoryId = 'blinky-the-misunderstood';
 const orderedStories = [...stories].sort((a, b) => {
   if (a.id === featuredStoryId) return -1;
   if (b.id === featuredStoryId) return 1;
+  if (a.id === lastStoryId) return 1;
+  if (b.id === lastStoryId) return -1;
   return 0;
 });
 
