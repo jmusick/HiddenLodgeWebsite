@@ -15,6 +15,13 @@ const FALLBACK_TIME_ZONES = [
   'Australia/Sydney',
 ] as const;
 
+export const DEFAULT_MEMBER_TIME_ZONE = 'America/New_York';
+
+interface UserTimeZonePreference {
+  time_zone?: string | null;
+  time_zone_set?: number | null;
+}
+
 function hasSupportedValuesOf(): boolean {
   return typeof Intl.supportedValuesOf === 'function';
 }
@@ -45,6 +52,21 @@ export function isValidTimeZone(value: string): boolean {
   } catch {
     return false;
   }
+}
+
+export function resolveUserTimeZone(preference?: UserTimeZonePreference): string {
+  const selectedTimeZone = preference?.time_zone?.trim() ?? '';
+  const hasExplicitPreference = preference?.time_zone_set === 1;
+
+  if (!hasExplicitPreference) {
+    return DEFAULT_MEMBER_TIME_ZONE;
+  }
+
+  if (selectedTimeZone && isValidTimeZone(selectedTimeZone)) {
+    return selectedTimeZone;
+  }
+
+  return DEFAULT_MEMBER_TIME_ZONE;
 }
 
 export function timeZoneLabel(timeZone: string): string {

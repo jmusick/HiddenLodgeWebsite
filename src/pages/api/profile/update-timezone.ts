@@ -20,7 +20,7 @@ export async function POST(context: APIContext): Promise<Response> {
     });
   }
 
-  await env.DB.prepare('UPDATE users SET time_zone = ?, updated_at = unixepoch() WHERE id = ?')
+  await env.DB.prepare('UPDATE users SET time_zone = ?, time_zone_set = 1, updated_at = unixepoch() WHERE id = ?')
     .bind(timeZone, user.id)
     .run();
 

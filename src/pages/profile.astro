@@ -3,7 +3,7 @@ export const prerender = false;
 
 import Layout from '../layouts/Layout.astro';
 import { classColor, factionColor } from '../lib/wow';
-import { getSupportedTimeZones } from '../lib/time-zones';
+import { getSupportedTimeZones, resolveUserTimeZone } from '../lib/time-zones';
 import { env } from 'cloudflare:workers';
 
 const user = Astro.locals.user;
@@ -23,14 +23,14 @@ interface CharacterRow {
 }
 
 const [settingsResult, charsResult] = await env.DB.batch([
-	env.DB.prepare('SELECT time_zone, nickname, preferred_role FROM users WHERE id = ?').bind(user.id),
+	env.DB.prepare('SELECT time_zone, time_zone_set, nickname, preferred_role FROM users WHERE id = ?').bind(user.id),
 	env.DB.prepare(
 		'SELECT id, name, realm, class_name, race_name, faction, level, is_main FROM characters WHERE user_id = ? ORDER BY level DESC, name ASC'
 	).bind(user.id),
 ]);
 
-const settings = settingsResult.results?.[0] as { time_zone?: string; nickname?: string | null; preferred_role?: string | null } | undefined;
-const userTimeZone = settings?.time_zone ?? 'UTC';
+const settings = settingsResult.results?.[0] as { time_zone?: string; time_zone_set?: number; nickname?: string | null; preferred_role?: string | null } | undefined;
+const userTimeZone = resolveUserTimeZone(settings);
 const userNickname = settings?.nickname ?? null;
 const userPreferredRole = settings?.preferred_role ?? null;
 const characters: CharacterRow[] = (charsResult.results ?? []) as CharacterRow[];

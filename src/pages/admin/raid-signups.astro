@@ -11,6 +11,7 @@ import {
   type AdHocRaid,
   type PrimarySchedule,
 } from '../../lib/raid-signups';
+import { resolveUserTimeZone } from '../../lib/time-zones';
 
 if (!Astro.locals.isAdmin) {
   return Astro.redirect('/');
@@ -27,7 +28,7 @@ interface AdHocCountRow {
 }
 
 const [settingsResult, primaryResult, adHocResult, primaryCountResult, adHocCountResult] = await env.DB.batch([
-  env.DB.prepare('SELECT time_zone FROM users WHERE id = ?').bind(Astro.locals.user!.id),
+  env.DB.prepare('SELECT time_zone, time_zone_set FROM users WHERE id = ?').bind(Astro.locals.user!.id),
   env.DB.prepare(
     `SELECT id, name, weekday_utc, start_time_utc, duration_minutes, is_active
      FROM primary_raid_schedules
@@ -52,7 +53,7 @@ const [settingsResult, primaryResult, adHocResult, primaryCountResult, adHocCoun
   ),
 ]);
 
-const adminTimeZone = (settingsResult.results?.[0] as { time_zone?: string } | undefined)?.time_zone ?? 'UTC';
+const adminTimeZone = resolveUserTimeZone(settingsResult.results?.[0] as { time_zone?: string; time_zone_set?: number } | undefined);
 const primarySchedules = (primaryResult.results ?? []) as PrimarySchedule[];
 const adHocRaids = (adHocResult.results ?? []) as AdHocRaid[];
 const primaryCounts = (primaryCountResult.results ?? []) as PrimaryCountRow[];
