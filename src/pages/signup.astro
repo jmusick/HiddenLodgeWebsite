@@ -246,6 +246,7 @@ interface CalendarRaid {
 const raidsByUtcDay = new Map<string, CalendarRaid[]>();
 const allRaids: CalendarRaid[] = [];
 const canonicalPrimaryRaidKeyByOccurrenceKey = new Map<string, string>();
+const primaryRaidsByScheduleId = new Map<number, CalendarRaid[]>();
 
 function primaryRaidKey(scheduleId: number, occurrenceStartUtc: number): string {
   return `primary:${scheduleId}:${occurrenceStartUtc}`;
@@ -254,7 +255,29 @@ function primaryRaidKey(scheduleId: number, occurrenceStartUtc: number): string 
 function resolveRaidKey(raidKind: 'primary' | 'adhoc', scheduleOrRaidId: number, occurrenceStartUtc?: number | null): string {
   if (raidKind === 'primary') {
     const key = primaryRaidKey(scheduleOrRaidId, occurrenceStartUtc ?? 0);
-    return canonicalPrimaryRaidKeyByOccurrenceKey.get(key) ?? key;
+    const exact = canonicalPrimaryRaidKeyByOccurrenceKey.get(key);
+    if (exact) return exact;
+
+    const candidateRaids = primaryRaidsByScheduleId.get(scheduleOrRaidId) ?? [];
+    if (occurrenceStartUtc) {
+      let bestRaid: CalendarRaid | null = null;
+      let bestDelta = Number.POSITIVE_INFINITY;
+
+      for (const raid of candidateRaids) {
+        const delta = Math.abs(raid.startsAtUtc - occurrenceStartUtc);
+        if (delta < bestDelta) {
+          bestRaid = raid;
+          bestDelta = delta;
+        }
+      }
+
+      // Legacy stored primary occurrences can drift several hours from the currently generated UTC occurrence.
+      if (bestRaid && bestDelta <= 12 * 3600) {
+        return bestRaid.key;
+      }
+    }
+
+    return key;
   }
 
   return `adhoc:${scheduleOrRaidId}`;
@@ -281,7 +304,7 @@ for (let cursor = new Date(grid.gridStart); cursor < grid.gridEndExclusive; curs
     canonicalPrimaryRaidKeyByOccurrenceKey.set(canonicalKey, canonicalKey);
     canonicalPrimaryRaidKeyByOccurrenceKey.set(primaryRaidKey(schedule.id, displayStartsAtUtc), canonicalKey);
 
-    addRaidToDay({
+    const raid: CalendarRaid = {
       key: canonicalKey,
       kind: 'primary',
       title: schedule.name,
@@ -291,7 +314,12 @@ for (let cursor = new Date(grid.gridStart); cursor < grid.gridEndExclusive; curs
       notes: null,
       primaryScheduleId: schedule.id,
       adHocRaidId: null,
-    });
+    };
+
+    const scheduleRaids = primaryRaidsByScheduleId.get(schedule.id) ?? [];
+    scheduleRaids.push(raid);
+    primaryRaidsByScheduleId.set(schedule.id, scheduleRaids);
+    addRaidToDay(raid);
   }
 }
 
