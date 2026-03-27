@@ -2,6 +2,7 @@
 export const prerender = false;
 
 import AdminLayout from '../../layouts/AdminLayout.astro';
+import { Icon } from 'astro-icon/components';
 import { env } from 'cloudflare:workers';
 import { classColor } from '../../lib/wow';
 
@@ -60,7 +61,7 @@ interface NoteRow {
 	author_name: string;
 }
 
-const [usersResult, charsResult, unauthedResult, notesResult] = await env.DB.batch([
+const [usersResult, charsResult, unauthedResult, notesResult, raidTeamResult] = await env.DB.batch([
 	env.DB.prepare(`
 		SELECT DISTINCT u.id AS user_id, u.battle_tag, u.nickname
 		FROM users u
@@ -88,6 +89,12 @@ const [usersResult, charsResult, unauthedResult, notesResult] = await env.DB.bat
 		ORDER BY rmc.rank ASC, rmc.name ASC
 	`),
 	env.DB.prepare(`
+		SELECT DISTINCT rtm.blizzard_char_id
+		FROM raid_team_members rtm
+		JOIN raid_teams rt ON rt.id = rtm.team_id
+		WHERE rt.is_archived = 0
+	`),
+	env.DB.prepare(`
 		SELECT rn.id, rn.blizzard_char_id, rn.note_text, rn.created_at,
 		       COALESCE(au.nickname, au.battle_tag) AS author_name,
 		       c.user_id AS linked_user_id
@@ -102,6 +109,9 @@ const guildUsers = (usersResult.results ?? []) as GuildUserRow[];
 const allChars = (charsResult.results ?? []) as CharRow[];
 const unauthed = (unauthedResult.results ?? []) as UnauthedRosterRow[];
 const allNotes = (notesResult.results ?? []) as NoteRow[];
+const raidTeamCharIds = new Set(
+	((raidTeamResult.results ?? []) as { blizzard_char_id: number }[]).map((r) => r.blizzard_char_id)
+);
 
 const charsByUser = new Map<number, CharRow[]>();
 for (const char of allChars) {
@@ -132,16 +142,17 @@ function formatNoteDate(unixTs: number): string {
 	});
 }
 
-const canDeleteNotes = Astro.locals.user?.battleTag === 'Xing#1673';
+const canDeleteNotes = Astro.locals.isAdmin;
 
 const params = new URL(Astro.request.url).searchParams;
 const statusParam = params.get('status');
 
 const statusMessages: Record<string, { type: 'ok' | 'error'; text: string }> = {
-	'ok':           { type: 'ok',    text: 'Nickname saved.' },
-	'note-added':   { type: 'ok',    text: 'Note saved.' },
-	'note-deleted': { type: 'ok',    text: 'Note deleted.' },
-	'error':        { type: 'error', text: 'Something went wrong. Please try again.' },
+	'ok':             { type: 'ok',    text: 'Nickname saved.' },
+	'note-added':     { type: 'ok',    text: 'Note saved.' },
+	'note-updated':   { type: 'ok',    text: 'Note updated.' },
+	'note-deleted':   { type: 'ok',    text: 'Note deleted.' },
+	'error':          { type: 'error', text: 'Something went wrong. Please try again.' },
 };
 const flash = statusParam ? (statusMessages[statusParam] ?? null) : null;
 ---
@@ -195,18 +206,17 @@ const flash = statusParam ? (statusMessages[statusParam] ?? null) : null;
 						const otherChars = chars.filter((c) => c.guild_rank === null);
 						const displayName = guildUser.nickname ?? guildUser.battle_tag;
 						const notes = notesByUser.get(guildUser.user_id) ?? [];
-							// Use main char's id as the note target; fall back to first guild char
-							const noteCharId = (mainChar ?? guildChars[0])?.blizzard_char_id;
+						const noteCharId = (mainChar ?? guildChars[0])?.blizzard_char_id;
 
-									const searchTerms = [
-									guildUser.nickname,
-									guildUser.battle_tag,
-									...chars.map((c) => c.name),
-								].filter(Boolean).join(' ').toLowerCase();
+						const searchTerms = [
+							guildUser.nickname,
+							guildUser.battle_tag,
+							...chars.map((c) => c.name),
+						].filter(Boolean).join(' ').toLowerCase();
 
-								return (
-									<div class="profile-card" data-search={searchTerms}>
-									<div class="card-header">
+						return (
+							<div class="profile-card" data-search={searchTerms}>
+								<div class="card-header">
 									<div class="card-identity">
 										<span class="card-display-name">{displayName}</span>
 										{guildUser.nickname && (
@@ -214,24 +224,49 @@ const flash = statusParam ? (statusMessages[statusParam] ?? null) : null;
 										)}
 									</div>
 									{mainChar ? (
-										<span class="main-pill" style={`color: ${classColor(mainChar.class_name)}`}>
-											{mainChar.name}
-										</span>
+										raidTeamCharIds.has(mainChar.blizzard_char_id) ? (
+											<a href={`/raiders/${mainChar.blizzard_char_id}`} class="main-pill" style={`color: ${classColor(mainChar.class_name)}`}>
+												{mainChar.name}
+											</a>
+										) : (
+											<span class="main-pill" style={`color: ${classColor(mainChar.class_name)}`}>
+												{mainChar.name}
+											</span>
+										)
 									) : (
 										<span class="no-main-pill">No main set</span>
 									)}
 								</div>
 
-								{guildChars.length > 0 && (
-									<div class="chars-section">
-										<span class="section-label">Guild Characters</span>
+								<!-- Tab bar -->
+								<div class="card-tabs">
+									<button class="card-tab is-active" data-tab="notes" type="button">
+										Notes
+										{notes.length > 0 && <span class="tab-badge">{notes.length}</span>}
+									</button>
+									<button class="card-tab" data-tab="chars" type="button">
+										Characters
+										{guildChars.length > 0 && <span class="tab-badge">{guildChars.length}</span>}
+									</button>
+								</div>
+
+								<!-- Characters panel -->
+								<div class="card-panel" data-panel="chars" style="display:none">
+									{guildChars.length > 0 ? (
 										<ul class="char-list">
 											{guildChars.map((char) => (
 												<li class:list={['char-row', { 'is-main': char.is_main === 1 }]}>
-													<span class="char-name" style={`color: ${classColor(char.class_name)}`}>
-														{char.name}
-														{char.is_main === 1 && <span class="main-badge">MAIN</span>}
-													</span>
+													{raidTeamCharIds.has(char.blizzard_char_id) ? (
+														<a href={`/raiders/${char.blizzard_char_id}`} class="char-name" style={`color: ${classColor(char.class_name)}`}>
+															{char.name}
+															{char.is_main === 1 && <span class="main-badge">MAIN</span>}
+														</a>
+													) : (
+														<span class="char-name" style={`color: ${classColor(char.class_name)}`}>
+															{char.name}
+															{char.is_main === 1 && <span class="main-badge">MAIN</span>}
+														</span>
+													)}
 													<span class="char-meta">
 														{char.class_name} &middot; {char.realm}
 													</span>
@@ -239,70 +274,93 @@ const flash = statusParam ? (statusMessages[statusParam] ?? null) : null;
 												</li>
 											))}
 										</ul>
-									</div>
-								)}
+									) : (
+										<p class="panel-empty">No guild characters.</p>
+									)}
+									{otherChars.length > 0 && (
+										<details class="other-chars">
+											<summary class="other-toggle">
+												{otherChars.length} other character{otherChars.length !== 1 ? 's' : ''} (not in guild)
+											</summary>
+											<ul class="char-list char-list-dim">
+												{otherChars.map((char) => (
+													<li class="char-row">
+														<span class="char-name" style={`color: ${classColor(char.class_name)}; opacity: 0.6`}>
+															{char.name}
+														</span>
+														<span class="char-meta">{char.class_name} &middot; {char.realm}</span>
+													</li>
+												))}
+											</ul>
+										</details>
+									)}
+								</div>
 
-								{otherChars.length > 0 && (
-									<details class="other-chars">
-										<summary class="other-toggle">
-											{otherChars.length} other character{otherChars.length !== 1 ? 's' : ''} (not in guild)
-										</summary>
-										<ul class="char-list char-list-dim">
-											{otherChars.map((char) => (
-												<li class="char-row">
-													<span class="char-name" style={`color: ${classColor(char.class_name)}; opacity: 0.6`}>
-														{char.name}
-													</span>
-													<span class="char-meta">{char.class_name} &middot; {char.realm}</span>
-												</li>
-											))}
-										</ul>
-									</details>
-								)}
-
-								<!-- Notes -->
-								<div class="notes-section">
-									<div class="notes-header">
-										<span class="notes-label">Notes</span>
-										{notes.length > 0 && (
-											<span class="notes-count">{notes.length}</span>
-										)}
-									</div>
-									{notes.length > 0 && (
+								<!-- Notes panel -->
+								<div class="card-panel" data-panel="notes">
+									{notes.length > 1 && (
+										<div class="notes-toolbar">
+											<button class="sort-btn" data-sort="desc" type="button">Newest ↓</button>
+											<input type="search" class="notes-search" placeholder="Filter notes…" autocomplete="off" />
+										</div>
+									)}
+									{notes.length > 0 ? (
 										<ul class="notes-list">
 											{notes.map((note) => (
-												<li class="note-item">
-													<div class="note-meta">
-														<span class="note-author">{note.author_name}</span>
-														<span class="note-date">{formatNoteDate(note.created_at)}</span>
+												<li class="note-item" data-ts={note.created_at}
+													data-note={`${note.author_name} ${note.note_text}`.toLowerCase()}>
+													<div class="note-view">
+														<div class="note-meta">
+															<span class="note-author">{note.author_name}</span>
+															<span class="note-date">{formatNoteDate(note.created_at)}</span>
+															<span class="note-actions">
+																<button type="button" class="btn-note btn-edit-note">Edit</button>
+																{canDeleteNotes && (
+																	<form method="POST" action="/api/admin/raider-notes/delete" style="display:inline">
+																		<input type="hidden" name="id" value={note.id} />
+																		<button type="submit" class="btn-note btn-delete" title="Delete note">
+																				<Icon name="lucide:trash-2" size={12} />
+																			</button>
+																	</form>
+																)}
+															</span>
+														</div>
+														<p class="note-body">{note.note_text}</p>
 													</div>
-													<p class="note-body">{note.note_text}</p>
-														{canDeleteNotes && (
-															<form method="POST" action="/api/admin/raider-notes/delete" class="note-delete-form">
-																<input type="hidden" name="id" value={note.id} />
-																<button type="submit" class="btn-delete" title="Delete note"
-																	onclick="return confirm('Delete this note?')">&times;</button>
-															</form>
-														)}
+													<div class="note-edit" style="display:none">
+														<form method="POST" action="/api/admin/raider-notes/update" class="note-edit-form">
+															<input type="hidden" name="id" value={note.id} />
+															<textarea name="note_text" class="note-textarea" rows="3" required>{note.note_text}</textarea>
+															<div class="note-edit-actions">
+																<button type="button" class="btn-note btn-edit-cancel">Cancel</button>
+																<button type="submit" class="btn btn-primary btn-sm">Save</button>
+															</div>
+														</form>
+													</div>
 												</li>
 											))}
+											<li class="notes-no-match" style="display:none">No notes match.</li>
 										</ul>
+									) : (
+										<p class="panel-empty">No notes yet.</p>
 									)}
-									<details class="add-note-panel">
-										<summary class="add-note-toggle">Add note&hellip;</summary>
-										<form method="POST" action="/api/admin/raider-notes/create" class="add-note-form">
-											<input type="hidden" name="blizzard_char_id" value={noteCharId} />
-											<textarea
-												name="note_text"
-												class="note-textarea"
-												rows="3"
-												placeholder={`Note about ${displayName}…`}
-												maxlength="1000"
-												required
-											></textarea>
-											<button type="submit" class="btn btn-primary">Save Note</button>
-										</form>
-									</details>
+									{noteCharId && (
+										<details class="add-note-panel">
+											<summary class="add-note-toggle">Add note&hellip;</summary>
+											<form method="POST" action="/api/admin/raider-notes/create" class="add-note-form">
+												<input type="hidden" name="blizzard_char_id" value={noteCharId} />
+												<textarea
+													name="note_text"
+													class="note-textarea"
+													rows="3"
+													placeholder={`Note about ${displayName}…`}
+													maxlength="1000"
+													required
+												></textarea>
+												<button type="submit" class="btn btn-primary">Save Note</button>
+											</form>
+										</details>
+									)}
 								</div>
 
 								<details class="edit-panel">
@@ -343,45 +401,70 @@ const flash = statusParam ? (statusMessages[statusParam] ?? null) : null;
 					{unauthed.map((char) => {
 						const notes = notesByChar.get(char.blizzard_char_id) ?? [];
 						const unauthedSearch = char.name.toLowerCase();
-							return (
-								<div class="profile-card unauthed-card" data-search={unauthedSearch}>
-									<div class="card-header">
+						return (
+							<div class="profile-card unauthed-card" data-search={unauthedSearch}>
+								<div class="card-header">
 									<div class="card-identity">
-										<span class="card-display-name" style={`color: ${classColor(char.class_name)}`}>
-											{char.name}
-										</span>
+										{raidTeamCharIds.has(char.blizzard_char_id) ? (
+											<a href={`/raiders/${char.blizzard_char_id}`} class="card-display-name" style={`color: ${classColor(char.class_name)}`}>
+												{char.name}
+											</a>
+										) : (
+											<span class="card-display-name" style={`color: ${classColor(char.class_name)}`}>
+												{char.name}
+											</span>
+										)}
 										<span class="card-battletag">{char.class_name} &middot; {char.realm}</span>
 									</div>
 									<span class="no-main-pill">{rankLabel(char.rank)}</span>
 								</div>
 
-								<!-- Notes -->
-								<div class="notes-section">
-									<div class="notes-header">
-										<span class="notes-label">Notes</span>
-										{notes.length > 0 && (
-											<span class="notes-count">{notes.length}</span>
-										)}
-									</div>
-									{notes.length > 0 && (
+								<div class="card-panel">
+									{notes.length > 1 && (
+										<div class="notes-toolbar">
+											<button class="sort-btn" data-sort="desc" type="button">Newest ↓</button>
+											<input type="search" class="notes-search" placeholder="Filter notes…" autocomplete="off" />
+										</div>
+									)}
+									{notes.length > 0 ? (
 										<ul class="notes-list">
 											{notes.map((note) => (
-												<li class="note-item">
-													<div class="note-meta">
-														<span class="note-author">{note.author_name}</span>
-														<span class="note-date">{formatNoteDate(note.created_at)}</span>
+												<li class="note-item" data-ts={note.created_at}
+													data-note={`${note.author_name} ${note.note_text}`.toLowerCase()}>
+													<div class="note-view">
+														<div class="note-meta">
+															<span class="note-author">{note.author_name}</span>
+															<span class="note-date">{formatNoteDate(note.created_at)}</span>
+															<span class="note-actions">
+																<button type="button" class="btn-note btn-edit-note">Edit</button>
+																{canDeleteNotes && (
+																	<form method="POST" action="/api/admin/raider-notes/delete" style="display:inline">
+																		<input type="hidden" name="id" value={note.id} />
+																		<button type="submit" class="btn-note btn-delete" title="Delete note">
+																			<Icon name="lucide:trash-2" size={12} />
+																		</button>
+																	</form>
+																)}
+															</span>
+														</div>
+														<p class="note-body">{note.note_text}</p>
 													</div>
-													<p class="note-body">{note.note_text}</p>
-													{canDeleteNotes && (
-														<form method="POST" action="/api/admin/raider-notes/delete" class="note-delete-form">
+													<div class="note-edit" style="display:none">
+														<form method="POST" action="/api/admin/raider-notes/update" class="note-edit-form">
 															<input type="hidden" name="id" value={note.id} />
-															<button type="submit" class="btn-delete" title="Delete note"
-																onclick="return confirm('Delete this note?')">&times;</button>
+															<textarea name="note_text" class="note-textarea" rows="3" required>{note.note_text}</textarea>
+															<div class="note-edit-actions">
+																<button type="button" class="btn-note btn-edit-cancel">Cancel</button>
+																<button type="submit" class="btn btn-primary btn-sm">Save</button>
+															</div>
 														</form>
-													)}
+													</div>
 												</li>
 											))}
+											<li class="notes-no-match" style="display:none">No notes match.</li>
 										</ul>
+									) : (
+										<p class="panel-empty">No notes yet.</p>
 									)}
 									<details class="add-note-panel">
 										<summary class="add-note-toggle">Add note&hellip;</summary>
@@ -410,6 +493,7 @@ const flash = statusParam ? (statusMessages[statusParam] ?? null) : null;
 </AdminLayout>
 
 <script>
+	// Search
 	const input = document.getElementById('member-search') as HTMLInputElement | null;
 	if (input) {
 		input.addEventListener('input', () => {
@@ -421,12 +505,85 @@ const flash = statusParam ? (statusMessages[statusParam] ?? null) : null;
 					card.style.display = match ? '' : 'none';
 					if (match) visible++;
 				});
-				// Show/hide the empty-state sibling if all cards are hidden
 				const emptyEl = grid.parentElement?.querySelector<HTMLElement>('.search-empty');
 				if (emptyEl) emptyEl.style.display = visible === 0 ? '' : 'none';
 			});
 		});
 	}
+
+	// Tab switching
+	document.querySelectorAll<HTMLElement>('.card-tabs').forEach((tabs) => {
+		const card = tabs.closest('.profile-card')!;
+		tabs.querySelectorAll<HTMLButtonElement>('.card-tab').forEach((tab) => {
+			tab.addEventListener('click', () => {
+				const target = tab.dataset.tab;
+				tabs.querySelectorAll('.card-tab').forEach((t) => t.classList.toggle('is-active', t === tab));
+				card.querySelectorAll<HTMLElement>('.card-panel').forEach((panel) => {
+					panel.style.display = panel.dataset.panel === target ? '' : 'none';
+				});
+			});
+		});
+	});
+
+	// Filter notes
+	document.querySelectorAll<HTMLInputElement>('.notes-search').forEach((input) => {
+		input.addEventListener('input', () => {
+			const q = input.value.trim().toLowerCase();
+			const list = input.closest('.card-panel')!.querySelector<HTMLElement>('.notes-list')!;
+			const items = list.querySelectorAll<HTMLElement>('.note-item');
+			let visible = 0;
+			items.forEach((item) => {
+				const match = !q || (item.dataset.note ?? '').includes(q);
+				item.style.display = match ? '' : 'none';
+				if (match) visible++;
+			});
+			const noMatch = list.querySelector<HTMLElement>('.notes-no-match');
+			if (noMatch) noMatch.style.display = visible === 0 ? '' : 'none';
+		});
+	});
+
+	// Sort notes
+	document.querySelectorAll<HTMLButtonElement>('.sort-btn').forEach((btn) => {
+		btn.addEventListener('click', () => {
+			const panel = btn.closest('.card-panel')!;
+			const list = panel.querySelector<HTMLElement>('.notes-list');
+			if (!list) return;
+			const isDesc = btn.dataset.sort === 'desc';
+			const newSort = isDesc ? 'asc' : 'desc';
+			btn.dataset.sort = newSort;
+			btn.textContent = newSort === 'desc' ? 'Newest ↓' : 'Oldest ↑';
+			const items = [...list.querySelectorAll<HTMLElement>(':scope > .note-item')];
+			items.sort((a, b) => {
+				const ta = parseInt(a.dataset.ts ?? '0', 10);
+				const tb = parseInt(b.dataset.ts ?? '0', 10);
+				return newSort === 'desc' ? tb - ta : ta - tb;
+			});
+			items.forEach((i) => list.appendChild(i));
+		});
+	});
+
+	// Inline note editing
+	document.querySelectorAll<HTMLButtonElement>('.btn-edit-note').forEach((btn) => {
+		btn.addEventListener('click', () => {
+			const item = btn.closest('.note-item')!;
+			(item.querySelector('.note-view') as HTMLElement).style.display = 'none';
+			(item.querySelector('.note-edit') as HTMLElement).style.display = '';
+		});
+	});
+	// Delete confirmation
+	document.querySelectorAll<HTMLButtonElement>('.btn-delete').forEach((btn) => {
+		btn.addEventListener('click', (e) => {
+			if (!confirm('Delete this note?')) e.preventDefault();
+		});
+	});
+
+	document.querySelectorAll<HTMLButtonElement>('.btn-edit-cancel').forEach((btn) => {
+		btn.addEventListener('click', () => {
+			const item = btn.closest('.note-item')!;
+			(item.querySelector('.note-view') as HTMLElement).style.display = '';
+			(item.querySelector('.note-edit') as HTMLElement).style.display = 'none';
+		});
+	});
 </script>
 
 <style>
@@ -570,6 +727,7 @@ const flash = statusParam ? (statusMessages[statusParam] ?? null) : null;
 		padding: 0.75rem 1rem 0.6rem;
 		border-bottom: 1px solid rgba(214, 176, 106, 0.15);
 		background: rgba(214, 176, 106, 0.05);
+		flex-shrink: 0;
 	}
 
 	.card-identity {
@@ -588,7 +746,9 @@ const flash = statusParam ? (statusMessages[statusParam] ?? null) : null;
 		white-space: nowrap;
 		overflow: hidden;
 		text-overflow: ellipsis;
+		text-decoration: none;
 	}
+	a.card-display-name:hover { text-decoration: underline; }
 
 	.card-battletag {
 		font-size: 0.75rem;
@@ -600,7 +760,9 @@ const flash = statusParam ? (statusMessages[statusParam] ?? null) : null;
 		font-size: 0.88rem;
 		white-space: nowrap;
 		flex-shrink: 0;
+		text-decoration: none;
 	}
+	a.main-pill:hover { text-decoration: underline; }
 
 	.no-main-pill {
 		font-size: 0.8rem;
@@ -609,22 +771,75 @@ const flash = statusParam ? (statusMessages[statusParam] ?? null) : null;
 		flex-shrink: 0;
 	}
 
-	/* ── Character lists ────────────────────────────────────────────── */
-	.chars-section {
-		padding: 0.65rem 1rem 0.4rem;
+	/* ── Tabs ───────────────────────────────────────────────────────── */
+	.card-tabs {
+		display: flex;
+		flex-shrink: 0;
+		border-bottom: 1px solid rgba(214, 176, 106, 0.15);
+		background: rgba(214, 176, 106, 0.03);
+	}
+
+	.card-tab {
+		flex: 1;
+		padding: 0.4rem 0.75rem;
+		background: none;
+		border: none;
+		border-bottom: 2px solid transparent;
+		margin-bottom: -1px;
+		color: var(--muted);
+		font-size: 0.78rem;
+		font-weight: 600;
+		font-family: var(--font-body);
+		cursor: pointer;
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		gap: 0.4rem;
+		transition: color 120ms, border-color 120ms;
+		white-space: nowrap;
+	}
+	.card-tab:hover { color: var(--text); }
+	.card-tab.is-active {
+		color: var(--gold-bright);
+		border-bottom-color: var(--gold);
+	}
+
+	.tab-badge {
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		min-width: 1.2rem;
+		height: 1.2rem;
+		padding-inline: 0.3rem;
+		border-radius: 999px;
+		background: rgba(214, 176, 106, 0.12);
+		border: 1px solid rgba(214, 176, 106, 0.25);
+		color: var(--gold);
+		font-size: 0.68rem;
+		font-weight: 700;
+	}
+
+	/* ── Card panel (tab content) ───────────────────────────────────── */
+	.card-panel {
+		height: 12rem;
+		overflow-y: auto;
+		overflow-x: hidden;
+		padding: 0.6rem 1rem;
 		display: flex;
 		flex-direction: column;
 		gap: 0.4rem;
+		scrollbar-width: thin;
+		scrollbar-color: rgba(214, 176, 106, 0.2) transparent;
 	}
 
-	.section-label {
-		font-size: 0.72rem;
-		font-weight: 700;
-		text-transform: uppercase;
-		letter-spacing: 0.07em;
+	.panel-empty {
+		margin: auto 0;
 		color: var(--muted);
+		font-size: 0.85rem;
+		font-style: italic;
 	}
 
+	/* ── Character lists ────────────────────────────────────────────── */
 	.char-list {
 		list-style: none;
 		margin: 0;
@@ -632,12 +847,6 @@ const flash = statusParam ? (statusMessages[statusParam] ?? null) : null;
 		display: flex;
 		flex-direction: column;
 		gap: 0.25rem;
-		/* ~5 rows visible: each row ≈ 1.9rem tall */
-		max-height: calc(5 * 1.9rem + 4 * 0.25rem);
-		overflow-y: auto;
-		overflow-x: hidden;
-		scrollbar-width: thin;
-		scrollbar-color: rgba(214, 176, 106, 0.25) transparent;
 	}
 
 	.char-list-dim { opacity: 0.65; }
@@ -657,7 +866,8 @@ const flash = statusParam ? (statusMessages[statusParam] ?? null) : null;
 		padding-inline: 0.35rem;
 	}
 
-	.char-name { font-weight: 600; font-size: 0.92rem; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+	.char-name { font-weight: 600; font-size: 0.92rem; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-decoration: none; }
+	a.char-name:hover { text-decoration: underline; }
 	.char-meta { font-size: 0.8rem; color: var(--muted); white-space: nowrap; }
 	.char-rank { margin-left: auto; font-size: 0.75rem; color: var(--muted); white-space: nowrap; flex-shrink: 0; }
 
@@ -677,10 +887,10 @@ const flash = statusParam ? (statusMessages[statusParam] ?? null) : null;
 	}
 
 	/* ── Non-guild chars disclosure ─────────────────────────────────── */
-	.other-chars { border-top: 1px solid rgba(214, 176, 106, 0.08); }
+	.other-chars { border-top: 1px solid rgba(214, 176, 106, 0.08); margin-top: 0.2rem; }
 
 	.other-toggle {
-		padding: 0.4rem 1rem;
+		padding: 0.4rem 0;
 		font-size: 0.78rem;
 		color: var(--muted);
 		cursor: pointer;
@@ -688,12 +898,180 @@ const flash = statusParam ? (statusMessages[statusParam] ?? null) : null;
 		user-select: none;
 	}
 	.other-toggle:hover { color: var(--text); }
-	.other-chars .char-list { padding: 0 1rem 0.6rem; }
+	.other-chars .char-list { padding-top: 0.25rem; }
+
+	/* ── Notes toolbar ──────────────────────────────────────────────── */
+	.notes-toolbar {
+		display: flex;
+		align-items: center;
+		gap: 0.5rem;
+		flex-shrink: 0;
+	}
+
+	.notes-search {
+		flex: 1;
+		min-width: 0;
+		background: rgba(7, 17, 26, 0.6);
+		border: 1px solid rgba(214, 176, 106, 0.2);
+		border-radius: 0.3rem;
+		color: var(--text);
+		font-family: var(--font-body);
+		font-size: 0.75rem;
+		padding: 0.15rem 0.45rem;
+		outline: none;
+		transition: border-color 120ms;
+	}
+	.notes-search:focus { border-color: rgba(214, 176, 106, 0.55); }
+	.notes-search::placeholder { color: var(--muted); opacity: 0.6; }
+
+	.notes-no-match {
+		list-style: none;
+		font-size: 0.82rem;
+		color: var(--muted);
+		font-style: italic;
+		padding: 0.2rem 0;
+	}
+
+	.sort-btn {
+		background: none;
+		border: 1px solid rgba(214, 176, 106, 0.25);
+		border-radius: 0.3rem;
+		color: var(--muted);
+		font-size: 0.72rem;
+		font-family: var(--font-body);
+		padding: 0.15rem 0.5rem;
+		cursor: pointer;
+		transition: color 120ms, border-color 120ms;
+	}
+	.sort-btn:hover { color: var(--text); border-color: rgba(214, 176, 106, 0.5); }
+
+	/* ── Notes list ─────────────────────────────────────────────────── */
+	.notes-list {
+		list-style: none;
+		margin: 0;
+		padding: 0;
+		display: flex;
+		flex-direction: column;
+		gap: 0.45rem;
+	}
+
+	.note-item {
+		background: rgba(255, 255, 255, 0.03);
+		border: 1px solid rgba(255, 255, 255, 0.07);
+		border-radius: 0.4rem;
+		padding: 0.45rem 0.6rem;
+	}
+
+	.note-meta {
+		display: flex;
+		align-items: center;
+		gap: 0.5rem;
+		margin-bottom: 0.2rem;
+		flex-wrap: wrap;
+	}
+
+	.note-author {
+		font-size: 0.76rem;
+		font-weight: 700;
+		color: var(--gold);
+	}
+
+	.note-date {
+		font-size: 0.7rem;
+		color: var(--muted);
+	}
+
+	.note-actions {
+		margin-left: auto;
+		display: flex;
+		align-items: center;
+		gap: 0.2rem;
+		flex-shrink: 0;
+	}
+
+	.btn-note {
+		background: none;
+		border: none;
+		cursor: pointer;
+		color: var(--muted);
+		font-size: 0.72rem;
+		font-family: var(--font-body);
+		padding: 0.1rem 0.3rem;
+		border-radius: 0.25rem;
+		transition: color 0.15s, background 0.15s;
+	}
+	.btn-note:hover { color: var(--text); background: rgba(255, 255, 255, 0.06); }
+	.btn-delete:hover { color: #f47e7e; background: rgba(244, 126, 126, 0.1); }
+
+	.note-body {
+		margin: 0;
+		font-size: 0.84rem;
+		color: var(--text);
+		white-space: pre-wrap;
+		word-break: break-word;
+		line-height: 1.45;
+	}
+
+	/* ── Note edit form ─────────────────────────────────────────────── */
+	.note-edit-form {
+		display: flex;
+		flex-direction: column;
+		gap: 0.4rem;
+	}
+
+	.note-edit-actions {
+		display: flex;
+		align-items: center;
+		gap: 0.5rem;
+	}
+
+	/* ── Add note ───────────────────────────────────────────────────── */
+	.add-note-panel { margin-top: 0.1rem; }
+
+	.add-note-toggle {
+		font-size: 0.8rem;
+		color: var(--gold);
+		cursor: pointer;
+		list-style: none;
+		display: inline-flex;
+		align-items: center;
+		padding: 0.15rem 0;
+		user-select: none;
+	}
+	.add-note-toggle::-webkit-details-marker { display: none; }
+	.add-note-toggle:hover { text-decoration: underline; }
+
+	.add-note-form {
+		display: flex;
+		flex-direction: column;
+		gap: 0.5rem;
+		margin-top: 0.45rem;
+	}
+
+	.note-textarea {
+		width: 100%;
+		resize: vertical;
+		background: rgba(255, 255, 255, 0.05);
+		border: 1px solid rgba(214, 176, 106, 0.3);
+		border-radius: 0.35rem;
+		color: var(--text);
+		font-family: var(--font-body);
+		font-size: 0.875rem;
+		padding: 0.45rem 0.6rem;
+		line-height: 1.45;
+		min-height: 4.5rem;
+		box-sizing: border-box;
+	}
+	.note-textarea:focus {
+		outline: none;
+		border-color: rgba(214, 176, 106, 0.6);
+	}
+	.note-textarea::placeholder { color: var(--muted); opacity: 0.7; }
 
 	/* ── Nickname edit ──────────────────────────────────────────────── */
 	.edit-panel {
 		border-top: 1px solid rgba(214, 176, 106, 0.12);
-		margin-top: auto;
+		flex-shrink: 0;
 	}
 
 	.edit-toggle {
@@ -750,209 +1128,13 @@ const flash = statusParam ? (statusMessages[statusParam] ?? null) : null;
 		white-space: nowrap;
 		transition: background 140ms ease, border-color 140ms ease;
 	}
+	.btn-sm { padding: 0.2rem 0.5rem; font-size: 0.78rem; }
 	.btn-primary {
 		background: rgba(214, 176, 106, 0.18);
 		border-color: rgba(214, 176, 106, 0.5);
 		color: var(--gold-bright);
 	}
 	.btn-primary:hover { background: rgba(214, 176, 106, 0.28); }
-
-	/* ── Table ──────────────────────────────────────────────────────── */
-	.table-wrap {
-		overflow-x: auto;
-		border-radius: 0.5rem;
-		border: 1px solid rgba(214, 176, 106, 0.2);
-	}
-
-	.unauthed-wrap {
-		max-height: 480px;
-		overflow-y: auto;
-		position: relative;
-	}
-
-	.data-table {
-		width: 100%;
-		border-collapse: collapse;
-		font-size: 0.92rem;
-	}
-
-	.data-table th {
-		background: rgba(214, 176, 106, 0.07);
-		padding: 0.6rem 0.75rem;
-		text-align: left;
-		font-weight: 700;
-		color: var(--gold);
-		font-family: var(--font-display);
-		letter-spacing: 0.04em;
-		font-size: 0.78rem;
-		text-transform: uppercase;
-		white-space: nowrap;
-	}
-
-	.unauthed-wrap .data-table thead th {
-		position: sticky;
-		top: 0;
-		z-index: 5;
-		background: rgba(20, 28, 36, 0.98);
-		box-shadow: inset 0 -1px 0 rgba(214, 176, 106, 0.25);
-	}
-
-	.data-table td {
-		padding: 0.55rem 0.75rem;
-		border-top: 1px solid rgba(214, 176, 106, 0.1);
-		vertical-align: middle;
-	}
-
-	.data-table tr:hover td { background: rgba(214, 176, 106, 0.04); }
-	.text-muted { color: var(--muted); }
-
-	/* ── Focus highlight ────────────────────────────────────────────── */
-	/* ── Notes ──────────────────────────────────────────────────────── */
-	.notes-section {
-		display: flex;
-		flex-direction: column;
-		gap: 0.5rem;
-		padding: 0.65rem 1rem 0.6rem;
-		border-top: 1px solid rgba(214, 176, 106, 0.1);
-	}
-
-	.notes-header {
-		display: flex;
-		align-items: center;
-		gap: 0.45rem;
-	}
-
-	.notes-label {
-		font-size: 0.72rem;
-		font-weight: 700;
-		text-transform: uppercase;
-		letter-spacing: 0.07em;
-		color: var(--muted);
-	}
-
-	.notes-count {
-		display: inline-flex;
-		align-items: center;
-		justify-content: center;
-		min-width: 1.3rem;
-		height: 1.3rem;
-		padding-inline: 0.35rem;
-		border-radius: 999px;
-		background: rgba(214, 176, 106, 0.12);
-		border: 1px solid rgba(214, 176, 106, 0.3);
-		color: var(--gold);
-		font-size: 0.7rem;
-		font-weight: 700;
-	}
-
-	.notes-list {
-		list-style: none;
-		margin: 0;
-		padding: 0;
-		display: flex;
-		flex-direction: column;
-		gap: 0.45rem;
-	}
-
-	.note-item {
-		position: relative;
-		background: rgba(255, 255, 255, 0.03);
-		border: 1px solid rgba(255, 255, 255, 0.07);
-		border-radius: 0.4rem;
-		padding: 0.45rem 2rem 0.45rem 0.6rem;
-	}
-
-	.note-meta {
-		display: flex;
-		align-items: center;
-		gap: 0.5rem;
-		margin-bottom: 0.2rem;
-		flex-wrap: wrap;
-	}
-
-	.note-author {
-		font-size: 0.76rem;
-		font-weight: 700;
-		color: var(--gold);
-	}
-
-	.note-date {
-		font-size: 0.7rem;
-		color: var(--muted);
-	}
-
-	.note-body {
-		margin: 0;
-		font-size: 0.84rem;
-		color: var(--text);
-		white-space: pre-wrap;
-		word-break: break-word;
-		line-height: 1.45;
-	}
-
-	.note-delete-form {
-		position: absolute;
-		top: 0.3rem;
-		right: 0.3rem;
-	}
-
-	.btn-delete {
-		background: none;
-		border: none;
-		cursor: pointer;
-		color: var(--muted);
-		font-size: 1.1rem;
-		line-height: 1;
-		padding: 0.1rem 0.3rem;
-		border-radius: 0.25rem;
-		transition: color 0.15s, background 0.15s;
-	}
-	.btn-delete:hover {
-		color: #f47e7e;
-		background: rgba(244, 126, 126, 0.1);
-	}
-
-	.add-note-panel { margin-top: 0.1rem; }
-
-	.add-note-toggle {
-		font-size: 0.8rem;
-		color: var(--gold);
-		cursor: pointer;
-		list-style: none;
-		display: inline-flex;
-		align-items: center;
-		padding: 0.15rem 0;
-		user-select: none;
-	}
-	.add-note-toggle::-webkit-details-marker { display: none; }
-	.add-note-toggle:hover { text-decoration: underline; }
-
-	.add-note-form {
-		display: flex;
-		flex-direction: column;
-		gap: 0.5rem;
-		margin-top: 0.45rem;
-	}
-
-	.note-textarea {
-		width: 100%;
-		resize: vertical;
-		background: rgba(255, 255, 255, 0.05);
-		border: 1px solid rgba(214, 176, 106, 0.3);
-		border-radius: 0.35rem;
-		color: var(--text);
-		font-family: var(--font-body);
-		font-size: 0.875rem;
-		padding: 0.45rem 0.6rem;
-		line-height: 1.45;
-		min-height: 4.5rem;
-		box-sizing: border-box;
-	}
-	.note-textarea:focus {
-		outline: none;
-		border-color: rgba(214, 176, 106, 0.6);
-	}
-	.note-textarea::placeholder { color: var(--muted); opacity: 0.7; }
 
 	@media (max-width: 640px) {
 		.profiles-grid { grid-template-columns: 1fr; }
