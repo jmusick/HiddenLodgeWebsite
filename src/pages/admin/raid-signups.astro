@@ -93,19 +93,12 @@ const WEEKDAY_OPTIONS = [
   { value: 6, label: 'Saturday' },
 ];
 
-function referenceSundayUtcMsFromNow(): number {
-  const now = new Date();
-  const todayStartUtcMs = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 0, 0, 0, 0);
-  const weekdayUtc = new Date(todayStartUtcMs).getUTCDay();
-  return todayStartUtcMs - weekdayUtc * 24 * 60 * 60 * 1000;
-}
-
 
 function timeRangeInZoneLabel(weekdayUtc: number, startTimeUtc: string, durationMinutes: number, timeZone: string): string {
   const parsedStart = parseUtcTime(startTimeUtc);
   if (!parsedStart) return `Local: unavailable (${timeZone})`;
 
-  const referenceSundayUtcMs = referenceSundayUtcMsFromNow();
+  const referenceSundayUtcMs = Date.UTC(2024, 0, 7, 0, 0, 0, 0);
   const startUtcMs =
     referenceSundayUtcMs +
     weekdayUtc * 24 * 60 * 60 * 1000 +
@@ -143,7 +136,7 @@ function localSlotFromUtcSchedule(
     return { weekdayLocal: weekdayUtc, startLocal: startTimeUtc, endLocal: startTimeUtc };
   }
 
-  const referenceSundayUtcMs = referenceSundayUtcMsFromNow();
+  const referenceSundayUtcMs = Date.UTC(2024, 0, 7, 0, 0, 0, 0);
   const startUtcMs =
     referenceSundayUtcMs +
     weekdayUtc * 24 * 60 * 60 * 1000 +
@@ -534,13 +527,6 @@ function localSlotFromUtcSchedule(
     return `${hh}:${mm}`;
   };
 
-  const getReferenceSundayUtcMs = (): number => {
-    const now = new Date();
-    const todayStartUtcMs = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 0, 0, 0, 0);
-    const weekdayUtc = new Date(todayStartUtcMs).getUTCDay();
-    return todayStartUtcMs - weekdayUtc * 24 * 60 * 60 * 1000;
-  };
-
   const partsFormatterForTz = (timeZone: string) =>
     new Intl.DateTimeFormat('en-US', {
       timeZone,
@@ -561,7 +547,7 @@ function localSlotFromUtcSchedule(
     const targetDay = dayNameByIndex[localWeekday] ?? 'Sun';
     const targetTime = `${String(parsed.hour).padStart(2, '0')}:${String(parsed.minute).padStart(2, '0')}`;
     const formatter = partsFormatterForTz(timeZone);
-    const baseSundayUtcMs = getReferenceSundayUtcMs();
+    const baseSundayUtcMs = Date.UTC(2024, 0, 7, 0, 0, 0, 0);
 
     for (let minute = 0; minute < 7 * 24 * 60; minute += 1) {
       const date = new Date(baseSundayUtcMs + minute * 60 * 1000);

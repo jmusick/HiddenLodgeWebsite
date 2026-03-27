@@ -144,11 +144,61 @@ const signupRows = (signupsResult.results ?? []) as SignupRow[];
 
 const defaultCharacterId = characters.find((c) => c.is_main === 1)?.id ?? characters[0]?.id ?? null;
 
+const PRIMARY_SCHEDULE_TIME_ZONE = 'America/New_York';
+const WEEKDAY_SHORT_TO_INDEX: Record<string, number> = {
+  Sun: 0,
+  Mon: 1,
+  Tue: 2,
+  Wed: 3,
+  Thu: 4,
+  Fri: 5,
+  Sat: 6,
+};
+
+const tzWeekMinuteFormatter = new Intl.DateTimeFormat('en-US', {
+  timeZone: PRIMARY_SCHEDULE_TIME_ZONE,
+  weekday: 'short',
+  hour: '2-digit',
+  minute: '2-digit',
+  hourCycle: 'h23',
+});
+
+function weekMinuteInPrimaryTimeZone(epochSeconds: number): number {
+  const parts = tzWeekMinuteFormatter.formatToParts(new Date(epochSeconds * 1000));
+  const weekdayShort = parts.find((p) => p.type === 'weekday')?.value ?? 'Sun';
+  const hour = Number.parseInt(parts.find((p) => p.type === 'hour')?.value ?? '0', 10);
+  const minute = Number.parseInt(parts.find((p) => p.type === 'minute')?.value ?? '0', 10);
+  const weekday = WEEKDAY_SHORT_TO_INDEX[weekdayShort] ?? 0;
+  return weekday * 24 * 60 + hour * 60 + minute;
+}
+
+function adjustedPrimaryDisplayStartUtc(schedule: PrimarySchedule, startsAtUtc: number): number {
+  const parsedTime = parseUtcTime(schedule.start_time_utc);
+  if (!parsedTime) return startsAtUtc;
+
+  const referenceSundayUtc = Math.floor(Date.UTC(2024, 0, 7, 0, 0, 0, 0) / 1000);
+  const referenceSlotUtc =
+    referenceSundayUtc +
+    schedule.weekday_utc * 24 * 60 * 60 +
+    (parsedTime.hour * 60 + parsedTime.minute) * 60;
+
+  const intendedWeekMinute = weekMinuteInPrimaryTimeZone(referenceSlotUtc);
+  const actualWeekMinute = weekMinuteInPrimaryTimeZone(startsAtUtc);
+
+  let diffMinutes = actualWeekMinute - intendedWeekMinute;
+  while (diffMinutes > 7 * 24 * 60 / 2) diffMinutes -= 7 * 24 * 60;
+  while (diffMinutes < -(7 * 24 * 60 / 2)) diffMinutes += 7 * 24 * 60;
+
+  if (Math.abs(diffMinutes) > 120 || diffMinutes === 0) return startsAtUtc;
+  return startsAtUtc - diffMinutes * 60;
+}
+
 interface CalendarRaid {
   key: string;
   kind: 'primary' | 'adhoc';
   title: string;
   startsAtUtc: number;
+  displayStartsAtUtc: number;
   durationMinutes: number;
   notes: string | null;
   primaryScheduleId: number | null;
@@ -177,6 +227,7 @@ for (let cursor = new Date(grid.gridStart); cursor < grid.gridEndExclusive; curs
       kind: 'primary',
       title: schedule.name,
       startsAtUtc,
+      displayStartsAtUtc: adjustedPrimaryDisplayStartUtc(schedule, startsAtUtc),
       durationMinutes: schedule.duration_minutes,
       notes: null,
       primaryScheduleId: schedule.id,
@@ -191,6 +242,7 @@ for (const raid of adHocRaids) {
     kind: 'adhoc',
     title: raid.name,
     startsAtUtc: raid.starts_at_utc,
+    displayStartsAtUtc: raid.starts_at_utc,
     durationMinutes: raid.duration_minutes,
     notes: raid.notes,
     primaryScheduleId: null,
@@ -199,7 +251,7 @@ for (const raid of adHocRaids) {
 }
 
 for (const [key, raids] of raidsByUtcDay.entries()) {
-  raids.sort((a, b) => a.startsAtUtc - b.startsAtUtc || a.title.localeCompare(b.title));
+  raids.sort((a, b) => a.displayStartsAtUtc - b.displayStartsAtUtc || a.title.localeCompare(b.title));
   raidsByUtcDay.set(key, raids);
 }
 
@@ -372,7 +424,7 @@ for (const row of selectedDaySummaryRows) {
               return (
                 <article class="summary-raid-card">
                   <h3>{raid.title}</h3>
-                  <p class="summary-raid-time">{formatEpochInTimeZone(raid.startsAtUtc, userTimeZone)}</p>
+                  <p class="summary-raid-time">{formatEpochInTimeZone(raid.displayStartsAtUtc, userTimeZone)}</p>
                   <p class="summary-counts">
                     Coming: <strong>{comingCount}</strong> &middot; Tentative: <strong>{tentativeCount}</strong> &middot; Absent: <strong class="count-absent">{absentRows.length}</strong>
                   </p>
@@ -510,8 +562,8 @@ for (const row of selectedDaySummaryRows) {
               ) : (
                 cell.raids.map((raid) => {
                   const signup = signupsByRaidKey.get(raid.key) ?? null;
-                  const localTime = formatEpochInTimeZone(raid.startsAtUtc, userTimeZone);
-                  const localDay = dayKeyInTimeZone(raid.startsAtUtc, userTimeZone);
+                  const localTime = formatEpochInTimeZone(raid.displayStartsAtUtc, userTimeZone);
+                  const localDay = dayKeyInTimeZone(raid.displayStartsAtUtc, userTimeZone);
 
                   return (
                     <article class:list={['raid-card', raid.kind === 'primary' ? 'raid-primary' : 'raid-adhoc']}>
