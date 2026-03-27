@@ -12,18 +12,17 @@ import { Icon } from 'astro-icon/components';
 			alt="The Hidden Lodge — For Azeroth. For the Hidden Lodge."
 			class="banner-img"
 		/>
-		<div class="hero-foot">
-			<p class="lead">
-				We raid with purpose, clear Heroic for AOTC, and push into Mythic with a team-first mentality.
-			</p>
-			<div class="actions">
-				<a href="https://raider.io/guilds/us/illidan/Hidden%20Lodge/" target="_blank" rel="noopener noreferrer" class="cta">Apply to Raid</a>
-			</div>
-		</div>
 	</section>
 
 	<section class="grid">
-		<SectionCard title="Raid Schedule" body="Thu / Fri 9:00 PM – 12:00 AM Eastern, with common optional alt raid nights on the side for extra loot, practice, or light chaos." icon="lucide:clock-3" />
+		<article class="card raid-schedule-card">
+			<div class="icon-bg" aria-hidden="true">
+				<Icon name="lucide:clock-3" width={120} height={120} />
+			</div>
+			<h2>Raid Schedule</h2>
+			<p>Thu / Fri 9:00 PM – 12:00 AM Eastern, with common optional alt raid nights on the side for extra loot, practice, or light chaos.</p>
+			<a href="/raiding" class="cta-sm">Apply to Raid</a>
+		</article>
 		<SectionCard title="Primary Goal" body="Get Ahead of the Curve each tier, then move into Mythic progression without turning raid night into a second job. We take the game seriously, but not to the point of making everyone miserable." icon="lucide:trophy" />
 		<SectionCard title="Culture" body="We like having fun together, joking around, and keeping raid nights enjoyable, but when the pull starts we lock in and handle business." icon="lucide:shield" />
 	</section>
@@ -75,48 +74,72 @@ import { Icon } from 'astro-icon/components';
 		height: auto;
 	}
 
-	.hero-foot {
-		padding: 1.1rem 1.2rem 1.35rem;
-		border-top: 1px solid rgba(214, 176, 106, 0.25);
+	.raid-schedule-card {
+		position: relative;
+		border: 1px solid rgba(214, 176, 106, 0.38);
 		background:
-			linear-gradient(165deg, rgba(214, 176, 106, 0.06), transparent 42%),
-			rgba(10, 20, 30, 0.92);
-	}
-
-	.lead {
-		max-width: 64ch;
-		font-size: 1.14rem;
-		color: #d4dfe6;
-	}
-
-	.actions {
+			linear-gradient(160deg, rgba(214, 176, 106, 0.07), transparent 48%),
+			rgba(10, 20, 30, 0.78);
+		border-radius: 0.7rem;
+		padding: 1rem 1rem 1.05rem;
+		min-height: 9rem;
+		box-shadow: 0 14px 28px rgba(0, 0, 0, 0.24);
+		overflow: hidden;
 		display: flex;
-		gap: 0.85rem;
-		margin-top: 1.3rem;
-		flex-wrap: wrap;
+		flex-direction: column;
 	}
 
-	.cta,
-	.ghost {
+	.raid-schedule-card::before {
+		content: '';
+		position: absolute;
+		top: 0;
+		left: 0;
+		right: 0;
+		height: 0.18rem;
+		border-radius: 0.7rem 0.7rem 0 0;
+		background: linear-gradient(90deg, rgba(214, 176, 106, 0.1), rgba(214, 176, 106, 0.8), rgba(214, 176, 106, 0.1));
+	}
+
+	.raid-schedule-card .icon-bg {
+		position: absolute;
+		bottom: -0.5rem;
+		right: -0.25rem;
+		color: #d6b06a;
+		opacity: 0.1;
+		pointer-events: none;
+		line-height: 0;
+	}
+
+	.raid-schedule-card h2 {
+		margin: 0;
+		font-size: 1.16rem;
+		color: #e4c27a;
+	}
+
+	.raid-schedule-card p {
+		margin: 0.65rem 0 0;
+		color: #d8e1e7;
+		line-height: 1.45;
+		font-size: 1.03rem;
+		flex: 1;
+	}
+
+	.cta-sm {
 		display: inline-block;
-		padding: 0.72rem 1.08rem;
-		border-radius: 0.5rem;
+		margin-top: 1rem;
+		padding: 0.45rem 0.8rem;
+		border-radius: 0.45rem;
 		font-weight: 700;
+		font-size: 0.8rem;
 		text-transform: uppercase;
-		letter-spacing: 0.04em;
-	}
-
-	.cta {
+		letter-spacing: 0.05em;
 		border: 1px solid rgba(233, 201, 135, 0.66);
 		background: linear-gradient(180deg, #e4c27a, #c59a4f);
 		color: #1a2734;
-		box-shadow: inset 0 1px 0 rgba(255, 243, 217, 0.5), 0 8px 22px rgba(0, 0, 0, 0.25);
-	}
-
-	.ghost {
-		border: 1px solid rgba(214, 176, 106, 0.5);
-		background: rgba(17, 30, 41, 0.62);
-		color: #e8eff3;
+		box-shadow: inset 0 1px 0 rgba(255, 243, 217, 0.5), 0 4px 12px rgba(0, 0, 0, 0.2);
+		align-self: flex-start;
+		position: relative;
+		z-index: 1;
 	}
 
 	.grid {
