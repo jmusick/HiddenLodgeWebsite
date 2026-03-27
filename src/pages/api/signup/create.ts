@@ -16,6 +16,8 @@ function safeReturnPath(value: FormDataEntryValue | null): string {
   return value;
 }
 
+const VALID_ATTENDANCE_STATUSES = new Set(['coming', 'tentative', 'late', 'absent']);
+
 export async function POST(context: APIContext): Promise<Response> {
   const user = context.locals.user;
   if (!user) return new Response('Unauthorized', { status: 401 });
@@ -27,13 +29,19 @@ export async function POST(context: APIContext): Promise<Response> {
   const signupRole = normalizeAssignedRole((formData.get('signup_role') as string | null) ?? null);
   const characterId = parsePositiveInt(formData.get('character_id'));
   const returnTo = safeReturnPath(formData.get('return_to'));
+  const signupNotes = (formData.get('signup_notes') as string | null)?.trim() || null;
 
   if (
     !characterId ||
     (raidKind !== 'primary' && raidKind !== 'adhoc') ||
-    (attendanceStatus !== 'coming' && attendanceStatus !== 'tentative') ||
+    !VALID_ATTENDANCE_STATUSES.has(attendanceStatus) ||
     !signupRole
   ) {
+    return new Response(null, { status: 302, headers: { Location: `${returnTo}${returnTo.includes('?') ? '&' : '?'}status=error` } });
+  }
+
+  // Late status requires a note
+  if (attendanceStatus === 'late' && !signupNotes) {
     return new Response(null, { status: 302, headers: { Location: `${returnTo}${returnTo.includes('?') ? '&' : '?'}status=error` } });
   }
 
@@ -69,9 +77,9 @@ export async function POST(context: APIContext): Promise<Response> {
         ).bind(user.id, primaryScheduleId, occurrenceStartUtc),
         env.DB.prepare(
           `INSERT INTO raid_signups
-             (user_id, character_id, raid_kind, primary_schedule_id, occurrence_start_utc, signup_status, signup_role, signed_up_at, updated_at)
-           VALUES (?, ?, 'primary', ?, ?, ?, ?, unixepoch(), unixepoch())`
-        ).bind(user.id, characterId, primaryScheduleId, occurrenceStartUtc, attendanceStatus, signupRole),
+             (user_id, character_id, raid_kind, primary_schedule_id, occurrence_start_utc, signup_status, signup_role, signup_notes, signed_up_at, updated_at)
+           VALUES (?, ?, 'primary', ?, ?, ?, ?, ?, unixepoch(), unixepoch())`
+        ).bind(user.id, characterId, primaryScheduleId, occurrenceStartUtc, attendanceStatus, signupRole, signupNotes),
       ]);
     } else {
       const adHocRaidId = parsePositiveInt(formData.get('ad_hoc_raid_id'));
@@ -90,9 +98,9 @@ export async function POST(context: APIContext): Promise<Response> {
         env.DB.prepare('DELETE FROM raid_signups WHERE user_id = ? AND ad_hoc_raid_id = ?').bind(user.id, adHocRaidId),
         env.DB.prepare(
           `INSERT INTO raid_signups
-             (user_id, character_id, raid_kind, ad_hoc_raid_id, signup_status, signup_role, signed_up_at, updated_at)
-           VALUES (?, ?, 'adhoc', ?, ?, ?, unixepoch(), unixepoch())`
-        ).bind(user.id, characterId, adHocRaidId, attendanceStatus, signupRole),
+             (user_id, character_id, raid_kind, ad_hoc_raid_id, signup_status, signup_role, signup_notes, signed_up_at, updated_at)
+           VALUES (?, ?, 'adhoc', ?, ?, ?, ?, unixepoch(), unixepoch())`
+        ).bind(user.id, characterId, adHocRaidId, attendanceStatus, signupRole, signupNotes),
       ]);
     }
   } catch {

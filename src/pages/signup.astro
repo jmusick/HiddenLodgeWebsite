@@ -19,6 +19,7 @@ import {
   tokenArmorType,
   type AssignedRole,
 } from '../lib/raid-teams';
+import { fallbackClassIconUrl } from '../lib/class-icons';
 import { classColor } from '../lib/wow';
 
 const user = Astro.locals.user!;
@@ -41,25 +42,29 @@ interface SignupRow {
   occurrence_start_utc: number | null;
   character_id: number;
   character_name: string;
-  signup_status: 'coming' | 'tentative';
+  signup_status: 'coming' | 'tentative' | 'late' | 'absent';
   signup_role: AssignedRole;
+  signup_notes: string | null;
 }
 
 interface DaySummarySignupRow {
-  id: number;
+  id: number | null;
   raid_kind: 'primary' | 'adhoc';
   primary_schedule_id: number | null;
   ad_hoc_raid_id: number | null;
   occurrence_start_utc: number | null;
   signed_up_at: number;
-  signup_status: 'coming' | 'tentative';
+  signup_status: 'coming' | 'tentative' | 'late' | 'absent';
   signup_role: AssignedRole;
+  signup_notes: string | null;
+  character_id: number;
   character_name: string;
   class_name: string;
   nickname: string | null;
-  battle_tag: string;
+  battle_tag: string | null;
   blizzard_char_id: number | null;
-  user_id: number;
+  user_id: number | null;
+  isSigned: boolean;
 }
 
 interface RosterMemberRow {
@@ -68,6 +73,11 @@ interface RosterMemberRow {
   class_name: string;
   nickname: string | null;
   user_id: number | null;
+}
+
+interface MainCharacterRow {
+  user_id: number;
+  main_character_name: string;
 }
 
 const ROLE_OPTIONS: Array<{ value: AssignedRole; label: string }> = [
@@ -81,16 +91,35 @@ function roleLabel(role: AssignedRole): string {
   return ROLE_OPTIONS.find((opt) => opt.value === role)?.label ?? role;
 }
 
-function groupAbsentRows(rows: RosterMemberRow[]): [string, RosterMemberRow[]][] {
-  const absentByClass = new Map<string, RosterMemberRow[]>();
-  for (const member of rows) {
-    const group = absentByClass.get(member.class_name) ?? [];
-    group.push(member);
-    absentByClass.set(member.class_name, group);
-  }
+function classAbbrev(className: string): string {
+  const normalized = className.trim().toLowerCase();
+  const map: Record<string, string> = {
+    'death knight': 'DK',
+    'demon hunter': 'DH',
+    druid: 'DR',
+    evoker: 'EV',
+    hunter: 'HU',
+    mage: 'MA',
+    monk: 'MO',
+    paladin: 'PA',
+    priest: 'PR',
+    rogue: 'RO',
+    shaman: 'SH',
+    warlock: 'WL',
+    warrior: 'WR',
+  };
 
-  return [...absentByClass.entries()].sort((a, b) => a[0].localeCompare(b[0]));
+  return map[normalized] ?? className.slice(0, 2).toUpperCase();
 }
+
+function signupStatusLabel(row: DaySummarySignupRow): string {
+  if (!row.isSigned) return 'Not Signed Up';
+  if (row.signup_status === 'coming') return 'Signed Up';
+  if (row.signup_status === 'tentative') return 'Tentative';
+  if (row.signup_status === 'late') return 'Late';
+  return 'Absent';
+}
+
 
 const ymParam = new URL(Astro.request.url).searchParams.get('ym');
 const parsedYm = parseYm(ymParam);
@@ -102,7 +131,7 @@ const grid = monthGridUtc(year, monthIndex);
 const gridStartEpoch = Math.floor(grid.gridStart.getTime() / 1000);
 const gridEndEpoch = Math.floor(grid.gridEndExclusive.getTime() / 1000);
 
-const [settingsResult, charsResult, schedulesResult, adHocResult, signupsResult] = await env.DB.batch([
+const [settingsResult, charsResult, schedulesResult, adHocResult, signupsResult, officerResult] = await env.DB.batch([
   env.DB.prepare('SELECT time_zone, preferred_role FROM users WHERE id = ?').bind(user.id),
   env.DB.prepare(
      `SELECT id, name, realm, class_name, level, is_main
@@ -127,10 +156,18 @@ const [settingsResult, charsResult, schedulesResult, adHocResult, signupsResult]
   ).bind(gridStartEpoch, gridEndEpoch),
   env.DB.prepare(
     `SELECT rs.id, rs.raid_kind, rs.primary_schedule_id, rs.ad_hoc_raid_id, rs.occurrence_start_utc,
-            rs.character_id, c.name AS character_name, rs.signup_status, rs.signup_role
+            rs.character_id, c.name AS character_name, rs.signup_status, rs.signup_role, rs.signup_notes
      FROM raid_signups rs
      JOIN characters c ON c.id = rs.character_id
      WHERE rs.user_id = ?`
+  ).bind(user.id),
+  env.DB.prepare(
+    `SELECT 1 AS can_override
+     FROM characters c
+     JOIN roster_members_cache rmc ON rmc.blizzard_char_id = c.blizzard_char_id
+     WHERE c.user_id = ?
+       AND rmc.rank IN (0, 1, 2, 3)
+     LIMIT 1`
   ).bind(user.id),
 ]);
 
@@ -141,6 +178,7 @@ const characters = (charsResult.results ?? []) as CharacterRow[];
 const primarySchedules = (schedulesResult.results ?? []) as PrimarySchedule[];
 const adHocRaids = (adHocResult.results ?? []) as AdHocRaid[];
 const signupRows = (signupsResult.results ?? []) as SignupRow[];
+const canOverrideAnyRole = isAdmin || Boolean(officerResult.results?.[0]);
 
 const defaultCharacterId = characters.find((c) => c.is_main === 1)?.id ?? characters[0]?.id ?? null;
 
@@ -284,11 +322,12 @@ const selectedDayRaids = selectedDayCell?.raids ?? [];
 
 let selectedDaySummaryRows: DaySummarySignupRow[] = [];
 let allRosterMembers: RosterMemberRow[] = [];
+const mainCharacterNameByUserId = new Map<number, string>();
 if (selectedDayCell) {
   const selectedDayStart = Math.floor(new Date(`${selectedDayCell.isoDate}T00:00:00.000Z`).getTime() / 1000);
   const selectedDayEnd = selectedDayStart + 86400;
 
-  const [result, rosterResult] = await env.DB.batch([
+  const [result, rosterResult, mainsResult] = await env.DB.batch([
     env.DB.prepare(
       `SELECT
         rs.id,
@@ -299,6 +338,8 @@ if (selectedDayCell) {
         rs.signed_up_at,
         rs.signup_status,
         rs.signup_role,
+        rs.signup_notes,
+        c.id AS character_id,
         c.name AS character_name,
         c.class_name,
         c.blizzard_char_id,
@@ -344,10 +385,20 @@ if (selectedDayCell) {
       JOIN roster_members_cache rmc ON rmc.blizzard_char_id = rtm.blizzard_char_id
       ORDER BY rmc.class_name ASC, rmc.name ASC`
     ),
+    env.DB.prepare(
+      `SELECT user_id, name AS main_character_name
+       FROM characters
+       WHERE is_main = 1`
+    ),
   ]);
 
-  selectedDaySummaryRows = (result.results ?? []) as DaySummarySignupRow[];
+  selectedDaySummaryRows = (result.results ?? []) as any[];
+  selectedDaySummaryRows = selectedDaySummaryRows.map((r) => ({ ...r, isSigned: true }));
   allRosterMembers = (rosterResult.results ?? []) as RosterMemberRow[];
+  const mainRows = (mainsResult.results ?? []) as MainCharacterRow[];
+  for (const row of mainRows) {
+    mainCharacterNameByUserId.set(row.user_id, row.main_character_name);
+  }
 }
 
 const daySummaryByRaidKey = new Map<string, DaySummarySignupRow[]>();
@@ -364,6 +415,48 @@ for (const row of selectedDaySummaryRows) {
   arr.push(row);
   daySummaryByRaidKey.set(raidKey, arr);
 }
+
+// Merge roster members with signups for complete member list
+const getRaidMembers = (raidKey: string): DaySummarySignupRow[] => {
+  const signups = daySummaryByRaidKey.get(raidKey) ?? [];
+  const signedUpCharIds = new Set(
+    signups
+      .map((r) => r.blizzard_char_id)
+      .filter((id): id is number => typeof id === 'number' && id > 0)
+  );
+
+  // Combine signed up and unsigned members
+  const allMembers: DaySummarySignupRow[] = [
+    ...signups,
+    ...allRosterMembers
+      .filter((m) => !signedUpCharIds.has(m.blizzard_char_id))
+      .map((m) => ({
+        id: null,
+        raid_kind: 'primary' as const,
+        primary_schedule_id: null,
+        ad_hoc_raid_id: null,
+        occurrence_start_utc: null,
+        signed_up_at: 0,
+        signup_status: 'absent' as const,
+        signup_role: 'ranged-dps' as AssignedRole,
+        signup_notes: null,
+        character_id: 0,
+        character_name: m.character_name,
+        class_name: m.class_name,
+        blizzard_char_id: m.blizzard_char_id,
+        user_id: m.user_id,
+        nickname: m.nickname,
+        battle_tag: null,
+        isSigned: false,
+      }))
+  ];
+
+  return allMembers.sort((a, b) => {
+    if (a.isSigned !== b.isSigned) return b.isSigned ? 1 : -1;
+    if (a.signed_up_at !== b.signed_up_at) return a.signed_up_at - b.signed_up_at;
+    return a.character_name.localeCompare(b.character_name);
+  });
+};
 ---
 
 <Layout title="Signup | The Hidden Lodge" description="Raid signup calendar for guild members.">
@@ -384,6 +477,7 @@ for (const row of selectedDaySummaryRows) {
     {statusParam === 'signed' && <p class="flash flash-ok">Signup saved.</p>}
     {statusParam === 'canceled' && <p class="flash flash-ok">Signup removed.</p>}
     {statusParam === 'signup-role-updated' && <p class="flash flash-ok">Signup role updated.</p>}
+    {statusParam === 'note-updated' && <p class="flash flash-ok">Note updated.</p>}
     {statusParam === 'error' && <p class="flash flash-error">Could not save signup. Please try again.</p>}
 
     {selectedDayCell && (
@@ -394,42 +488,26 @@ for (const row of selectedDaySummaryRows) {
         ) : (
           <div class="summary-raid-list">
             {selectedDayRaids.map((raid) => {
-              const rows = daySummaryByRaidKey.get(raid.key) ?? [];
-              const sortedRows = [...rows].sort((a, b) => {
-                if (a.signed_up_at !== b.signed_up_at) {
-                  return a.signed_up_at - b.signed_up_at;
-                }
-                return a.character_name.localeCompare(b.character_name);
-              });
-              const signedUpCharIds = new Set(
-                sortedRows
-                  .map((r) => r.blizzard_char_id)
-                  .filter((id): id is number => typeof id === 'number' && id > 0)
-              );
-              const signedUpUserIds = new Set(
-                sortedRows.map((r) => r.user_id).filter((id): id is number => typeof id === 'number' && id > 0)
-              );
-              const absentRows = allRosterMembers.filter(
-                (m) =>
-                  !signedUpCharIds.has(m.blizzard_char_id) &&
-                  !(m.user_id !== null && signedUpUserIds.has(m.user_id))
-              );
-              const absentClassGroups = groupAbsentRows(absentRows);
+              const allMembers = getRaidMembers(raid.key);
+              const signedMembers = allMembers.filter((m) => m.isSigned);
               const summary = computeTeamSummary(
-                sortedRows.map((row) => ({ className: row.class_name, assignedRole: row.signup_role }))
+                signedMembers.map((row) => ({ className: row.class_name, assignedRole: row.signup_role }))
               );
-              const comingCount = sortedRows.filter((r) => r.signup_status === 'coming').length;
-              const tentativeCount = sortedRows.length - comingCount;
+              const comingCount = signedMembers.filter((r) => r.signup_status === 'coming').length;
+              const tentativeCount = signedMembers.filter((r) => r.signup_status === 'tentative').length;
+              const lateCount = signedMembers.filter((r) => r.signup_status === 'late').length;
+              const absentCount = signedMembers.filter((r) => r.signup_status === 'absent').length;
+              const notSignedCount = allMembers.filter((m) => !m.isSigned).length;
 
               return (
                 <article class="summary-raid-card">
                   <h3>{raid.title}</h3>
                   <p class="summary-raid-time">{formatEpochInTimeZone(raid.displayStartsAtUtc, userTimeZone)}</p>
                   <p class="summary-counts">
-                    Coming: <strong>{comingCount}</strong> &middot; Tentative: <strong>{tentativeCount}</strong> &middot; Absent: <strong class="count-absent">{absentRows.length}</strong>
+                    Coming: <strong>{comingCount}</strong> &middot; Tentative: <strong>{tentativeCount}</strong> &middot; Late: <strong>{lateCount}</strong> &middot; Absent: <strong>{absentCount}</strong> &middot; Not Signed: <strong class="count-absent">{notSignedCount}</strong>
                   </p>
 
-                  {sortedRows.length === 0 ? (
+                  {signedMembers.length === 0 ? (
                     <p class="summary-empty">No member signups yet.</p>
                   ) : (
                     <>
@@ -478,53 +556,135 @@ for (const row of selectedDaySummaryRows) {
                         </article>
                       </div>
 
-                      <ul class="summary-members">
-                        {sortedRows.map((row) => (
-                          <li>
-                            <div class="member-main">
-                              <span class="member-name">{row.character_name}</span>
-                              <span class="member-meta">
-                                {row.class_name} &middot; {roleLabel(row.signup_role)} &middot; {row.signup_status === 'coming' ? 'Coming' : 'Tentative'} &middot; Signed {formatEpochInTimeZone(row.signed_up_at, userTimeZone)}
-                              </span>
-                              <span class="member-owner">{row.nickname ?? row.battle_tag}</span>
-                            </div>
-                            {isAdmin && (
-                              <form method="POST" action="/api/admin/raid-signups/update-signup-role" class="summary-override-form">
-                                <input type="hidden" name="signup_id" value={row.id} />
-                                <input type="hidden" name="return_to" value={Astro.url.pathname + Astro.url.search} />
-                                <label class="sr-only" for={`override-role-${row.id}`}>Override role for {row.character_name}</label>
-                                <select id={`override-role-${row.id}`} name="signup_role" required>
-                                  {ROLE_OPTIONS.map((opt) => (
-                                    <option value={opt.value} selected={opt.value === row.signup_role}>{opt.label}</option>
+                      <div class="signups-table-wrapper">
+                        <div class="table-controls">
+                          <button type="button" class="btn-mini reset-filters-btn">Reset Filters</button>
+                        </div>
+                        <table class="signups-table js-signups-table">
+                          <thead>
+                            <tr>
+                              <th><button type="button" class="sort-btn" data-sort-col="0">Character</button></th>
+                              <th><button type="button" class="sort-btn" data-sort-col="1">Owner</button></th>
+                              <th><button type="button" class="sort-btn" data-sort-col="2">Class</button></th>
+                              <th><button type="button" class="sort-btn" data-sort-col="3">Role</button></th>
+                              <th><button type="button" class="sort-btn" data-sort-col="4">Status</button></th>
+                              <th><button type="button" class="sort-btn" data-sort-col="5">Selected At</button></th>
+                              <th><button type="button" class="sort-btn" data-sort-col="6">Notes</button></th>
+                            </tr>
+                            <tr class="filter-row">
+                              <th><input type="text" class="col-filter" data-filter-col="0" placeholder="Filter" /></th>
+                              <th><input type="text" class="col-filter" data-filter-col="1" placeholder="Filter" /></th>
+                              <th>
+                                <select class="col-filter" data-filter-col="2">
+                                  <option value="">All</option>
+                                  <option value="death knight">Death Knight</option>
+                                  <option value="demon hunter">Demon Hunter</option>
+                                  <option value="druid">Druid</option>
+                                  <option value="evoker">Evoker</option>
+                                  <option value="hunter">Hunter</option>
+                                  <option value="mage">Mage</option>
+                                  <option value="monk">Monk</option>
+                                  <option value="paladin">Paladin</option>
+                                  <option value="priest">Priest</option>
+                                  <option value="rogue">Rogue</option>
+                                  <option value="shaman">Shaman</option>
+                                  <option value="warlock">Warlock</option>
+                                  <option value="warrior">Warrior</option>
+                                  <option value="unknown">Unknown</option>
+                                </select>
+                              </th>
+                              <th>
+                                <select class="col-filter" data-filter-col="3">
+                                  <option value="">All</option>
+                                  {ROLE_OPTIONS.map((role) => (
+                                    <option value={role.label.toLowerCase()}>{role.label}</option>
                                   ))}
                                 </select>
-                                <button type="submit" class="btn btn-status btn-compact">Override</button>
-                              </form>
-                            )}
-                          </li>
-                        ))}
-                      </ul>
-                    </>
-                  )}
-                  {absentRows.length > 0 && (
-                    <details class="absent-section">
-                      <summary class="absent-toggle">Absent ({absentRows.length})</summary>
-                      <div class="absent-groups">
-                        {absentClassGroups.map(([className, classMembers]) => (
-                          <section class="absent-class-group">
-                            <h5 class="absent-class-heading">{className} ({classMembers.length})</h5>
-                            <ul class="absent-members">
-                              {classMembers.map((row) => (
-                                <li class="absent-member">
-                                  <span class="member-name" style={`color: ${classColor(row.class_name)}`}>{row.character_name}</span>
-                                  {row.nickname && <span class="member-meta">{row.nickname}</span>}
-                                </li>
-                              ))}
-                            </ul>
-                          </section>
-                        ))}
+                              </th>
+                              <th>
+                                <select class="col-filter" data-filter-col="4">
+                                  <option value="">All</option>
+                                  <option value="signed up">Signed Up</option>
+                                  <option value="tentative">Tentative</option>
+                                  <option value="late">Late</option>
+                                  <option value="absent">Absent</option>
+                                  <option value="not signed up">Not Signed Up</option>
+                                </select>
+                              </th>
+                              <th><input type="text" class="col-filter" data-filter-col="5" placeholder="Filter" /></th>
+                              <th><input type="text" class="col-filter" data-filter-col="6" placeholder="Filter" /></th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {allMembers.map((row) => {
+                              const statusLabel = signupStatusLabel(row);
+                              const mainCharacterName = row.user_id ? mainCharacterNameByUserId.get(row.user_id) ?? '' : '';
+                              const ownerText = row.nickname ?? ((mainCharacterName && mainCharacterName !== row.character_name) ? mainCharacterName : '');
+                              const roleText = roleLabel(row.signup_role);
+                              const notesText = row.signup_notes ?? '';
+                              const selectedAtText = row.isSigned ? formatEpochInTimeZone(row.signed_up_at, userTimeZone) : '—';
+                              const classIconUrl = fallbackClassIconUrl(row.class_name);
+                              const unknownClass = row.class_name.trim().toLowerCase() === 'unknown';
+                              const canEditRole = row.isSigned && (canOverrideAnyRole || row.user_id === user.id);
+
+                              return (
+                                <tr class={`status-${row.isSigned ? row.signup_status : 'unsigned'}`}>
+                                  <td class="col-character" data-value={row.character_name.toLowerCase()}>
+                                    <span class="character-name" style={`color: ${classColor(row.class_name)}`}>{row.character_name}</span>
+                                  </td>
+                                  <td class="col-owner" data-value={ownerText.toLowerCase()}>{ownerText}</td>
+                                  <td class="col-class" data-value={row.class_name.toLowerCase()}>
+                                    {unknownClass ? (
+                                      <span class="class-icon-wrap" aria-hidden="true"></span>
+                                    ) : (
+                                      <span class="class-icon-wrap" title={row.class_name} aria-label={row.class_name}>
+                                        {classIconUrl ? (
+                                          <img
+                                            src={classIconUrl}
+                                            alt={row.class_name}
+                                            loading="lazy"
+                                            decoding="async"
+                                            class="class-icon-img"
+                                          />
+                                        ) : (
+                                          <span class="class-icon" style={`--class-color: ${classColor(row.class_name)}`} aria-hidden="true">
+                                            {classAbbrev(row.class_name)}
+                                          </span>
+                                        )}
+                                      </span>
+                                    )}
+                                  </td>
+                                  <td class="col-role" data-value={roleText.toLowerCase()}>
+                                    {canEditRole ? (
+                                      <form method="POST" action="/api/admin/raid-signups/update-signup-role" class="role-admin-form">
+                                        <input type="hidden" name="signup_id" value={row.id!} />
+                                        <input type="hidden" name="return_to" value={Astro.url.pathname + Astro.url.search} />
+                                        <select name="signup_role" required>
+                                          {ROLE_OPTIONS.map((opt) => (
+                                            <option value={opt.value} selected={opt.value === row.signup_role}>{opt.label}</option>
+                                          ))}
+                                        </select>
+                                        <button type="submit" class="btn-mini">Set</button>
+                                      </form>
+                                    ) : (
+                                      roleText
+                                    )}
+                                  </td>
+                                  <td class="col-status" data-value={statusLabel.toLowerCase()}>
+                                    <span class:list={[
+                                      'status-pill',
+                                      row.isSigned ? `status-${row.signup_status}` : 'status-unsigned'
+                                    ]}>{statusLabel}</span>
+                                  </td>
+                                  <td class="col-selected-at" data-value={row.isSigned ? String(row.signed_up_at) : ''}>{selectedAtText}</td>
+                                  <td class="col-notes" data-value={notesText.toLowerCase()}>{notesText}</td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
                       </div>
-                    </details>
+                    </>
                   )}
                 </article>
               );
@@ -575,7 +735,7 @@ for (const row of selectedDaySummaryRows) {
                       {signup ? (
                         <div class="signup-state">
                           <p class="signed-as">
-                            {signup.signup_status === 'tentative' ? 'Tentative' : 'Coming'} as <strong>{signup.character_name}</strong>
+                            {signup.signup_status === 'coming' ? 'Signed up' : signup.signup_status === 'tentative' ? 'Tentative' : signup.signup_status === 'late' ? 'Late' : 'Absent'} as <strong>{signup.character_name}</strong>
                           </p>
                           <form method="POST" action="/api/signup/create" class="status-toggle-form">
                             <input type="hidden" name="raid_kind" value={raid.kind} />
@@ -590,22 +750,61 @@ for (const row of selectedDaySummaryRows) {
                             <input type="hidden" name="character_id" value={signup.character_id} />
                             <input type="hidden" name="signup_role" value={signup.signup_role} />
                             <input type="hidden" name="return_to" value={Astro.url.pathname + Astro.url.search} />
-                            <button
-                              type="submit"
-                              name="attendance_status"
-                              value="coming"
-                              class:list={['btn', 'btn-status', { active: signup.signup_status === 'coming' }]}
-                            >
-                              Signup
-                            </button>
-                            <button
-                              type="submit"
-                              name="attendance_status"
-                              value="tentative"
-                              class:list={['btn', 'btn-status', { active: signup.signup_status === 'tentative' }]}
-                            >
-                              Tentative
-                            </button>
+                            {signup.signup_status !== 'coming' && (
+                              <button
+                                type="submit"
+                                name="attendance_status"
+                                value="coming"
+                                class:list={['btn', 'btn-sign']}
+                              >
+                                Signup
+                              </button>
+                            )}
+                            {signup.signup_status !== 'tentative' && (
+                              <button
+                                type="submit"
+                                name="attendance_status"
+                                value="tentative"
+                                class:list={['btn', 'btn-tentative']}
+                              >
+                                Tentative
+                              </button>
+                            )}
+                            {signup.signup_status !== 'late' && (
+                              <button
+                                type="submit"
+                                name="attendance_status"
+                                value="late"
+                                class:list={['btn', 'btn-late']}
+                                onclick="return validateLateSignup(this.form)"
+                                title="If you're marked as late, please indicate when you expect to arrive."
+                              >
+                                Late
+                              </button>
+                            )}
+                            {signup.signup_status !== 'absent' && (
+                              <button
+                                type="submit"
+                                name="attendance_status"
+                                value="absent"
+                                class:list={['btn', 'btn-absent']}
+                              >
+                                Absent
+                              </button>
+                            )}
+                          </form>
+                          <form method="POST" action="/api/signup/update-note" class="signup-notes-form">
+                            <input type="hidden" name="signup_id" value={signup.id} />
+                            <input type="hidden" name="return_to" value={Astro.url.pathname + Astro.url.search} />
+                            <label class="signup-notes-small">
+                              <span class="sr-only">Notes</span>
+                              <textarea 
+                                name="signup_notes" 
+                                class="signup-notes-inline" 
+                                rows="1"
+                              >{signup.signup_notes ?? ''}</textarea>
+                            </label>
+                            <button type="submit" class="btn btn-compact">Update Note</button>
                           </form>
                           <form method="POST" action="/api/signup/cancel" class="cancel-form">
                             <input type="hidden" name="raid_kind" value={raid.kind} />
@@ -655,7 +854,13 @@ for (const row of selectedDaySummaryRows) {
                           <div class="status-toggle-form">
                             <button type="submit" name="attendance_status" value="coming" class="btn btn-sign">Signup</button>
                             <button type="submit" name="attendance_status" value="tentative" class="btn btn-tentative">Tentative</button>
+                            <button type="submit" name="attendance_status" value="late" class="btn btn-late" onclick="return validateLateSignup(this.form)" title="If you're marked as late, please indicate when you expect to arrive.">Late</button>
+                            <button type="submit" name="attendance_status" value="absent" class="btn btn-absent">Absent</button>
                           </div>
+                          <label>
+                            <span class="signup-notes-label">Notes</span>
+                            <textarea name="signup_notes" class="signup-notes-field" rows="2"></textarea>
+                          </label>
                         </form>
                       )}
                     </article>
@@ -670,12 +875,128 @@ for (const row of selectedDaySummaryRows) {
   </div>
 </Layout>
 
+<script>
+  function validateLateSignup(form: HTMLFormElement): boolean {
+    const notesField = form.querySelector('textarea[name="signup_notes"]') as HTMLTextAreaElement | null;
+    if (!notesField || !notesField.value.trim()) {
+      alert('Please add a note indicating when you will arrive.');
+      if (notesField) notesField.focus();
+      return false;
+    }
+    return true;
+  }
+
+  function setupSignupsTable(table: HTMLTableElement): void {
+    const tbody = table.tBodies[0];
+    if (!tbody) return;
+    const resetButton = table.parentElement?.querySelector('.reset-filters-btn') as HTMLButtonElement | null;
+    const initialRows = Array.from(tbody.rows);
+
+    const getCellValue = (row: HTMLTableRowElement, col: number): string => {
+      const cell = row.cells[col];
+      if (!cell) return '';
+      const dataValue = (cell as HTMLTableCellElement).dataset.value;
+      return (dataValue ?? cell.textContent ?? '').trim().toLowerCase();
+    };
+
+    const applyFilters = (): void => {
+      const rows = Array.from(tbody.rows);
+      const filters = Array.from(table.querySelectorAll('.col-filter')) as Array<HTMLInputElement | HTMLSelectElement>;
+
+      for (const row of rows) {
+        let visible = true;
+        for (const filter of filters) {
+          const colAttr = filter.dataset.filterCol;
+          if (!colAttr) continue;
+          const col = Number(colAttr);
+          const filterValue = filter.value.trim().toLowerCase();
+          if (!filterValue) continue;
+          const cellValue = getCellValue(row, col);
+          const isSelectFilter = filter instanceof HTMLSelectElement;
+          const matches = isSelectFilter ? cellValue === filterValue : cellValue.includes(filterValue);
+          if (!matches) {
+            visible = false;
+            break;
+          }
+        }
+        row.style.display = visible ? '' : 'none';
+      }
+    };
+
+    const clearSortIndicators = (): void => {
+      const sortButtons = Array.from(table.querySelectorAll('.sort-btn')) as HTMLButtonElement[];
+      sortButtons.forEach((btn) => {
+        btn.removeAttribute('aria-sort');
+      });
+    };
+
+    const sortByColumn = (col: number): void => {
+      const currentCol = table.dataset.sortCol ? Number(table.dataset.sortCol) : -1;
+      const nextDir = currentCol === col && table.dataset.sortDir === 'asc' ? 'desc' : 'asc';
+      table.dataset.sortCol = String(col);
+      table.dataset.sortDir = nextDir;
+
+      const rows = Array.from(tbody.rows);
+      rows.sort((a, b) => {
+        const aVal = getCellValue(a, col);
+        const bVal = getCellValue(b, col);
+        const cmp = aVal.localeCompare(bVal, undefined, { numeric: true, sensitivity: 'base' });
+        return nextDir === 'asc' ? cmp : -cmp;
+      });
+
+      rows.forEach((row) => tbody.appendChild(row));
+      clearSortIndicators();
+      const activeSort = table.querySelector(`.sort-btn[data-sort-col="${col}"]`) as HTMLButtonElement | null;
+      if (activeSort) {
+        activeSort.setAttribute('aria-sort', nextDir);
+      }
+      applyFilters();
+    };
+
+    const sortButtons = Array.from(table.querySelectorAll('.sort-btn')) as HTMLButtonElement[];
+    sortButtons.forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const colAttr = btn.dataset.sortCol;
+        if (!colAttr) return;
+        sortByColumn(Number(colAttr));
+      });
+    });
+
+    const filters = Array.from(table.querySelectorAll('.col-filter')) as Array<HTMLInputElement | HTMLSelectElement>;
+    filters.forEach((filter) => {
+      filter.addEventListener('input', applyFilters);
+      filter.addEventListener('change', applyFilters);
+    });
+
+    if (resetButton) {
+      resetButton.addEventListener('click', () => {
+        filters.forEach((filter) => {
+          filter.value = '';
+        });
+        initialRows.forEach((row) => tbody.appendChild(row));
+        delete table.dataset.sortCol;
+        delete table.dataset.sortDir;
+        clearSortIndicators();
+        applyFilters();
+      });
+    }
+  }
+
+  // Make functions available globally
+  (window as any).validateLateSignup = validateLateSignup;
+
+  const sortableTables = document.querySelectorAll('.js-signups-table');
+  sortableTables.forEach((table) => setupSignupsTable(table as HTMLTableElement));
+</script>
+
 <style>
   .signup-page {
     padding-block: 1.5rem 2rem;
     display: flex;
     flex-direction: column;
     gap: 1rem;
+    max-width: 100%;
+    overflow-x: clip;
   }
 
   .signup-header {
@@ -698,8 +1019,8 @@ for (const row of selectedDaySummaryRows) {
   }
 
   .signup-intro {
-    white-space: nowrap;
-    max-width: none;
+    white-space: normal;
+    max-width: 72ch;
   }
 
   .summary-hint {
@@ -848,6 +1169,8 @@ for (const row of selectedDaySummaryRows) {
     flex-direction: column;
     gap: 0.35rem;
     background: rgba(10, 19, 29, 0.8);
+    min-width: 0;
+    overflow: hidden;
   }
 
   .raid-primary {
@@ -924,6 +1247,9 @@ for (const row of selectedDaySummaryRows) {
     border-radius: 0.55rem;
     background: var(--bg-panel);
     padding: 0.8rem;
+    min-width: 0;
+    max-width: 100%;
+    overflow-x: clip;
   }
 
   .day-summary h2 {
@@ -935,6 +1261,7 @@ for (const row of selectedDaySummaryRows) {
   .summary-raid-list {
     display: grid;
     gap: 0.65rem;
+    min-width: 0;
   }
 
   .summary-raid-card {
@@ -942,6 +1269,8 @@ for (const row of selectedDaySummaryRows) {
     border-radius: 0.45rem;
     padding: 0.65rem;
     background: rgba(7, 15, 24, 0.85);
+    min-width: 0;
+    max-width: 100%;
   }
 
   .summary-raid-card h3 {
@@ -1220,13 +1549,35 @@ for (const row of selectedDaySummaryRows) {
   }
 
   .btn-sign {
-    border-color: rgba(214, 176, 106, 0.6);
-    background: rgba(214, 176, 106, 0.15);
-    color: var(--gold-bright);
+    border-color: rgba(102, 194, 102, 0.6);
+    background: rgba(102, 194, 102, 0.14);
+    color: #9fd0aa;
   }
 
   .btn-sign:hover {
-    background: rgba(214, 176, 106, 0.25);
+    background: rgba(102, 194, 102, 0.25);
+  }
+
+  .btn-sign.active {
+    border-color: rgba(102, 194, 102, 0.85);
+    background: rgba(102, 194, 102, 0.28);
+    color: #b8e6b8;
+  }
+
+  .btn-tentative {
+    border-color: rgba(112, 171, 220, 0.6);
+    background: rgba(112, 171, 220, 0.14);
+    color: #a9d4f5;
+  }
+
+  .btn-tentative:hover {
+    background: rgba(112, 171, 220, 0.25);
+  }
+
+  .btn-tentative.active {
+    border-color: rgba(112, 171, 220, 0.85);
+    background: rgba(112, 171, 220, 0.28);
+    color: #b8d9ff;
   }
 
   .btn-cancel {
@@ -1235,10 +1586,8 @@ for (const row of selectedDaySummaryRows) {
     color: #f5a5a5;
   }
 
-  .btn-tentative {
-    border-color: rgba(112, 171, 220, 0.6);
-    background: rgba(112, 171, 220, 0.14);
-    color: #a9d4f5;
+  .btn-cancel:hover {
+    background: rgba(220, 85, 85, 0.25);
   }
 
   .btn-status {
@@ -1251,10 +1600,6 @@ for (const row of selectedDaySummaryRows) {
     border-color: rgba(214, 176, 106, 0.7);
     background: rgba(214, 176, 106, 0.2);
     color: var(--gold-bright);
-  }
-
-  .btn-cancel:hover {
-    background: rgba(220, 85, 85, 0.25);
   }
 
   .sr-only {
@@ -1297,4 +1642,416 @@ for (const row of selectedDaySummaryRows) {
       grid-template-columns: 1fr;
     }
   }
+
+  /* New button styles for expanded statuses */
+  .btn-late {
+    border-color: rgba(255, 153, 51, 0.6);
+    background: rgba(255, 153, 51, 0.14);
+    color: #ffb366;
+  }
+
+  .btn-late:hover {
+    background: rgba(255, 153, 51, 0.25);
+  }
+
+  .btn-late.active {
+    border-color: rgba(255, 153, 51, 0.85);
+    background: rgba(255, 153, 51, 0.28);
+    color: #ffc266;
+  }
+
+  .btn-absent {
+    border-color: rgba(232, 124, 124, 0.6);
+    background: rgba(232, 124, 124, 0.14);
+    color: #f47e7e;
+  }
+
+  .btn-absent:hover {
+    background: rgba(232, 124, 124, 0.25);
+  }
+
+  .btn-absent.active {
+    border-color: rgba(232, 124, 124, 0.85);
+    background: rgba(232, 124, 124, 0.28);
+    color: #ff9999;
+  }
+
+  /* Signup notes styling */
+  .signup-notes-field,
+  .signup-notes-inline {
+    background: rgba(7, 16, 26, 0.92);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 0.3rem;
+    padding: 0.45rem;
+    font-family: inherit;
+    font-size: 0.85rem;
+    line-height: 1.4;
+    resize: vertical;
+    box-sizing: border-box;
+    min-width: 0;
+    width: 100%;
+    max-width: 100%;
+  }
+
+  .signup-notes-field:focus,
+  .signup-notes-inline:focus {
+    outline: none;
+    border-color: rgba(214, 176, 106, 0.6);
+    box-shadow: 0 0 0 2px rgba(214, 176, 106, 0.15);
+  }
+
+  .signup-notes-label {
+    color: var(--muted);
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    display: block;
+    margin-bottom: 0.25rem;
+  }
+
+  .required {
+    color: #f47e7e;
+  }
+
+  .signup-notes-hint {
+    color: var(--muted);
+    font-size: 0.7rem;
+    margin-top: 0.25rem;
+    display: block;
+    line-height: 1.3;
+  }
+
+  .signup-notes-form {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+  }
+
+  .signup-notes-form .signup-notes-small {
+    margin-top: 0;
+  }
+
+  .btn-compact {
+    padding: 0.28rem 0.55rem;
+    font-size: 0.7rem;
+    width: 100%;
+    align-self: stretch;
+  }
+
+  .signup-notes-small {
+    margin-top: 0.35rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.15rem;
+    min-width: 0;
+    width: 100%;
+  }
+
+  label {
+    display: block;
+    min-width: 0;
+  }
+
+  .signup-notes-inline {
+    width: 100%;
+  }
+
+  /* Signups table styles */
+  .signups-table-wrapper {
+    overflow-x: hidden;
+    max-width: 100%;
+    margin-top: 0.85rem;
+    border: 1px solid rgba(214, 176, 106, 0.24);
+    border-radius: 0.65rem;
+    background: rgba(5, 10, 16, 0.55);
+  }
+
+  .table-controls {
+    display: flex;
+    justify-content: flex-end;
+    padding: 0.9rem 1rem;
+    border-bottom: 1px solid rgba(214, 176, 106, 0.18);
+    background: rgba(15, 28, 43, 0.55);
+  }
+
+  .signups-table {
+    width: 100%;
+    border-collapse: collapse;
+    table-layout: fixed;
+    font-size: 0.8rem;
+  }
+
+  .signups-table thead {
+    background: rgba(15, 28, 43, 0.88);
+    border-bottom: 1px solid var(--border);
+  }
+
+  .signups-table thead th {
+    background: rgba(15, 28, 43, 0.88);
+    position: sticky;
+    top: 0;
+    z-index: 1;
+  }
+
+  .signups-table th {
+    color: #d8e2e8;
+    text-align: left;
+    padding: 0.58rem 0.65rem;
+    font-weight: 700;
+    letter-spacing: 0.03em;
+    text-transform: uppercase;
+    font-size: 0.78rem;
+    min-width: 0;
+    border-bottom: 1px solid rgba(214, 176, 106, 0.18);
+  }
+
+  .sort-btn {
+    width: 100%;
+    border: 0;
+    background: transparent;
+    cursor: pointer;
+    color: #e4c27a;
+    font-weight: 700;
+    letter-spacing: 0.03em;
+    text-transform: uppercase;
+    font-size: 0.78rem;
+    text-align: left;
+    padding: 0;
+    display: inline-block;
+  }
+
+  .sort-btn::after {
+    content: ' \21C5';
+    font-size: 0.64rem;
+    opacity: 0.6;
+    margin-left: 0.22rem;
+  }
+
+  .sort-btn[aria-sort='asc']::after {
+    content: ' \25B2';
+    opacity: 1;
+  }
+
+  .sort-btn[aria-sort='desc']::after {
+    content: ' \25BC';
+    opacity: 1;
+  }
+
+  .sort-btn:hover,
+  .sort-btn:focus-visible {
+    color: #f1d9a9;
+    text-decoration: underline;
+    text-underline-offset: 2px;
+    outline: none;
+  }
+
+  .filter-row th {
+    padding: 0.4rem 0.55rem 0.55rem;
+    background: rgba(8, 17, 28, 0.82);
+  }
+
+  .col-filter {
+    width: 100%;
+    max-width: 100%;
+    box-sizing: border-box;
+    min-width: 0;
+    background: rgba(7, 14, 22, 0.85);
+    color: var(--text);
+    border: 1px solid rgba(214, 176, 106, 0.42);
+    border-radius: 0.45rem;
+    padding: 0 0.5rem;
+    height: 1.85rem;
+    font-size: 0.82rem;
+    text-transform: none;
+    letter-spacing: normal;
+  }
+
+  .signups-table td {
+    padding: 0.58rem 0.65rem;
+    border-bottom: 1px solid rgba(109, 109, 109, 0.2);
+    min-width: 0;
+    color: #d8e2e8;
+    font-size: 0.9rem;
+    vertical-align: top;
+  }
+
+  .signups-table tbody tr:last-child td {
+    border-bottom: none;
+  }
+
+  .signups-table tbody tr:hover {
+    background: rgba(214, 176, 106, 0.08);
+  }
+
+  .col-character {
+    font-weight: 600;
+    width: 14%;
+  }
+
+  .character-name {
+    font-weight: 700;
+  }
+
+  .col-owner {
+    color: var(--muted);
+    font-size: 0.75rem;
+    width: 14%;
+    overflow-wrap: anywhere;
+  }
+
+  .col-class {
+    width: 6%;
+    text-align: center;
+  }
+
+  .col-role {
+    width: 15%;
+  }
+
+  .col-status {
+    text-align: center;
+    padding: 0.4rem 0.3rem;
+    width: 12%;
+  }
+
+  .col-selected-at {
+    width: 16%;
+    color: var(--muted);
+    font-size: 0.74rem;
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+
+  .status-pill {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 0;
+    min-height: 1.6rem;
+    border-radius: 0.25rem;
+    border: 1px solid rgba(120, 136, 154, 0.3);
+    background: rgba(120, 136, 154, 0.1);
+    color: rgba(220, 230, 240, 0.68);
+    font-weight: 700;
+    font-size: 0.72rem;
+    padding: 0.2rem 0.42rem;
+    line-height: 1.2;
+    white-space: nowrap;
+  }
+
+  .status-pill.status-coming {
+    border-color: rgba(102, 194, 102, 0.6);
+    background: rgba(102, 194, 102, 0.14);
+    color: #9fd0aa;
+  }
+
+  .status-pill.status-tentative {
+    border-color: rgba(112, 171, 220, 0.6);
+    background: rgba(112, 171, 220, 0.14);
+    color: #a9d4f5;
+  }
+
+  .status-pill.status-late {
+    border-color: rgba(255, 153, 51, 0.6);
+    background: rgba(255, 153, 51, 0.14);
+    color: #ffb366;
+  }
+
+  .status-pill.status-absent {
+    border-color: rgba(232, 124, 124, 0.6);
+    background: rgba(232, 124, 124, 0.14);
+    color: #f47e7e;
+  }
+
+  .status-pill.status-unsigned {
+    border-color: rgba(123, 141, 160, 0.45);
+    background: rgba(123, 141, 160, 0.12);
+    color: rgba(219, 230, 239, 0.86);
+  }
+
+  .col-notes {
+    text-align: left;
+    width: 23%;
+    white-space: normal;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+  }
+
+  .role-admin-form {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 0.3rem;
+    width: 100%;
+    min-width: 0;
+  }
+
+  .role-admin-form select {
+    width: 100%;
+    min-width: 0;
+    background: rgba(7, 14, 22, 0.85);
+    color: var(--text);
+    border: 1px solid rgba(214, 176, 106, 0.42);
+    border-radius: 0.45rem;
+    padding: 0 0.45rem;
+    height: 1.85rem;
+    font-size: 0.82rem;
+  }
+
+  .class-icon {
+    display: inline-flex;
+    justify-content: center;
+    align-items: center;
+    min-width: 2rem;
+    height: 1.4rem;
+    padding: 0 0.34rem;
+    border-radius: 999px;
+    border: 1px solid color-mix(in srgb, var(--class-color, #9fb0bf) 55%, transparent);
+    background: color-mix(in srgb, var(--class-color, #9fb0bf) 15%, rgba(7, 14, 22, 0.9));
+    color: var(--class-color, #d8e2e8);
+    font-size: 0.66rem;
+    font-weight: 800;
+    letter-spacing: 0.03em;
+    text-transform: uppercase;
+    line-height: 1;
+    vertical-align: middle;
+  }
+
+  .class-icon-wrap {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 1.4rem;
+    height: 1.4rem;
+    flex: 0 0 auto;
+  }
+
+  .class-icon-img {
+    width: 1.3rem;
+    height: 1.3rem;
+    border-radius: 50%;
+    border: 1px solid rgba(214, 176, 106, 0.35);
+    background: rgba(4, 10, 16, 0.85);
+    object-fit: cover;
+    display: block;
+  }
+
+  .btn-mini {
+    background: rgba(214, 176, 106, 0.12);
+    border: 1px solid rgba(214, 176, 106, 0.35);
+    color: var(--gold-bright);
+    border-radius: 0.2rem;
+    padding: 0.2rem 0.4rem;
+    font-weight: 600;
+    font-size: 0.7rem;
+    cursor: pointer;
+    transition: all 0.15s ease;
+  }
+
+  .btn-mini:hover {
+    background: rgba(214, 176, 106, 0.22);
+    border-color: rgba(214, 176, 106, 0.6);
+  }
+
 </style>

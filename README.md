@@ -330,7 +330,7 @@ These handlers remain in the codebase as retired stubs and currently return HTTP
 
 ### Key Folders
 
-- **`migrations/`** — D1 SQL migrations ordered by creation date (0001–0038)
+- **`migrations/`** — D1 SQL migrations ordered by creation date (0001–0039)
 - **`public/`** — Static assets: images for leadership and lore pages, Cloudflare routing config
 - **`scripts/`** — Build and deployment helper scripts
 - **`src/components/`** — Reusable Astro components (cards, layouts, sections)
