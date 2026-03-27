@@ -1324,12 +1324,18 @@ export async function refreshRaidersCache(
       )
       .run();
 
-    // Record preparedness history and calculate 2-week averages
+    // Record histories independently so one schema drift does not block the other.
     await recordPreparednessHistory(db, detailed, now);
-    await calculateAndUpdatePreparednessAverages(db, detailed.blizzardCharId, now);
-
-    // Record progression history (ilvl, M+ score, crests, missing upgrades)
     await recordProgressionHistory(db, detailed, now);
+
+    try {
+      await calculateAndUpdatePreparednessAverages(db, detailed.blizzardCharId, now);
+    } catch (error) {
+      console.error('Preparedness rolling-average update failed for raider', {
+        charId: detailed.blizzardCharId,
+        error,
+      });
+    }
   }
 
   // Prune preparedness history older than 2 weeks
