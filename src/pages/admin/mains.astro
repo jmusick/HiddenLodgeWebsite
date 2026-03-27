@@ -89,12 +89,6 @@ const [usersResult, charsResult, unauthedResult, notesResult, raidTeamResult] = 
 		ORDER BY rmc.rank ASC, rmc.name ASC
 	`),
 	env.DB.prepare(`
-		SELECT DISTINCT rtm.blizzard_char_id
-		FROM raid_team_members rtm
-		JOIN raid_teams rt ON rt.id = rtm.team_id
-		WHERE rt.is_archived = 0
-	`),
-	env.DB.prepare(`
 		SELECT rn.id, rn.blizzard_char_id, rn.note_text, rn.created_at,
 		       COALESCE(au.nickname, au.battle_tag) AS author_name,
 		       c.user_id AS linked_user_id
@@ -102,6 +96,12 @@ const [usersResult, charsResult, unauthedResult, notesResult, raidTeamResult] = 
 		LEFT JOIN characters c ON c.blizzard_char_id = rn.blizzard_char_id
 		JOIN users au ON au.id = rn.author_user_id
 		ORDER BY rn.blizzard_char_id ASC, rn.created_at DESC
+	`),
+	env.DB.prepare(`
+		SELECT DISTINCT rtm.blizzard_char_id
+		FROM raid_team_members rtm
+		JOIN raid_teams rt ON rt.id = rtm.team_id
+		WHERE rt.is_archived = 0
 	`),
 ]);
 
