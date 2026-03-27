@@ -1,0 +1,133 @@
+---
+import Layout from '../layouts/Layout.astro';
+---
+
+<Layout title="Privacy Policy | The Hidden Lodge" description="Privacy policy for The Hidden Lodge guild website.">
+	<div class="privacy-page">
+		<h1>Privacy Policy</h1>
+		<p class="effective-date">Effective: March 2026</p>
+
+		<section>
+			<h2>Overview</h2>
+			<p>
+				The Hidden Lodge website is a private guild site for members of The Hidden Lodge, a World of Warcraft guild.
+				We take your privacy seriously and collect only the minimum data necessary to run the site.
+			</p>
+		</section>
+
+		<section>
+			<h2>What We Collect</h2>
+			<p>We store only data directly related to your World of Warcraft characters and guild activity, including:</p>
+			<ul>
+				<li>Your Battle.net BattleTag (used to identify your account)</li>
+				<li>Character names, realms, classes, and specs</li>
+				<li>Guild rank and membership status</li>
+				<li>Raid signup and attendance information</li>
+			</ul>
+			<p>This data is obtained through the official Battle.net OAuth login and the World of Warcraft Game Data and Profile APIs provided by Blizzard Entertainment.</p>
+		</section>
+
+		<section>
+			<h2>What We Do Not Collect</h2>
+			<p>We do not collect, store, or process any personal information, including:</p>
+			<ul>
+				<li>Real names</li>
+				<li>Email addresses</li>
+				<li>Physical addresses</li>
+				<li>Payment information</li>
+				<li>IP addresses or device identifiers</li>
+				<li>Browsing behavior or analytics</li>
+			</ul>
+		</section>
+
+		<section>
+			<h2>How We Use Your Data</h2>
+			<p>
+				Your character data is used solely to display guild rosters, manage raid signups, and provide members with
+				access to guild-specific pages on this site. We do not sell, share, or use your data for any advertising
+				or third-party purposes.
+			</p>
+		</section>
+
+		<section>
+			<h2>Data Retention</h2>
+			<p>
+				Your data is retained for as long as you are an active member of The Hidden Lodge. If you would like your
+				data removed, please contact a guild officer and we will delete your account and associated character data.
+			</p>
+		</section>
+
+		<section>
+			<h2>Third-Party Services</h2>
+			<p>This site integrates with the following third-party services to display guild and character information:</p>
+			<ul>
+				<li><strong>Blizzard Entertainment</strong> — Login is handled through Battle.net OAuth and character data is retrieved via the WoW Game Data and Profile APIs. Subject to <a href="https://www.blizzard.com/en-us/legal/a4380ee5-5c8d-4e3b-83b7-ea26d01a9918/blizzard-entertainment-privacy-policy" target="_blank" rel="noopener noreferrer">Blizzard's Privacy Policy</a>.</li>
+				<li><strong>Warcraft Logs</strong> — Raid performance and log data is retrieved from the Warcraft Logs API. Subject to <a href="https://www.warcraftlogs.com/privacy" target="_blank" rel="noopener noreferrer">Warcraft Logs' Privacy Policy</a>.</li>
+				<li><strong>Raider.IO</strong> — Mythic+ scores and character rankings are retrieved from the Raider.IO API. Subject to <a href="https://raider.io/privacy" target="_blank" rel="noopener noreferrer">Raider.IO's Privacy Policy</a>.</li>
+			</ul>
+			<p>We do not control what data these services collect independently.</p>
+		</section>
+
+		<section>
+			<h2>Questions</h2>
+			<p>
+				If you have questions about this policy or your data, please reach out to a guild officer in-game or on Discord,
+				or <a href="https://github.com/jmusick/HiddenLodgeWebsite/issues" target="_blank" rel="noopener noreferrer">open an issue on GitHub</a>.
+			</p>
+		</section>
+	</div>
+</Layout>
+
+<style>
+	.privacy-page {
+		max-width: 48rem;
+		margin-inline: auto;
+	}
+
+	h1 {
+		font-size: 2rem;
+		color: var(--gold-bright);
+		margin-bottom: 0.25rem;
+	}
+
+	.effective-date {
+		color: var(--muted);
+		font-size: 0.85rem;
+		margin-bottom: 2.5rem;
+	}
+
+	section {
+		margin-bottom: 2rem;
+	}
+
+	h2 {
+		font-size: 1.1rem;
+		color: var(--gold);
+		margin-bottom: 0.6rem;
+		border-bottom: 1px solid rgba(214, 176, 106, 0.2);
+		padding-bottom: 0.3rem;
+	}
+
+	p {
+		color: var(--muted);
+		line-height: 1.7;
+		margin: 0 0 0.6rem;
+	}
+
+	ul {
+		color: var(--muted);
+		line-height: 1.8;
+		padding-left: 1.4rem;
+		margin: 0.4rem 0 0.6rem;
+	}
+
+	a {
+		color: var(--gold);
+		text-decoration: underline;
+		text-underline-offset: 2px;
+	}
+
+	a:hover {
+		color: var(--gold-bright);
+	}
+</style>
