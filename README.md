@@ -18,6 +18,7 @@ The site combines public guild information, Blizzard-authenticated member profil
 
 ## Features
 
+
 ### User-Facing
 
 - Public home page with guild identity, raiding summary, and external guild links
@@ -28,6 +29,7 @@ The site combines public guild information, Blizzard-authenticated member profil
 - Live roster page with Blizzard data, caching, search, filters, and collection stats
 - Raiders analytics table with team-scoped metrics (iLvl, M+, crests, preparedness, upgrades, raid progress)
 - Raider detail profile with character render, equipment layout, raid progress matrix, and sim recommendations
+- **Progression history:** Item Level, Mythic+ Score, and Crests/Upgrades history panels (4-week rolling window) on each raider profile
 - Authenticated profile with Battle.net login, character sync, main selection, and timezone preferences
 - Guild-member raid signup calendar with recurring and ad-hoc raid support
 
@@ -299,6 +301,7 @@ These handlers remain in the codebase as retired stubs and currently return HTTP
 | `characters` | User-owned WoW characters and selected main tracking |
 | `roster_members_cache` | Cached Blizzard guild roster data plus collection stats |
 | `raider_metrics_cache` | Cached team-scoped raider metrics including iLvl, M+, tier, gems/enchants, crest totals, missing upgrades, and raid progress |
+| `raider_progression_history` | 4-week rolling history of equipped item level, M+ score, crest totals, and missing upgrades for each raider |
 | `primary_raid_schedules` | Recurring primary raid schedule definitions |
 | `ad_hoc_raids` | One-off officer-created raids |
 | `raid_signups` | Member signups mapped to primary occurrences and ad-hoc raids |
@@ -330,7 +333,7 @@ These handlers remain in the codebase as retired stubs and currently return HTTP
 
 ### Key Folders
 
-- **`migrations/`** — D1 SQL migrations ordered by creation date (0001–0039)
+- **`migrations/`** — D1 SQL migrations ordered by creation date (0001–0040)
 - **`public/`** — Static assets: images for leadership and lore pages, Cloudflare routing config
 - **`scripts/`** — Build and deployment helper scripts
 - **`src/components/`** — Reusable Astro components (cards, layouts, sections)

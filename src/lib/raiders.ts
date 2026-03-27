@@ -14,6 +14,7 @@ const REQUEST_CONCURRENCY = 3;
 const DETAILS_TTL_SECONDS = 12 * 60 * 60;
 const DETAIL_BATCH_SIZE = 6;
 const PREPAREDNESS_HISTORY_WINDOW_SECONDS = 14 * 24 * 60 * 60; // 14 days (2 weeks)
+const PROGRESSION_HISTORY_WINDOW_SECONDS = 28 * 24 * 60 * 60; // 28 days (4 weeks)
 
 const CREST_STAT_IDS = {
   adventurer: 62292,
@@ -998,6 +999,44 @@ async function prunePreparednessHistory(db: D1Database, cutoff: number): Promise
     .run();
 }
 
+async function recordProgressionHistory(db: D1Database, raider: RaiderRecord, now: number): Promise<void> {
+  await db
+    .prepare(
+      `INSERT INTO raider_progression_history (
+        blizzard_char_id,
+        recorded_at,
+        equipped_item_level,
+        mythic_score,
+        adventurer_crests,
+        veteran_crests,
+        champion_crests,
+        hero_crests,
+        myth_crests,
+        total_upgrades_missing
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    )
+    .bind(
+      raider.blizzardCharId,
+      now,
+      raider.equippedItemLevel,
+      raider.mythicScore,
+      raider.adventurerCrests,
+      raider.veteranCrests,
+      raider.championCrests,
+      raider.heroCrests,
+      raider.mythCrests,
+      raider.totalUpgradesMissing
+    )
+    .run();
+}
+
+async function pruneProgressionHistory(db: D1Database, cutoff: number): Promise<void> {
+  await db
+    .prepare(`DELETE FROM raider_progression_history WHERE recorded_at < ?`)
+    .bind(cutoff)
+    .run();
+}
+
 async function pruneMissingRaiders(db: D1Database, summarySyncTime: number): Promise<void> {
   await db.prepare('DELETE FROM raider_metrics_cache WHERE summary_synced_at < ?').bind(summarySyncTime).run();
 }
@@ -1288,11 +1327,18 @@ export async function refreshRaidersCache(
     // Record preparedness history and calculate 2-week averages
     await recordPreparednessHistory(db, detailed, now);
     await calculateAndUpdatePreparednessAverages(db, detailed.blizzardCharId, now);
+
+    // Record progression history (ilvl, M+ score, crests, missing upgrades)
+    await recordProgressionHistory(db, detailed, now);
   }
 
   // Prune preparedness history older than 2 weeks
-  const cutoff = now - PREPAREDNESS_HISTORY_WINDOW_SECONDS;
-  await prunePreparednessHistory(db, cutoff);
+  const prepCutoff = now - PREPAREDNESS_HISTORY_WINDOW_SECONDS;
+  await prunePreparednessHistory(db, prepCutoff);
+
+  // Prune progression history older than 8 weeks
+  const progCutoff = now - PROGRESSION_HISTORY_WINDOW_SECONDS;
+  await pruneProgressionHistory(db, progCutoff);
 
   return getCacheStatus(db);
 }
@@ -1554,6 +1600,64 @@ export async function getRaiderByCharId(charId: number, dbInput?: D1Database): P
     singleTargetUpdatedAt: null,
     droptimizerUpdatedAt: null,
   };
+}
+
+export interface ProgressionHistoryRow {
+  recordedAt: number;
+  equippedItemLevel: number | null;
+  mythicScore: number | null;
+  adventurerCrests: number | null;
+  veteranCrests: number | null;
+  championCrests: number | null;
+  heroCrests: number | null;
+  mythCrests: number | null;
+  totalUpgradesMissing: number | null;
+}
+
+export async function getProgressionHistory(charId: number, dbInput?: D1Database): Promise<ProgressionHistoryRow[]> {
+  const db = getDatabase(dbInput);
+  const cutoff = nowInSeconds() - PROGRESSION_HISTORY_WINDOW_SECONDS;
+
+  const result = await db
+    .prepare(
+      `SELECT
+         recorded_at,
+         equipped_item_level,
+         mythic_score,
+         adventurer_crests,
+         veteran_crests,
+         champion_crests,
+         hero_crests,
+         myth_crests,
+         total_upgrades_missing
+       FROM raider_progression_history
+       WHERE blizzard_char_id = ? AND recorded_at >= ?
+       ORDER BY recorded_at DESC`
+    )
+    .bind(charId, cutoff)
+    .all<{
+      recorded_at: number;
+      equipped_item_level: number | null;
+      mythic_score: number | null;
+      adventurer_crests: number | null;
+      veteran_crests: number | null;
+      champion_crests: number | null;
+      hero_crests: number | null;
+      myth_crests: number | null;
+      total_upgrades_missing: number | null;
+    }>();
+
+  return (result.results ?? []).map((row) => ({
+    recordedAt: row.recorded_at,
+    equippedItemLevel: row.equipped_item_level,
+    mythicScore: row.mythic_score,
+    adventurerCrests: row.adventurer_crests,
+    veteranCrests: row.veteran_crests,
+    championCrests: row.champion_crests,
+    heroCrests: row.hero_crests,
+    mythCrests: row.myth_crests,
+    totalUpgradesMissing: row.total_upgrades_missing,
+  }));
 }
 
 export async function loadRaidersViewData(dbInput?: D1Database): Promise<RaidersViewData> {

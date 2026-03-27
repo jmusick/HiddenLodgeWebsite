@@ -272,8 +272,6 @@ const spotlightCards = [
             <th><button class="sort-btn" type="button" data-sort-key="tierPiecesEquipped">Tier</button></th>
             <th><button class="sort-btn" type="button" data-sort-key="crestSort">Crests Earned</button></th>
             <th><button class="sort-btn" type="button" data-sort-key="totalUpgradesMissing">Missing Upgrades</button></th>
-            <th>Gems</th>
-            <th>Enchants</th>
             <th><button class="sort-btn" type="button" data-sort-key="preparednessScore" data-tooltip="Preparedness = 2-week rolling average of (Socketed Gems + Enchanted Slots) / (Total Sockets + Enchantable Slots). Falls back to current snapshot until history accumulates. Tiers: S = 100%, A >= 85%, B >= 70%, C >= 40%, D < 40%." aria-label="Preparedness. Based on a 2-week rolling average of gem and enchant coverage. Formula: (Socketed Gems + Enchanted Slots) / (Total Sockets + Enchantable Slots). Tiers: S equals 100 percent, A 85 percent or higher, B 70 percent or higher, C 40 percent or higher, D below 40 percent.">Preparedness</button></th>
           </tr>
         </thead>
@@ -297,6 +295,8 @@ const spotlightCards = [
                 data-crest-sort={String(crestSortValue(raider))}
                 data-total-upgrades-missing={String(raider.totalUpgradesMissing ?? -1)}
                 data-preparedness-score={String(preparednessSortValue(raider))}
+                data-href={`/raiders/${raider.blizzardCharId}`}
+                class="clickable-row"
               >
                 <td><a href={`/raiders/${raider.blizzardCharId}`} class="name-link"><span class="name-pill" style={`--class-color: ${color}`}>{raider.name}</span></a></td>
                 <td>
@@ -348,8 +348,6 @@ const spotlightCards = [
                   </span>
                 </td>
                 <td>{raider.totalUpgradesMissing ?? '—'}</td>
-                <td><span class="score-val" style={`color: ${scoreColor(raider.socketedGems, raider.totalSockets)}`}>{formatScore(raider.socketedGems, raider.totalSockets)}</span></td>
-                <td><span class="score-val" style={`color: ${scoreColor(raider.enchantedSlots, raider.enchantableSlots)}`}>{formatScore(raider.enchantedSlots, raider.enchantableSlots)}</span></td>
                 <td><span class="score-val" style={`color: ${preparednessTier.color}`}>{preparednessTier.label}</span></td>
               </tr>
             );
@@ -488,6 +486,15 @@ const spotlightCards = [
   });
 
   applyFiltersAndSort();
+
+  // Make entire rows clickable, but let clicks on existing links/buttons pass through
+  tableBody?.addEventListener('click', (event) => {
+    const target = event.target as HTMLElement;
+    if (target.closest('a, button')) return;
+    const row = target.closest<HTMLTableRowElement>('tr[data-href]');
+    if (!row?.dataset.href) return;
+    window.location.href = row.dataset.href;
+  });
 </script>
 
 <style>
@@ -697,6 +704,10 @@ const spotlightCards = [
 
   .raiders-table tbody tr:hover {
     background: rgba(214, 176, 106, 0.08);
+  }
+
+  .clickable-row {
+    cursor: pointer;
   }
 
   .sort-btn {
