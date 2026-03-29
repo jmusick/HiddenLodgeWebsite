@@ -930,6 +930,15 @@ async function recordPreparednessHistory(db: D1Database, raider: RaiderRecord, n
 
   await db
     .prepare(
+      `DELETE FROM raider_preparedness_history
+       WHERE blizzard_char_id = ?
+         AND date(recorded_at, 'unixepoch') = date(?, 'unixepoch')`
+    )
+    .bind(raider.blizzardCharId, now)
+    .run();
+
+  await db
+    .prepare(
       `INSERT INTO raider_preparedness_history (
         blizzard_char_id,
         recorded_at,
@@ -955,15 +964,23 @@ async function calculateAndUpdatePreparednessAverages(db: D1Database, charId: nu
 
   const averageResult = await db
     .prepare(
-      `SELECT
-        AVG(CAST(socketed_gems AS REAL)) as avg_socketed_gems,
-        AVG(CAST(total_sockets AS REAL)) as avg_total_sockets,
-        AVG(CAST(enchanted_slots AS REAL)) as avg_enchanted_slots,
-        AVG(CAST(enchantable_slots AS REAL)) as avg_enchantable_slots
-       FROM raider_preparedness_history
-       WHERE blizzard_char_id = ? AND recorded_at >= ?`
+      `WITH latest_per_day AS (
+         SELECT MAX(recorded_at) AS recorded_at
+         FROM raider_preparedness_history
+         WHERE blizzard_char_id = ?
+           AND recorded_at >= ?
+         GROUP BY date(recorded_at, 'unixepoch')
+       )
+       SELECT
+         AVG(CAST(h.socketed_gems AS REAL)) as avg_socketed_gems,
+         AVG(CAST(h.total_sockets AS REAL)) as avg_total_sockets,
+         AVG(CAST(h.enchanted_slots AS REAL)) as avg_enchanted_slots,
+         AVG(CAST(h.enchantable_slots AS REAL)) as avg_enchantable_slots
+       FROM raider_preparedness_history h
+       JOIN latest_per_day d ON d.recorded_at = h.recorded_at
+       WHERE h.blizzard_char_id = ?`
     )
-    .bind(charId, cutoff)
+    .bind(charId, cutoff, charId)
     .first<{
       avg_socketed_gems: number | null;
       avg_total_sockets: number | null;
@@ -1000,6 +1017,15 @@ async function prunePreparednessHistory(db: D1Database, cutoff: number): Promise
 }
 
 async function recordProgressionHistory(db: D1Database, raider: RaiderRecord, now: number): Promise<void> {
+  await db
+    .prepare(
+      `DELETE FROM raider_progression_history
+       WHERE blizzard_char_id = ?
+         AND date(recorded_at, 'unixepoch') = date(?, 'unixepoch')`
+    )
+    .bind(raider.blizzardCharId, now)
+    .run();
+
   await db
     .prepare(
       `INSERT INTO raider_progression_history (
@@ -1484,17 +1510,25 @@ export async function getPreparednessHistory(charId: number, dbInput?: D1Databas
 
   const result = await db
     .prepare(
-      `SELECT
-         recorded_at,
-         socketed_gems,
-         total_sockets,
-         enchanted_slots,
-         enchantable_slots
-       FROM raider_preparedness_history
-       WHERE blizzard_char_id = ? AND recorded_at >= ?
-       ORDER BY recorded_at DESC`
+      `WITH latest_per_day AS (
+         SELECT MAX(recorded_at) AS recorded_at
+         FROM raider_preparedness_history
+         WHERE blizzard_char_id = ?
+           AND recorded_at >= ?
+         GROUP BY date(recorded_at, 'unixepoch')
+       )
+       SELECT
+         h.recorded_at,
+         h.socketed_gems,
+         h.total_sockets,
+         h.enchanted_slots,
+         h.enchantable_slots
+       FROM raider_preparedness_history h
+       JOIN latest_per_day d ON d.recorded_at = h.recorded_at
+       WHERE h.blizzard_char_id = ?
+       ORDER BY h.recorded_at DESC`
     )
-    .bind(charId, cutoff)
+    .bind(charId, cutoff, charId)
     .all<{
       recorded_at: number;
       socketed_gems: number | null;
@@ -1626,21 +1660,29 @@ export async function getProgressionHistory(charId: number, dbInput?: D1Database
 
   const result = await db
     .prepare(
-      `SELECT
-         recorded_at,
-         equipped_item_level,
-         mythic_score,
-         adventurer_crests,
-         veteran_crests,
-         champion_crests,
-         hero_crests,
-         myth_crests,
-         total_upgrades_missing
-       FROM raider_progression_history
-       WHERE blizzard_char_id = ? AND recorded_at >= ?
-       ORDER BY recorded_at DESC`
+      `WITH latest_per_day AS (
+         SELECT MAX(recorded_at) AS recorded_at
+         FROM raider_progression_history
+         WHERE blizzard_char_id = ?
+           AND recorded_at >= ?
+         GROUP BY date(recorded_at, 'unixepoch')
+       )
+       SELECT
+         h.recorded_at,
+         h.equipped_item_level,
+         h.mythic_score,
+         h.adventurer_crests,
+         h.veteran_crests,
+         h.champion_crests,
+         h.hero_crests,
+         h.myth_crests,
+         h.total_upgrades_missing
+       FROM raider_progression_history h
+       JOIN latest_per_day d ON d.recorded_at = h.recorded_at
+       WHERE h.blizzard_char_id = ?
+       ORDER BY h.recorded_at DESC`
     )
-    .bind(charId, cutoff)
+    .bind(charId, cutoff, charId)
     .all<{
       recorded_at: number;
       equipped_item_level: number | null;
