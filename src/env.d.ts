@@ -9,6 +9,7 @@ interface CloudflareEnv {
 	WCL_CLIENT_SECRET?: string;
 	CRON_SECRET?: string;
 	SIM_RUNNER_KEY?: string;
+	DESKTOP_API_KEY?: string;
 	WOWSIM_APP_BASE_URL?: string;
 	WOWSIM_APP_API_KEY?: string;
 	WOWSIM_APP_TRIGGER_PATH?: string;
