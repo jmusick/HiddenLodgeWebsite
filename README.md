@@ -102,7 +102,6 @@ http://localhost:4321
 | `/admin/settings` | Yes + Admin | Raid-progress target settings and cache health controls |
 | `/admin/cache` | Yes + Admin | Backward-compatible redirect to `/admin/settings` |
 | `/admin/links` | Yes + Admin | Public links category/link management |
-| `/admin/export` | Yes + Admin | Export JSON for guild labels and addon workflows |
 | `/admin/raiding` | Yes + Admin | Edit schedule, raid expectations, addon list, and recruitment needs |
 | `/admin/applications` | Yes + Admin | Review, triage, and manage guild applications |
 

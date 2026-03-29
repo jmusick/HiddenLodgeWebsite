@@ -4,7 +4,7 @@ import type { APIContext } from 'astro';
 import { env } from 'cloudflare:workers';
 import { isAuthorizedDesktopRequest } from '../../../lib/desktop-auth';
 
-// ---- Row types (same source columns as admin/export.astro) ----
+// ---- Row types used by desktop preparedness sync ----
 
 interface CharRow {
 	name: string;
@@ -19,7 +19,7 @@ interface CharRow {
 	avg_30d_enchantable_slots: number | null;
 }
 
-// ---- Preparedness tier calculation (mirrors export.astro) ----
+// ---- Preparedness tier calculation ----
 
 function preparednessTier(char: CharRow): string {
 	const socketedGems = char.avg_30d_socketed_gems ?? char.socketed_gems;
