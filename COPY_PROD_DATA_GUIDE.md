@@ -14,7 +14,7 @@ npm run db:copy-prod
 
 The script automatically discovers and copies all tables from production except:
 - **Ephemeral data**: `sessions` (user login sessions expire and shouldn't be copied)
-- **System tables**: `sqlite_sequence`, `_cf_KV` (Cloudflare internal)
+- **System tables**: `sqlite_sequence`, `_cf_KV`, `_cf_METADATA`, `d1_migrations`
 - **Pre-seeded data** (optional skip): 
   - `link_categories` and `links` (shared URLs)
   - `roster_cache_meta` (metadata)
@@ -22,25 +22,24 @@ The script automatically discovers and copies all tables from production except:
 
 ### Tables That Will Be Copied
 
-When production has data, the script copies:
-- `users` - User accounts
-- `characters` - World of Warcraft characters
-- `roster_members_cache` - Guild roster data
-- `primary_raid_schedules` - Recurring raid schedule definitions
-- `ad_hoc_raids` - One-time raid events
-- `raid_signups` - User signups for raid events
-- `raid_teams` - Raid roster team definitions
-- `raid_team_members` - Team composition and assigned roles
-- `raider_metrics_cache` - Cached raider statistics
+When production has data, the script copies every table shared by production and local schema, including newer tables such as:
+- `applications`, `application_notes`, `application_characters`
+- `member_profiles`, `member_profile_characters`
+- `raider_notes`, `raider_preparedness_history`, `raider_progression_history`
+- `raiding_content`, `raiding_addons`, `recruitment_needs`
+- `sim_runs`, `sim_raider_summaries`, `sim_item_winners`
+- Plus the existing user, character, roster, raid, and signup tables
 
 ## How It Works
 
 1. **Connects to production** D1 database using Cloudflare's remote API
 2. **Queries each table** using `SELECT *` to extract all data
 3. **Reconnects to local** D1 database in your `.wrangler` directory
-4. **Clears existing data** in each table (preserves schema)
-5. **Inserts production data** in batches to avoid command-line length limits
-6. **Reports results** showing row counts per table
+4. **Finds the shared table set** between production and local schema
+5. **Orders tables by foreign key dependencies** so inserts happen safely
+6. **Clears existing local rows** in reverse dependency order (preserves schema)
+7. **Inserts production data** in batches to avoid command-line length limits
+8. **Reports results** showing row counts per table
 
 ## Before You Run
 
@@ -71,7 +70,7 @@ The script provides detailed feedback:
 Fetching data from PRODUCTION database
 ========================================
 
-Found 9 tables to copy: users, characters, raid_signups, ...
+Shared tables (26): users, characters, applications, ...
 
 Fetching users...
 ✓ Fetched 42 rows from users
@@ -85,8 +84,11 @@ Fetching characters...
 Inserting data into LOCAL database
 ========================================
 
+Clearing existing LOCAL data
+  - Clearing raid_signups...
+  - Clearing characters...
+
 Inserting into users...
-  - Clearing users...
   - Generated 42 insert statements
 ✓ Inserted 42 rows into users
 
@@ -110,9 +112,10 @@ This is normal during early development. The script will succeed, and you can ma
 ### Copy Only Once in a While
 
 The script is safe to run repeatedly. It:
-- Clears old data before inserting new data
-- Handles missing tables gracefully
-- Won't break if production schema differs from local
+- Clears old local rows before inserting new data
+- Leaves shared tables empty when production has zero rows for that table
+- Uses only tables that exist on both production and local schema
+- Orders inserts by foreign key dependencies
 
 ### Troubleshooting
 
@@ -128,15 +131,17 @@ The script is safe to run repeatedly. It:
 - This means your local database schema is partially initialized
 - Run: `npm run db:setup` to reset it properly
 
-### Exclude Pre-seeded Tables
+### Include Pre-seeded Tables
 
-If you want to keep your local `links`, `link_categories`, or `site_settings`, edit [scripts/copy-prod-data.mjs](scripts/copy-prod-data.mjs) and modify:
+By default, the script skips `link_categories`, `links`, `roster_cache_meta`, and `site_settings` so you can keep local seed/config data.
 
-```javascript
-const PREFER_SKIP = ['link_categories', 'links', 'roster_cache_meta', 'site_settings'];
+If you want to copy those from production too, run:
+
+```bash
+$env:COPY_PROD_INCLUDE_SEEDED = '1'
+npm run db:copy-prod
+Remove-Item Env:COPY_PROD_INCLUDE_SEEDED
 ```
-
-Remove the table names you want to copy, then rerun.
 
 ## Next Steps
 
@@ -152,4 +157,4 @@ Then navigate to your app and test with real production data locally!
 
 - **Sensitive data**: Session tokens and OAuth credentials are NOT copied (they're environment-specific)
 - **Performance**: Batch inserts are limited to 10 statements per command to avoid PowerShell command-line limits
-- **Schema differences**: If production schema differs from local migrations, the script will skip those tables
+- **Schema differences**: The script copies only the table intersection between production and local schema
