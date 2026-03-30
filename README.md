@@ -8,6 +8,16 @@ The site combines public guild information, Blizzard-authenticated member profil
 
 ## Latest Release
 
+### v1.7.0
+
+- Added weekly Great Vault history snapshots with migration `0043_vault_history.sql`.
+- Added Great Vault score views across raider pages:
+	- Live score card on the Raider detail Great Vault panel
+	- Score column in Great Vault History (replacing Tier display)
+	- New Vault Score column on `/raiders` with sorting support
+- Added an expandable Score Formula panel on Raider detail pages with transparent calculation tables and full weighting math.
+- Added Vault Score header help text on `/raiders` with profile deep-link guidance for full formula details.
+
 ### v1.6.0
 
 - Great Vault rows now use live slot-state sources for Raiders detail pages:
@@ -422,7 +432,7 @@ Migrations are stored in `migrations/` and should be applied in order.
 For existing production databases, apply only newly introduced migrations instead of replaying the full chain. Example for this release:
 
 ```sh
-wrangler d1 execute hidden-lodge-db --remote --file=migrations/0042_world_vault_weekly_snapshot.sql
+wrangler d1 execute hidden-lodge-db --remote --file=migrations/0043_vault_history.sql
 ```
 
 ## Environment Variables

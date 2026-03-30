@@ -15,6 +15,7 @@ const DETAILS_TTL_SECONDS = 12 * 60 * 60;
 const DETAIL_BATCH_SIZE = 6;
 const PREPAREDNESS_HISTORY_WINDOW_SECONDS = 14 * 24 * 60 * 60; // 14 days (2 weeks)
 const PROGRESSION_HISTORY_WINDOW_SECONDS = 28 * 24 * 60 * 60; // 28 days (4 weeks)
+const VAULT_HISTORY_WINDOW_SECONDS = 28 * 24 * 60 * 60; // 28 days (4 weeks)
 const MIDNIGHT_SEASON_1_START_TIMESTAMP = Math.floor(Date.UTC(2026, 2, 24, 15, 0, 0, 0) / 1000);
 const WEEK_SECONDS = 7 * 24 * 60 * 60;
 const RIO_WEEKLY_EXPANSION_MULTIPLIER = 4;
@@ -85,16 +86,62 @@ const SEASON_16_MYTHIC_DUNGEON_STAT_IDS = new Set([
   16088, 12613, 10195,                                      // legacy keystones
 ]);
 
-// US weekly reset: Tuesday 15:00 UTC.
+function easternUtcOffsetMinutes(atUtc: Date): number {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/New_York',
+    timeZoneName: 'shortOffset',
+    hour: '2-digit',
+  }).formatToParts(atUtc);
+
+  const offsetLabel = parts.find((part) => part.type === 'timeZoneName')?.value ?? 'GMT-5';
+  const match = offsetLabel.match(/GMT([+-])(\d{1,2})(?::?(\d{2}))?/i);
+  if (!match) return -300;
+
+  const sign = match[1] === '-' ? -1 : 1;
+  const hours = Number(match[2] ?? '0');
+  const minutes = Number(match[3] ?? '0');
+  return sign * (hours * 60 + minutes);
+}
+
+// US weekly reset bucket: Tuesday 11:00 AM America/New_York.
 function getUsWeeklyResetTimestamp(): number {
   const now = new Date();
-  const day = now.getUTCDay(); // 0=Sun, 1=Mon, 2=Tue, …
-  const daysSinceTuesday = (day - 2 + 7) % 7;
-  const resetDate = new Date(Date.UTC(
-    now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() - daysSinceTuesday, 15, 0, 0, 0
-  ));
-  if (resetDate > now) resetDate.setUTCDate(resetDate.getUTCDate() - 7);
-  return Math.floor(resetDate.getTime() / 1000);
+  const nowParts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/New_York',
+    weekday: 'short',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(now);
+
+  const weekdayShort = nowParts.find((part) => part.type === 'weekday')?.value ?? 'Tue';
+  const year = Number(nowParts.find((part) => part.type === 'year')?.value ?? '1970');
+  const month = Number(nowParts.find((part) => part.type === 'month')?.value ?? '1');
+  const day = Number(nowParts.find((part) => part.type === 'day')?.value ?? '1');
+
+  const weekdayToIndex: Record<string, number> = {
+    Sun: 0,
+    Mon: 1,
+    Tue: 2,
+    Wed: 3,
+    Thu: 4,
+    Fri: 5,
+    Sat: 6,
+  };
+  const dayIndex = weekdayToIndex[weekdayShort] ?? 2;
+  const daysSinceTuesday = (dayIndex - 2 + 7) % 7;
+
+  const localResetSeedUtc = new Date(Date.UTC(year, month - 1, day - daysSinceTuesday, 11, 0, 0, 0));
+  const offsetMinutes = easternUtcOffsetMinutes(localResetSeedUtc);
+  let resetUtc = new Date(localResetSeedUtc.getTime() - offsetMinutes * 60 * 1000);
+
+  if (resetUtc > now) {
+    const previousWeekLocalSeedUtc = new Date(Date.UTC(year, month - 1, day - daysSinceTuesday - 7, 11, 0, 0, 0));
+    const previousWeekOffsetMinutes = easternUtcOffsetMinutes(previousWeekLocalSeedUtc);
+    resetUtc = new Date(previousWeekLocalSeedUtc.getTime() - previousWeekOffsetMinutes * 60 * 1000);
+  }
+
+  return Math.floor(resetUtc.getTime() / 1000);
 }
 
 function isDuringMidnightSeason1FirstWeek(now: number): boolean {
@@ -790,6 +837,31 @@ function extractRaidProgress(encounters: BlizzardRaidEncountersResponse | null, 
   };
 }
 
+function parseRaidVaultPayload(label: string | null): { weeklyBossKills: number; options: Array<number | null> } | null {
+  if (!label) return null;
+
+  try {
+    const parsed = JSON.parse(label) as { vaultRaid?: { weeklyBossKills?: unknown; options?: unknown } };
+    if (!parsed?.vaultRaid || !Array.isArray(parsed.vaultRaid.options)) return null;
+
+    const options = parsed.vaultRaid.options
+      .slice(0, 3)
+      .map((value) => {
+        const asNumber = Number(value);
+        return Number.isFinite(asNumber) && asNumber > 0 ? Math.floor(asNumber) : null;
+      });
+
+    while (options.length < 3) options.push(null);
+
+    const weeklyBossKillsRaw = Number(parsed.vaultRaid.weeklyBossKills ?? 0);
+    const weeklyBossKills = Number.isFinite(weeklyBossKillsRaw) ? Math.max(0, Math.floor(weeklyBossKillsRaw)) : 0;
+
+    return { weeklyBossKills, options };
+  } catch {
+    return null;
+  }
+}
+
 async function enrichRaider(row: RaiderSourceRow, now: number, raidProgressTarget: string): Promise<RaiderRecord> {
   const baseRecord: RaiderRecord = {
     blizzardCharId: row.blizzard_char_id,
@@ -1185,6 +1257,89 @@ async function recordProgressionHistory(db: D1Database, raider: RaiderRecord, no
       raider.heroCrests,
       raider.mythCrests,
       raider.totalUpgradesMissing
+    )
+    .run();
+}
+
+async function recordVaultHistorySnapshot(
+  db: D1Database,
+  raider: RaiderRecord,
+  now: number,
+  worldWeeklyObjectivesOverride?: number | null
+): Promise<void> {
+  const weekStartTs = getUsWeeklyResetTimestamp();
+  const weekEndTs = weekStartTs + WEEK_SECONDS;
+
+  const raidVault = parseRaidVaultPayload(raider.raidProgressLabel);
+  const raidSlot1 = raidVault?.options[0] ?? null;
+  const raidSlot2 = raidVault?.options[1] ?? null;
+  const raidSlot3 = raidVault?.options[2] ?? null;
+  const raidSlotsFilled = [raidSlot1, raidSlot2, raidSlot3].filter((slot) => slot !== null).length;
+
+  const dungeonSlot1 = raider.mythicPlusVaultIlvl1;
+  const dungeonSlot2 = raider.mythicPlusVaultIlvl2;
+  const dungeonSlot3 = raider.mythicPlusVaultIlvl3;
+  const dungeonSlotsFilled = [dungeonSlot1, dungeonSlot2, dungeonSlot3].filter((slot) => slot !== null).length;
+
+  const worldWeeklyObjectives = worldWeeklyObjectivesOverride ?? raider.worldVaultWeeklyObjectives;
+  const worldSlotsFilled = worldWeeklyObjectives === null
+    ? 0
+    : [2, 4, 8].filter((required) => worldWeeklyObjectives >= required).length;
+
+  const totalSlotsFilled = raidSlotsFilled + dungeonSlotsFilled + worldSlotsFilled;
+
+  await db
+    .prepare(
+      `INSERT INTO raider_vault_history (
+         blizzard_char_id,
+         week_start_ts,
+         week_end_ts,
+         snapshot_ts,
+         raid_weekly_boss_kills,
+         raid_slot_1_ilvl,
+         raid_slot_2_ilvl,
+         raid_slot_3_ilvl,
+         dungeon_slot_1_ilvl,
+         dungeon_slot_2_ilvl,
+         dungeon_slot_3_ilvl,
+         world_weekly_objectives,
+         raid_slots_filled,
+         dungeon_slots_filled,
+         world_slots_filled,
+         total_slots_filled
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(blizzard_char_id, week_start_ts) DO UPDATE SET
+         snapshot_ts = excluded.snapshot_ts,
+         raid_weekly_boss_kills = excluded.raid_weekly_boss_kills,
+         raid_slot_1_ilvl = excluded.raid_slot_1_ilvl,
+         raid_slot_2_ilvl = excluded.raid_slot_2_ilvl,
+         raid_slot_3_ilvl = excluded.raid_slot_3_ilvl,
+         dungeon_slot_1_ilvl = excluded.dungeon_slot_1_ilvl,
+         dungeon_slot_2_ilvl = excluded.dungeon_slot_2_ilvl,
+         dungeon_slot_3_ilvl = excluded.dungeon_slot_3_ilvl,
+         world_weekly_objectives = excluded.world_weekly_objectives,
+         raid_slots_filled = excluded.raid_slots_filled,
+         dungeon_slots_filled = excluded.dungeon_slots_filled,
+         world_slots_filled = excluded.world_slots_filled,
+         total_slots_filled = excluded.total_slots_filled`
+    )
+    .bind(
+      raider.blizzardCharId,
+      weekStartTs,
+      weekEndTs,
+      now,
+      raidVault?.weeklyBossKills ?? null,
+      raidSlot1,
+      raidSlot2,
+      raidSlot3,
+      dungeonSlot1,
+      dungeonSlot2,
+      dungeonSlot3,
+      worldWeeklyObjectives,
+      raidSlotsFilled,
+      dungeonSlotsFilled,
+      worldSlotsFilled,
+      totalSlotsFilled
     )
     .run();
 }
@@ -1609,6 +1764,7 @@ export async function refreshRaidersCache(
     // Record histories independently so one schema drift does not block the other.
     await recordPreparednessHistory(db, detailed, now);
     await recordProgressionHistory(db, detailed, now);
+    await recordVaultHistorySnapshot(db, detailed, now, newWorldWeeklyObjectives);
 
     try {
       await calculateAndUpdatePreparednessAverages(db, detailed.blizzardCharId, now);
@@ -1911,6 +2067,89 @@ export interface ProgressionHistoryRow {
   heroCrests: number | null;
   mythCrests: number | null;
   totalUpgradesMissing: number | null;
+}
+
+export interface VaultHistoryRow {
+  weekStartTs: number;
+  weekEndTs: number;
+  snapshotTs: number;
+  raidWeeklyBossKills: number | null;
+  raidSlot1Ilvl: number | null;
+  raidSlot2Ilvl: number | null;
+  raidSlot3Ilvl: number | null;
+  dungeonSlot1Ilvl: number | null;
+  dungeonSlot2Ilvl: number | null;
+  dungeonSlot3Ilvl: number | null;
+  worldWeeklyObjectives: number | null;
+  raidSlotsFilled: number;
+  dungeonSlotsFilled: number;
+  worldSlotsFilled: number;
+  totalSlotsFilled: number;
+}
+
+export async function getVaultHistory(charId: number, dbInput?: D1Database): Promise<VaultHistoryRow[]> {
+  const db = getDatabase(dbInput);
+  const cutoffWeekStart = getUsWeeklyResetTimestamp() - VAULT_HISTORY_WINDOW_SECONDS;
+
+  const result = await db
+    .prepare(
+      `SELECT
+         week_start_ts,
+         week_end_ts,
+         snapshot_ts,
+         raid_weekly_boss_kills,
+         raid_slot_1_ilvl,
+         raid_slot_2_ilvl,
+         raid_slot_3_ilvl,
+         dungeon_slot_1_ilvl,
+         dungeon_slot_2_ilvl,
+         dungeon_slot_3_ilvl,
+         world_weekly_objectives,
+         raid_slots_filled,
+         dungeon_slots_filled,
+         world_slots_filled,
+         total_slots_filled
+       FROM raider_vault_history
+       WHERE blizzard_char_id = ?
+         AND week_start_ts >= ?
+       ORDER BY week_start_ts DESC`
+    )
+    .bind(charId, cutoffWeekStart)
+    .all<{
+      week_start_ts: number;
+      week_end_ts: number;
+      snapshot_ts: number;
+      raid_weekly_boss_kills: number | null;
+      raid_slot_1_ilvl: number | null;
+      raid_slot_2_ilvl: number | null;
+      raid_slot_3_ilvl: number | null;
+      dungeon_slot_1_ilvl: number | null;
+      dungeon_slot_2_ilvl: number | null;
+      dungeon_slot_3_ilvl: number | null;
+      world_weekly_objectives: number | null;
+      raid_slots_filled: number | null;
+      dungeon_slots_filled: number | null;
+      world_slots_filled: number | null;
+      total_slots_filled: number | null;
+    }>();
+
+  return (result.results ?? []).map((row) => ({
+    weekStartTs: row.week_start_ts,
+    weekEndTs: row.week_end_ts,
+    snapshotTs: row.snapshot_ts,
+    raidWeeklyBossKills: row.raid_weekly_boss_kills,
+    raidSlot1Ilvl: row.raid_slot_1_ilvl,
+    raidSlot2Ilvl: row.raid_slot_2_ilvl,
+    raidSlot3Ilvl: row.raid_slot_3_ilvl,
+    dungeonSlot1Ilvl: row.dungeon_slot_1_ilvl,
+    dungeonSlot2Ilvl: row.dungeon_slot_2_ilvl,
+    dungeonSlot3Ilvl: row.dungeon_slot_3_ilvl,
+    worldWeeklyObjectives: row.world_weekly_objectives,
+    raidSlotsFilled: Math.max(0, row.raid_slots_filled ?? 0),
+    dungeonSlotsFilled: Math.max(0, row.dungeon_slots_filled ?? 0),
+    worldSlotsFilled: Math.max(0, row.world_slots_filled ?? 0),
+    totalSlotsFilled: Math.max(0, row.total_slots_filled ?? 0),
+  }));
 }
 
 export async function getProgressionHistory(charId: number, dbInput?: D1Database): Promise<ProgressionHistoryRow[]> {

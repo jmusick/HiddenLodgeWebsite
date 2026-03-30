@@ -132,21 +132,61 @@ export interface MythicPlusRunCounts {
   thisWeekKeyLevels: number[];
 }
 
+function easternUtcOffsetMinutes(atUtc: Date): number {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/New_York',
+    timeZoneName: 'shortOffset',
+    hour: '2-digit',
+  }).formatToParts(atUtc);
+
+  const offsetLabel = parts.find((part) => part.type === 'timeZoneName')?.value ?? 'GMT-5';
+  const match = offsetLabel.match(/GMT([+-])(\d{1,2})(?::?(\d{2}))?/i);
+  if (!match) return -300;
+
+  const sign = match[1] === '-' ? -1 : 1;
+  const hours = Number(match[2] ?? '0');
+  const minutes = Number(match[3] ?? '0');
+  return sign * (hours * 60 + minutes);
+}
+
 function getUsWeeklyResetTimestamp(): number {
   const now = new Date();
-  const day = now.getUTCDay();
-  const daysSinceTuesday = (day - 2 + 7) % 7;
-  const resetDate = new Date(Date.UTC(
-    now.getUTCFullYear(),
-    now.getUTCMonth(),
-    now.getUTCDate() - daysSinceTuesday,
-    15,
-    0,
-    0,
-    0
-  ));
-  if (resetDate > now) resetDate.setUTCDate(resetDate.getUTCDate() - 7);
-  return Math.floor(resetDate.getTime() / 1000);
+  const nowParts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/New_York',
+    weekday: 'short',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(now);
+
+  const weekdayShort = nowParts.find((part) => part.type === 'weekday')?.value ?? 'Tue';
+  const year = Number(nowParts.find((part) => part.type === 'year')?.value ?? '1970');
+  const month = Number(nowParts.find((part) => part.type === 'month')?.value ?? '1');
+  const day = Number(nowParts.find((part) => part.type === 'day')?.value ?? '1');
+
+  const weekdayToIndex: Record<string, number> = {
+    Sun: 0,
+    Mon: 1,
+    Tue: 2,
+    Wed: 3,
+    Thu: 4,
+    Fri: 5,
+    Sat: 6,
+  };
+  const dayIndex = weekdayToIndex[weekdayShort] ?? 2;
+  const daysSinceTuesday = (dayIndex - 2 + 7) % 7;
+
+  const localResetSeedUtc = new Date(Date.UTC(year, month - 1, day - daysSinceTuesday, 11, 0, 0, 0));
+  const offsetMinutes = easternUtcOffsetMinutes(localResetSeedUtc);
+  let resetUtc = new Date(localResetSeedUtc.getTime() - offsetMinutes * 60 * 1000);
+
+  if (resetUtc > now) {
+    const previousWeekLocalSeedUtc = new Date(Date.UTC(year, month - 1, day - daysSinceTuesday - 7, 11, 0, 0, 0));
+    const previousWeekOffsetMinutes = easternUtcOffsetMinutes(previousWeekLocalSeedUtc);
+    resetUtc = new Date(previousWeekLocalSeedUtc.getTime() - previousWeekOffsetMinutes * 60 * 1000);
+  }
+
+  return Math.floor(resetUtc.getTime() / 1000);
 }
 
 function listLength(list: RaiderIoKeystoneRun[] | undefined): number | null {
