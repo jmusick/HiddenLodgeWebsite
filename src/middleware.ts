@@ -34,7 +34,10 @@ export const onRequest = defineMiddleware(async (context, next) => {
 
 	// Guard all /admin/* routes at the middleware level
 	const path = new URL(context.request.url).pathname;
-	if (path.startsWith('/admin')) {
+	const isAdminPage = path.startsWith('/admin');
+	const isAdminApi = path.startsWith('/api/admin');
+	const isAdminSurface = isAdminPage || isAdminApi;
+	if (isAdminPage) {
 		if (!user) {
 			return context.redirect('/auth/login');
 		}
@@ -53,5 +56,14 @@ export const onRequest = defineMiddleware(async (context, next) => {
 		return memberRouteResponse;
 	}
 
-	return next();
+	const response = await next();
+
+	if (isAdminSurface) {
+		response.headers.set('Cache-Control', 'no-store, no-cache, must-revalidate, private, max-age=0');
+		response.headers.set('Pragma', 'no-cache');
+		response.headers.set('Expires', '0');
+		response.headers.append('Vary', 'Cookie');
+	}
+
+	return response;
 });
