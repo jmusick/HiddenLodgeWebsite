@@ -8,6 +8,11 @@ The site combines public guild information, Blizzard-authenticated member profil
 
 ## Latest Release
 
+### v1.5.20
+
+- Hotfixed Raiders Mythic+ totals so displayed M+ Total now reflects current-season runs instead of the raw lifetime-style Blizzard stat.
+- Fixed week-one cache bootstrap behavior so existing raider rows converge on correct this-week totals after the Midnight Season 1 launch.
+
 ### v1.5.19
 
 - Expanded Raiders analytics with improved Mythic+ metrics (total/this week/last week) and configurable table display.

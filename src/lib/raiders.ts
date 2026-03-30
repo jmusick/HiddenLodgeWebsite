@@ -15,6 +15,8 @@ const DETAILS_TTL_SECONDS = 12 * 60 * 60;
 const DETAIL_BATCH_SIZE = 6;
 const PREPAREDNESS_HISTORY_WINDOW_SECONDS = 14 * 24 * 60 * 60; // 14 days (2 weeks)
 const PROGRESSION_HISTORY_WINDOW_SECONDS = 28 * 24 * 60 * 60; // 28 days (4 weeks)
+const MIDNIGHT_SEASON_1_START_TIMESTAMP = Math.floor(Date.UTC(2026, 2, 24, 15, 0, 0, 0) / 1000);
+const WEEK_SECONDS = 7 * 24 * 60 * 60;
 
 const CREST_STAT_IDS = {
   adventurer: 62292,
@@ -82,6 +84,10 @@ function getUsWeeklyResetTimestamp(): number {
   return Math.floor(resetDate.getTime() / 1000);
 }
 
+function isDuringMidnightSeason1FirstWeek(now: number): boolean {
+  return now >= MIDNIGHT_SEASON_1_START_TIMESTAMP && now < MIDNIGHT_SEASON_1_START_TIMESTAMP + WEEK_SECONDS;
+}
+
 // Look up Great Vault ilvl for a keystone level at the given sorted-desc slot index.
 function computeVaultIlvl(sortedLevels: number[], slotIndex: 0 | 3 | 7): number | null {
   const level = sortedLevels[slotIndex];
@@ -139,6 +145,14 @@ interface CachedRaiderRow {
   avg_30d_total_sockets: number | null;
   avg_30d_enchanted_slots: number | null;
   avg_30d_enchantable_slots: number | null;
+}
+
+function computeDisplayedMythicPlusTotal(row: Pick<CachedRaiderRow, 'mythic_plus_run_count' | 'mythic_plus_weekly_runs' | 'mythic_plus_season_runs'>): number | null {
+  if (row.mythic_plus_weekly_runs !== null || row.mythic_plus_season_runs !== null) {
+    return (row.mythic_plus_season_runs ?? 0) + (row.mythic_plus_weekly_runs ?? 0);
+  }
+
+  return row.mythic_plus_run_count;
 }
 
 interface BlizzardSummaryResponse {
@@ -913,14 +927,14 @@ async function listCachedRaiders(db: D1Database): Promise<RaiderRecord[]> {
     championCrests: row.champion_crests,
     heroCrests: row.hero_crests,
     mythCrests: row.myth_crests,
-    mythicPlusRunCount: row.mythic_plus_run_count,
+    mythicPlusRunCount: computeDisplayedMythicPlusTotal(row),
     mythicPlusWeeklyRuns: row.mythic_plus_weekly_runs,
     mythicPlusPrevWeeklyRuns: row.mythic_plus_prev_weekly_runs,
     mythicPlusSeasonRuns: row.mythic_plus_season_runs,
     mythicPlusVaultIlvl1: row.mythic_plus_vault_ilvl_1,
     mythicPlusVaultIlvl2: row.mythic_plus_vault_ilvl_2,
     mythicPlusVaultIlvl3: row.mythic_plus_vault_ilvl_3,
-    mythicPlusLifetimeTotal: null,
+    mythicPlusLifetimeTotal: row.mythic_plus_run_count,
     totalUpgradesMissing: row.total_upgrades_missing,
     raidProgressRaidName: row.raid_progress_raid_name,
     raidProgressLabel: row.raid_progress_label,
@@ -1280,9 +1294,24 @@ export async function refreshRaidersCache(
     let newSnapshot: number | null = old?.snapshot ?? null;
     let newWeeklyRuns: number | null = null;
     let newPrevWeeklyRuns: number | null = rioLastWeek;
+    const shouldBootstrapFromLifetimeTotal =
+      isDuringMidnightSeason1FirstWeek(now) &&
+      currentLifetime !== null &&
+      (old?.season ?? null) === null &&
+      (old?.weekly ?? 0) === 0 &&
+      (old?.snapshot ?? 0) === 0 &&
+      (rioLastWeek ?? 0) === 0;
 
     if (currentLifetime !== null) {
-      if (old && old.syncedAt !== null && old.syncedAt < weeklyResetTs) {
+      if (shouldBootstrapFromLifetimeTotal) {
+        // Legacy rows created before the snapshot logic shipped have a zero snapshot
+        // during the season's opening week. Treat lifetime completions as this week's
+        // total so the page converges immediately instead of waiting for a future reset.
+        newSeasonRuns = 0;
+        newSnapshot = 0;
+        newWeeklyRuns = currentLifetime;
+        newPrevWeeklyRuns = 0;
+      } else if (old && old.syncedAt !== null && old.syncedAt < weeklyResetTs) {
         // New week detected: commit previous week's count into season and reset baseline.
         newSeasonRuns = (old.season ?? 0) + (old.weekly ?? 0);
         newPrevWeeklyRuns = old.weekly ?? rioLastWeek;
@@ -1652,14 +1681,14 @@ export async function getRaiderByCharId(charId: number, dbInput?: D1Database): P
     championCrests: row.champion_crests,
     heroCrests: row.hero_crests,
     mythCrests: row.myth_crests,
-    mythicPlusRunCount: row.mythic_plus_run_count,
+    mythicPlusRunCount: computeDisplayedMythicPlusTotal(row),
     mythicPlusWeeklyRuns: row.mythic_plus_weekly_runs,
     mythicPlusPrevWeeklyRuns: row.mythic_plus_prev_weekly_runs,
     mythicPlusSeasonRuns: row.mythic_plus_season_runs,
     mythicPlusVaultIlvl1: row.mythic_plus_vault_ilvl_1,
     mythicPlusVaultIlvl2: row.mythic_plus_vault_ilvl_2,
     mythicPlusVaultIlvl3: row.mythic_plus_vault_ilvl_3,
-    mythicPlusLifetimeTotal: null,
+    mythicPlusLifetimeTotal: row.mythic_plus_run_count,
     totalUpgradesMissing: row.total_upgrades_missing,
     raidProgressRaidName: row.raid_progress_raid_name,
     raidProgressLabel: row.raid_progress_label,
