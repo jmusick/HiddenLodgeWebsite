@@ -211,7 +211,7 @@ const flash = statusParam ? (statusMessages[statusParam] ?? null) : null;
 						const searchTerms = [
 							guildUser.nickname,
 							guildUser.battle_tag,
-							...chars.map((c) => c.name),
+							...chars.map((c) => (typeof c.name === 'string' ? c.name : '')),
 						].filter(Boolean).join(' ').toLowerCase();
 
 						return (
@@ -400,7 +400,7 @@ const flash = statusParam ? (statusMessages[statusParam] ?? null) : null;
 				<div class="profiles-grid">
 					{unauthed.map((char) => {
 						const notes = notesByChar.get(char.blizzard_char_id) ?? [];
-						const unauthedSearch = char.name.toLowerCase();
+						const unauthedSearch = (typeof char.name === 'string' ? char.name : '').toLowerCase();
 						return (
 							<div class="profile-card unauthed-card" data-search={unauthedSearch}>
 								<div class="card-header">

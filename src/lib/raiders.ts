@@ -603,8 +603,14 @@ async function getBlizzardAppAccessToken(): Promise<string | null> {
   return getSharedBlizzardAppAccessToken(env.BLIZZARD_CLIENT_ID, env.BLIZZARD_CLIENT_SECRET);
 }
 
-function normalizeTeamNames(value: string | null): string[] {
-  if (!value) return [];
+function toNonEmptyString(value: unknown, fallback = ''): string {
+  if (typeof value !== 'string') return fallback;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : fallback;
+}
+
+function normalizeTeamNames(value: unknown): string[] {
+  if (typeof value !== 'string' || value.trim().length === 0) return [];
   return [...new Set(value.split(',').map((name) => name.trim()).filter(Boolean))].sort((a, b) =>
     a.localeCompare(b)
   );
@@ -1115,10 +1121,10 @@ async function listCachedRaiders(db: D1Database): Promise<RaiderRecord[]> {
 
   return ((result.results ?? []) as CachedRaiderRow[]).map((row) => ({
     blizzardCharId: row.blizzard_char_id,
-    name: row.name,
-    realm: row.realm,
-    realmSlug: row.realm_slug,
-    className: row.class_name,
+    name: toNonEmptyString(row.name, `Unknown-${row.blizzard_char_id}`),
+    realm: toNonEmptyString(row.realm, 'Unknown Realm'),
+    realmSlug: toNonEmptyString(row.realm_slug, 'unknown-realm'),
+    className: toNonEmptyString(row.class_name, 'Unknown'),
     classIconUrl: null,
     teamNames: normalizeTeamNames(row.team_names),
     authState: row.auth_state,
@@ -1998,10 +2004,10 @@ export async function getRaiderByCharId(charId: number, dbInput?: D1Database): P
 
   return {
     blizzardCharId: row.blizzard_char_id,
-    name: row.name,
-    realm: row.realm,
-    realmSlug: row.realm_slug,
-    className: row.class_name,
+    name: toNonEmptyString(row.name, `Unknown-${row.blizzard_char_id}`),
+    realm: toNonEmptyString(row.realm, 'Unknown Realm'),
+    realmSlug: toNonEmptyString(row.realm_slug, 'unknown-realm'),
+    className: toNonEmptyString(row.class_name, 'Unknown'),
     classIconUrl: null,
     teamNames: normalizeTeamNames(row.team_names),
     authState: row.auth_state,
