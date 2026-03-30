@@ -293,24 +293,8 @@ export async function getCharacterMythicPlusRunCounts(realmSlug: string, name: s
   const thisWeekKeyLevels = extractKeyLevels(payload.mythic_plus_weekly_highest_level_runs);
   const estimatedWeekly = estimateWeeklyRunCounts(payload);
 
-  let statisticsThisWeekTotal: number | null = null;
-  try {
-    const characterId = await fetchCharacterIdForStatistics(realmSlug, name);
-    if (characterId !== null) {
-      statisticsThisWeekTotal = await fetchStatisticsWeekTotal(
-        realmSlug,
-        name,
-        characterId,
-        getCurrentSeasonWeek(Math.floor(Date.now() / 1000))
-      );
-    }
-  } catch {
-    statisticsThisWeekTotal = null;
-  }
-
   const mergedThisWeek = Math.max(
     estimatedWeekly.thisWeek ?? 0,
-    statisticsThisWeekTotal ?? 0,
     listLength(payload.mythic_plus_weekly_highest_level_runs) ?? 0
   );
 
