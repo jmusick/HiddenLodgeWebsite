@@ -84,6 +84,42 @@ function crestShortLabel(label: string): string {
   return label;
 }
 
+type VaultTrack = 'Mythic' | 'Heroic' | 'Champion' | 'Veteran' | null;
+
+function vaultTrackFromIlvl(itemLevel: number | null): VaultTrack {
+  if (itemLevel === null) return null;
+  if (itemLevel >= 272) return 'Mythic';
+  if (itemLevel >= 266) return 'Heroic';
+  if (itemLevel >= 263) return 'Champion';
+  if (itemLevel >= 259) return 'Veteran';
+  return null;
+}
+
+function vaultTrackColor(track: VaultTrack): string {
+  if (track === 'Mythic') return '#ff8000';
+  if (track === 'Heroic') return '#a335ee';
+  if (track === 'Champion') return '#0070dd';
+  if (track === 'Veteran') return '#1eff00';
+  return '#8ea4b2';
+}
+
+interface GreatVaultOption {
+  itemLevel: number | null;
+  unlocked: boolean;
+}
+
+interface GreatVaultRow {
+  label: string;
+  objectivePrefix: string;
+  sourceNote: string;
+  options: GreatVaultOption[];
+}
+
+interface RaidVaultPayload {
+  weeklyBossKills: number;
+  options: Array<number | null>;
+}
+
 const crestCards = [
   { label: 'Adventurer', value: raider.adventurerCrests },
   { label: 'Veteran', value: raider.veteranCrests },
@@ -141,6 +177,87 @@ function preparednessTierDisplay(filled: number | null, total: number | null): {
 
 const preparedness = preparednessTotals(raider);
 const preparednessTier = preparednessTierDisplay(preparedness.filled, preparedness.total);
+
+function parseRaidVaultPayload(label: string | null): RaidVaultPayload | null {
+  if (!label) return null;
+
+  try {
+    const parsed = JSON.parse(label) as { vaultRaid?: { weeklyBossKills?: unknown; options?: unknown } };
+    if (!parsed?.vaultRaid || !Array.isArray(parsed.vaultRaid.options)) return null;
+
+    const options = parsed.vaultRaid.options
+      .slice(0, 3)
+      .map((value) => {
+        const asNumber = Number(value);
+        return Number.isFinite(asNumber) && asNumber > 0 ? Math.floor(asNumber) : null;
+      });
+
+    while (options.length < 3) options.push(null);
+
+    const weeklyBossKillsRaw = Number(parsed.vaultRaid.weeklyBossKills ?? 0);
+    const weeklyBossKills = Number.isFinite(weeklyBossKillsRaw) ? Math.max(0, Math.floor(weeklyBossKillsRaw)) : 0;
+
+    return { weeklyBossKills, options };
+  } catch {
+    return null;
+  }
+}
+
+const raidVaultPayload = parseRaidVaultPayload(raider.raidProgressLabel);
+const worldWeeklyObjectives = Math.max(0, raider.worldVaultWeeklyObjectives ?? 0);
+
+const greatVaultRows: GreatVaultRow[] = [
+  {
+    label: 'Raid',
+    objectivePrefix: 'Defeat',
+    sourceNote: raidVaultPayload
+      ? `Live weekly raid kills: ${raidVaultPayload.weeklyBossKills}`
+      : 'No weekly raid kill payload yet',
+    options: (raidVaultPayload?.options ?? [null, null, null]).map((itemLevel) => ({
+      itemLevel,
+      unlocked: itemLevel !== null,
+    })),
+  },
+  {
+    label: 'Dungeon',
+    objectivePrefix: 'Complete',
+    sourceNote: 'Live from Raider.IO weekly highest-level keys',
+    options: [raider.mythicPlusVaultIlvl1, raider.mythicPlusVaultIlvl2, raider.mythicPlusVaultIlvl3].map((itemLevel) => ({
+      itemLevel,
+      unlocked: itemLevel !== null,
+    })),
+  },
+  {
+    label: 'World',
+    objectivePrefix: 'Complete',
+    sourceNote: `Live weekly world objectives (delves): ${worldWeeklyObjectives}`,
+    options: [2, 4, 8].map((required) => ({
+      itemLevel: null,
+      unlocked: worldWeeklyObjectives >= required,
+    })),
+  },
+];
+
+const greatVaultFilledSlots = greatVaultRows.reduce(
+  (sum, row) => sum + row.options.filter((option) => option.unlocked).length,
+  0
+);
+
+const greatVaultSlotTotal = greatVaultRows.length * 3;
+const greatVaultMissingSlots = Math.max(0, greatVaultSlotTotal - greatVaultFilledSlots);
+
+const VAULT_OPTION_TARGETS = [1, 2, 3] as const;
+
+function vaultObjectiveText(row: GreatVaultRow, index: number): string {
+  const target = VAULT_OPTION_TARGETS[index] ?? index + 1;
+  if (row.label === 'Raid') {
+    return `${row.objectivePrefix} ${target * 2} bosses`;
+  }
+  if (row.label === 'Dungeon') {
+    return `${row.objectivePrefix} ${target === 1 ? 1 : target === 2 ? 4 : 8} dungeons`;
+  }
+  return `${row.objectivePrefix} ${target === 1 ? 2 : target === 2 ? 4 : 8} world objectives`;
+}
 
 interface RaidProgressMatrixRow {
   mode: 'L' | 'N' | 'H' | 'M';
@@ -539,6 +656,69 @@ function gemAffixState(item: (typeof gear)[number] | undefined): { missing: bool
           </div>
         </div>
 
+        <section class="raid-progress-panel panel" aria-label="Great vault options">
+          <h2 class="raid-progress-title">
+            <Icon name="lucide:archive" class="raid-progress-icon" aria-hidden="true" />
+            Great Vault
+          </h2>
+
+          <div class="vault-summary-grid">
+            <div class="vault-summary-card">
+              <span class="vault-summary-label">Slots Filled</span>
+              <strong class="vault-summary-value">{greatVaultFilledSlots}</strong>
+            </div>
+            <div class="vault-summary-card">
+              <span class="vault-summary-label">Slots Missing</span>
+              <strong class="vault-summary-value">{greatVaultMissingSlots}</strong>
+            </div>
+          </div>
+
+          <div class="vault-board" aria-label="Great vault tracks">
+            {greatVaultRows.map((row) => (
+              <section class="vault-track-row">
+                <div class="vault-track-meta">
+                  <h3 class="vault-track-title">{row.label}</h3>
+                  <p class="vault-track-source">{row.sourceNote}</p>
+                </div>
+
+                <div class="vault-option-strip" role="list" aria-label={`${row.label} vault options`}>
+                  {row.options.map((option, index) => {
+                    const track = vaultTrackFromIlvl(option.itemLevel);
+                    const unlocked = option.unlocked;
+                    const trackLabel = track ?? (unlocked ? 'Unlocked' : 'Locked');
+                    const rewardLabel = option.itemLevel !== null
+                      ? `iLvl ${option.itemLevel}`
+                      : unlocked
+                        ? 'Unlocked'
+                        : '—';
+                    return (
+                      <article class:list={[
+                        'vault-option-card',
+                        { 'vault-option-card-unlocked': unlocked, 'vault-option-card-locked': !unlocked },
+                      ]} role="listitem">
+                        <div class="vault-option-state" aria-hidden="true">
+                          {unlocked
+                            ? <Icon name="lucide:check" class="vault-option-state-icon" />
+                            : <Icon name="lucide:lock" class="vault-option-state-icon" />}
+                        </div>
+                        <p class="vault-objective">{vaultObjectiveText(row, index)}</p>
+                        <div class="vault-reward-track" style={`color: ${vaultTrackColor(track)}`}>
+                          {trackLabel}
+                        </div>
+                        <div class="vault-item-level">{rewardLabel}</div>
+                      </article>
+                    );
+                  })}
+                </div>
+              </section>
+            ))}
+          </div>
+
+          <p class="vault-note">
+            Layout mirrors the in-game vault rows. Raid and Dungeon rewards use live weekly data; World unlocks are now driven by live weekly delve objective counts.
+          </p>
+        </section>
+
         <section class="raid-progress-panel panel" aria-label="Raid progress">
           <h2 class="raid-progress-title">
             <Icon name="lucide:swords" class="raid-progress-icon" aria-hidden="true" />
@@ -660,7 +840,6 @@ function gemAffixState(item: (typeof gear)[number] | undefined): { missing: bool
         </div>
 
       </div>
-
       <p class="mplus-metric-note">
         M+ totals and weekly values are best-effort estimates from Blizzard and Raider.IO APIs. Weekly values can undercount when Raider.IO profile history is capacity-limited.
         See
@@ -682,7 +861,7 @@ function gemAffixState(item: (typeof gear)[number] | undefined): { missing: bool
         </div>
       </section>
 
-      <details class="preparedness-history-panel panel">
+      <details class="preparedness-history-panel panel preparedness-history-panel-two-week">
         <summary class="prep-history-summary" aria-label="Preparedness history">
           <Icon name="lucide:history" class="raid-progress-icon" aria-hidden="true" />
           Preparedness History
@@ -1503,6 +1682,172 @@ function gemAffixState(item: (typeof gear)[number] | undefined): { missing: bool
     font-size: 0.95rem;
   }
 
+  .vault-summary-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.55rem;
+    margin-bottom: 0.72rem;
+  }
+
+  .vault-summary-card {
+    border: 1px solid rgba(109, 172, 229, 0.28);
+    border-radius: 0.55rem;
+    background: rgba(60, 119, 172, 0.14);
+    padding: 0.52rem 0.62rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.2rem;
+  }
+
+  .vault-summary-label {
+    font-size: 0.72rem;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: #9fb5c2;
+  }
+
+  .vault-summary-value {
+    color: #f1d9a9;
+    font-size: 1.05rem;
+    font-family: 'Cinzel', serif;
+    line-height: 1;
+  }
+
+  .vault-board {
+    display: flex;
+    flex-direction: column;
+    gap: 0.55rem;
+  }
+
+  .vault-track-row {
+    display: grid;
+    grid-template-columns: minmax(8rem, 0.9fr) minmax(0, 1fr);
+    gap: 0.55rem;
+    align-items: stretch;
+  }
+
+  .vault-track-meta {
+    border: 1px solid rgba(214, 176, 106, 0.26);
+    border-radius: 0.55rem;
+    padding: 0.58rem 0.62rem;
+    background: linear-gradient(155deg, rgba(214, 176, 106, 0.18), rgba(49, 30, 12, 0.24));
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    gap: 0.24rem;
+  }
+
+  .vault-track-title {
+    margin: 0;
+    color: #f4deaf;
+    font-family: 'Cinzel', serif;
+    font-size: 1.03rem;
+    font-weight: 800;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+  }
+
+  .vault-track-source {
+    margin: 0;
+    color: #c8b48f;
+    font-size: 0.72rem;
+    line-height: 1.25;
+  }
+
+  .vault-option-strip {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 0.45rem;
+  }
+
+  .vault-option-card {
+    position: relative;
+    border: 1px solid rgba(109, 172, 229, 0.24);
+    border-radius: 0.55rem;
+    padding: 0.5rem 0.58rem;
+    background: linear-gradient(160deg, rgba(95, 70, 36, 0.2), rgba(14, 22, 33, 0.82));
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    justify-content: center;
+    gap: 0.16rem;
+    min-height: 5.05rem;
+  }
+
+  .vault-option-card-unlocked {
+    border-color: rgba(214, 176, 106, 0.42);
+    box-shadow: inset 0 0 0 1px rgba(214, 176, 106, 0.16);
+  }
+
+  .vault-option-card-locked {
+    border-color: rgba(118, 132, 145, 0.3);
+    background: linear-gradient(160deg, rgba(32, 41, 52, 0.54), rgba(10, 17, 26, 0.86));
+  }
+
+  .vault-option-state {
+    position: absolute;
+    top: 0.35rem;
+    right: 0.36rem;
+    width: 1rem;
+    height: 1rem;
+    border-radius: 999px;
+    border: 1px solid rgba(255, 255, 255, 0.24);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(10, 17, 26, 0.55);
+  }
+
+  .vault-option-state-icon {
+    width: 0.66rem;
+    height: 0.66rem;
+    color: #a8c8db;
+  }
+
+  .vault-option-card-unlocked .vault-option-state {
+    border-color: rgba(62, 190, 104, 0.48);
+    background: rgba(22, 56, 28, 0.72);
+  }
+
+  .vault-option-card-unlocked .vault-option-state-icon {
+    color: #4dde77;
+  }
+
+  .vault-option-card-locked .vault-option-state-icon {
+    color: #8ea4b2;
+  }
+
+  .vault-objective {
+    margin: 0;
+    color: #d9c8a0;
+    font-size: 0.71rem;
+    line-height: 1.2;
+    max-width: 92%;
+  }
+
+  .vault-reward-track {
+    font-size: 0.76rem;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    line-height: 1;
+    margin-top: 0.12rem;
+  }
+
+  .vault-item-level {
+    font-family: 'Cinzel', serif;
+    color: #f1d9a9;
+    font-size: 0.97rem;
+    line-height: 1;
+  }
+
+  .vault-note {
+    margin: 0.75rem 0 0;
+    color: #9fb5c2;
+    font-size: 0.78rem;
+    line-height: 1.4;
+  }
+
   .crest-grid {
     display: grid;
     grid-template-columns: repeat(5, minmax(0, 1fr));
@@ -1611,6 +1956,11 @@ function gemAffixState(item: (typeof gear)[number] | undefined): { missing: bool
     max-height: 23rem;
     overflow-y: auto;
     scrollbar-gutter: stable;
+  }
+
+  .preparedness-history-panel-two-week .prep-history-table-wrap {
+    max-height: none;
+    overflow-y: visible;
   }
 
   .prep-history-table {
@@ -1772,6 +2122,16 @@ function gemAffixState(item: (typeof gear)[number] | undefined): { missing: bool
       overflow-wrap: anywhere;
     }
 
+    .vault-track-row {
+      grid-template-columns: 1fr;
+      gap: 0.4rem;
+    }
+
+    .vault-summary-grid {
+      grid-template-columns: 1fr;
+      gap: 0.42rem;
+    }
+
     .sync-text {
       flex-wrap: wrap;
       align-items: flex-start;
@@ -1809,10 +2169,18 @@ function gemAffixState(item: (typeof gear)[number] | undefined): { missing: bool
     .sync-info {
       padding-left: 0.85rem;
       padding-right: 0.85rem;
-  
+    }
+
+    .vault-option-strip {
+      grid-template-columns: 1fr;
+    }
+
+    .vault-option-card {
+      min-height: 0;
+    }
+
     #crests-earned-title {
       scroll-margin-top: 7.5rem;
-    }
     }
 
     .full-body-col {

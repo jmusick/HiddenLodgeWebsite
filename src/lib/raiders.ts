@@ -20,6 +20,7 @@ const WEEK_SECONDS = 7 * 24 * 60 * 60;
 const RIO_WEEKLY_EXPANSION_MULTIPLIER = 4;
 const RIO_WEEKLY_MIN_CAP_WITHOUT_SIGNAL = 40;
 const RIO_WEEKLY_SUSPECT_SNAPSHOT_MULTIPLIER = 2;
+const DELVES_TOTAL_STAT_ID = 40734;
 
 const CREST_STAT_IDS = {
   adventurer: 62292,
@@ -66,6 +67,15 @@ const GREAT_VAULT_DUNGEON_ILVL = new Map<number, number>([
   [10, 272], [9, 269], [8, 269], [7, 269], [6, 266],
   [5, 263],  [4, 263], [3, 259], [2, 259],
 ]);
+
+const GREAT_VAULT_RAID_ILVL_BY_MODE: Record<'M' | 'H' | 'N' | 'L', number> = {
+  M: 272,
+  H: 266,
+  N: 259,
+  L: 252,
+};
+
+const GREAT_VAULT_RAID_KILLS_NEEDED = [2, 4, 6] as const;
 
 // Blizzard achievement stat IDs for all Season 16 tracked Mythic+ dungeons.
 // The `quantity` field is the lifetime completion count per dungeon.
@@ -159,6 +169,7 @@ interface CachedRaiderRow {
   mythic_plus_vault_ilvl_1: number | null;
   mythic_plus_vault_ilvl_2: number | null;
   mythic_plus_vault_ilvl_3: number | null;
+  world_vault_weekly_objectives: number | null;
   total_upgrades_missing: number | null;
   raid_progress_raid_name: string | null;
   raid_progress_label: string | null;
@@ -233,10 +244,12 @@ interface BlizzardRaidMode {
     completed_count?: number;
     total_count?: number;
     encounters?: Array<{
-      completed_timestamp?: number;
+      last_kill_timestamp?: number;
     }>;
   };
 }
+
+type RaidModeCode = 'L' | 'N' | 'H' | 'M';
 
 interface BlizzardEquipmentResponse {
   equipped_items?: BlizzardEquippedItem[];
@@ -462,6 +475,8 @@ export interface RaiderRecord {
   mythicPlusVaultIlvl2: number | null;
   mythicPlusVaultIlvl3: number | null;
   mythicPlusLifetimeTotal: number | null;
+  worldVaultWeeklyObjectives: number | null;
+  worldVaultLifetimeObjectives: number | null;
   totalUpgradesMissing: number | null;
   raidProgressRaidName: string | null;
   raidProgressLabel: string | null;
@@ -562,6 +577,29 @@ function extractMythicPlusLifetimeTotal(stats: BlizzardAchievementStatisticsResp
   return total;
 }
 
+function extractDelvesLifetimeTotal(stats: BlizzardAchievementStatisticsResponse | null): number | null {
+  const collectStatistics = (categories: BlizzardAchievementStatisticsCategory[] | undefined): BlizzardAchievementStatistic[] => {
+    if (!categories || categories.length === 0) return [];
+
+    const collected: BlizzardAchievementStatistic[] = [];
+    for (const category of categories) {
+      collected.push(...(category.statistics ?? []));
+      if (category.sub_categories?.length) {
+        collected.push(...collectStatistics(category.sub_categories));
+      }
+    }
+
+    return collected;
+  };
+
+  const stat = collectStatistics(stats?.categories).find((entry) => Number(entry.id ?? -1) === DELVES_TOTAL_STAT_ID);
+  if (!stat) return null;
+
+  const total = Number(stat.quantity ?? NaN);
+  if (!Number.isFinite(total)) return null;
+  return Math.max(0, Math.floor(total));
+}
+
 function countTierPieces(items: BlizzardEquippedItem[]): number {
   return items.reduce((count, item) => {
     const slotType = item.slot?.type ?? '';
@@ -645,6 +683,10 @@ function extractRaidProgress(encounters: BlizzardRaidEncountersResponse | null, 
     MYTHIC: 'M',
   };
 
+  const weeklyResetTs = getUsWeeklyResetTimestamp();
+  const weeklyRaidBossBestByKey = new Map<string, RaidModeCode>();
+  const raidModeSortOrder: RaidModeCode[] = ['M', 'H', 'N', 'L'];
+
   const progress = new Map<string, Record<'L' | 'N' | 'H' | 'M', { kills: number; total: number }>>(
     selectedTier.raids.map((raid) => [
       raid.code,
@@ -677,9 +719,36 @@ function extractRaidProgress(encounters: BlizzardRaidEncountersResponse | null, 
           kills: Math.max(raidProgress[modeCode].kills, kills),
           total: Math.max(raidProgress[modeCode].total, total),
         };
+
+        // Track weekly raid kill quality per boss key so Great Vault slots can
+        // represent the actual highest difficulty kills this week.
+        for (const [encounterIndex, encounter] of (mode.progress?.encounters ?? []).entries()) {
+          const completedTsRaw = Number(encounter?.last_kill_timestamp ?? 0);
+          if (!Number.isFinite(completedTsRaw) || completedTsRaw <= 0) continue;
+
+          const completedTs = completedTsRaw > 10_000_000_000
+            ? Math.floor(completedTsRaw / 1000)
+            : Math.floor(completedTsRaw);
+          if (completedTs < weeklyResetTs) continue;
+
+          const bossKey = `${raid.code}:${encounterIndex}`;
+          const existing = weeklyRaidBossBestByKey.get(bossKey);
+          if (!existing || raidModeSortOrder.indexOf(modeCode) < raidModeSortOrder.indexOf(existing)) {
+            weeklyRaidBossBestByKey.set(bossKey, modeCode);
+          }
+        }
       }
     }
   }
+
+  const weeklyRaidBossModes = [...weeklyRaidBossBestByKey.values()].sort(
+    (a, b) => raidModeSortOrder.indexOf(a) - raidModeSortOrder.indexOf(b)
+  );
+
+  const raidVaultOptions = GREAT_VAULT_RAID_KILLS_NEEDED.map((killsNeeded) => {
+    const mode = weeklyRaidBossModes[killsNeeded - 1];
+    return mode ? GREAT_VAULT_RAID_ILVL_BY_MODE[mode] : null;
+  });
 
   const anyProgressData = [...progress.values()].some((raidProgress) =>
     Object.values(raidProgress).some((entry) => entry.total > 0 || entry.kills > 0)
@@ -698,6 +767,10 @@ function extractRaidProgress(encounters: BlizzardRaidEncountersResponse | null, 
   const label = JSON.stringify({
     headers: selectedTier.raids.map((raid) => raid.code),
     rows: modes.map((mode) => ({ mode, cells: valueByMode(mode) })),
+    vaultRaid: {
+      weeklyBossKills: weeklyRaidBossModes.length,
+      options: raidVaultOptions,
+    },
   });
 
   const sumFor = (modeCode: 'L' | 'N' | 'H' | 'M') =>
@@ -749,6 +822,8 @@ async function enrichRaider(row: RaiderSourceRow, now: number, raidProgressTarge
     mythicPlusVaultIlvl2: null,
     mythicPlusVaultIlvl3: null,
     mythicPlusLifetimeTotal: null,
+    worldVaultWeeklyObjectives: null,
+    worldVaultLifetimeObjectives: null,
     totalUpgradesMissing: null,
     raidProgressRaidName: null,
     raidProgressLabel: null,
@@ -795,6 +870,7 @@ async function enrichRaider(row: RaiderSourceRow, now: number, raidProgressTarge
   const enchantCounts = countEnchants(equippedItems);
   const crestCounts = extractCrestCounts(achievementStatistics);
   const mythicPlusLifetimeTotal = extractMythicPlusLifetimeTotal(achievementStatistics);
+  const delvesLifetimeTotal = extractDelvesLifetimeTotal(achievementStatistics);
   const raidProgress = extractRaidProgress(raidEncounters, raidProgressTarget);
   const totalUpgradesMissing = computeTotalUpgradesMissing(equippedItems);
 
@@ -823,6 +899,8 @@ async function enrichRaider(row: RaiderSourceRow, now: number, raidProgressTarge
     mythicPlusVaultIlvl2: computeVaultIlvl(mythicPlusRunCount.thisWeekKeyLevels, 3),
     mythicPlusVaultIlvl3: computeVaultIlvl(mythicPlusRunCount.thisWeekKeyLevels, 7),
     mythicPlusLifetimeTotal,
+    worldVaultWeeklyObjectives: null,
+    worldVaultLifetimeObjectives: delvesLifetimeTotal,
     totalUpgradesMissing,
     raidProgressRaidName: raidProgress.raidName,
     raidProgressLabel: raidProgress.label,
@@ -913,6 +991,7 @@ async function listCachedRaiders(db: D1Database): Promise<RaiderRecord[]> {
           mythic_plus_vault_ilvl_1,
           mythic_plus_vault_ilvl_2,
           mythic_plus_vault_ilvl_3,
+          world_vault_weekly_objectives,
           total_upgrades_missing,
           raid_progress_raid_name,
           raid_progress_label,
@@ -959,6 +1038,8 @@ async function listCachedRaiders(db: D1Database): Promise<RaiderRecord[]> {
     mythicPlusVaultIlvl2: row.mythic_plus_vault_ilvl_2,
     mythicPlusVaultIlvl3: row.mythic_plus_vault_ilvl_3,
     mythicPlusLifetimeTotal: row.mythic_plus_run_count,
+    worldVaultWeeklyObjectives: row.world_vault_weekly_objectives,
+    worldVaultLifetimeObjectives: null,
     totalUpgradesMissing: row.total_upgrades_missing,
     raidProgressRaidName: row.raid_progress_raid_name,
     raidProgressLabel: row.raid_progress_label,
@@ -1291,16 +1372,43 @@ export async function refreshRaidersCache(
 
   // Fetch old M+ data to compute season accumulation on weekly rollover.
   const weeklyResetTs = getUsWeeklyResetTimestamp();
-  type OldMythicRow = { blizzard_char_id: number; mythic_plus_weekly_runs: number | null; mythic_plus_season_runs: number | null; details_synced_at: number | null; mythic_plus_quantity_snapshot: number | null };
-  const oldMythicMap = new Map<number, { weekly: number | null; season: number | null; syncedAt: number | null; snapshot: number | null }>();
+  type OldMetricsRow = {
+    blizzard_char_id: number;
+    mythic_plus_weekly_runs: number | null;
+    mythic_plus_season_runs: number | null;
+    details_synced_at: number | null;
+    mythic_plus_quantity_snapshot: number | null;
+    world_vault_weekly_objectives: number | null;
+    world_vault_quantity_snapshot: number | null;
+  };
+  const oldMythicMap = new Map<number, {
+    weekly: number | null;
+    season: number | null;
+    syncedAt: number | null;
+    snapshot: number | null;
+    worldWeekly: number | null;
+    worldSnapshot: number | null;
+  }>();
   if (detailCandidates.length > 0) {
     const placeholders = detailCandidates.map(() => '?').join(',');
     const oldRows = await db
-      .prepare(`SELECT blizzard_char_id, mythic_plus_weekly_runs, mythic_plus_season_runs, details_synced_at, mythic_plus_quantity_snapshot FROM raider_metrics_cache WHERE blizzard_char_id IN (${placeholders})`)
+      .prepare(
+        `SELECT blizzard_char_id, mythic_plus_weekly_runs, mythic_plus_season_runs, details_synced_at, mythic_plus_quantity_snapshot,
+                world_vault_weekly_objectives, world_vault_quantity_snapshot
+         FROM raider_metrics_cache
+         WHERE blizzard_char_id IN (${placeholders})`
+      )
       .bind(...detailCandidates.map((c) => c.blizzard_char_id))
-      .all<OldMythicRow>();
+      .all<OldMetricsRow>();
     for (const r of oldRows.results ?? []) {
-      oldMythicMap.set(r.blizzard_char_id, { weekly: r.mythic_plus_weekly_runs, season: r.mythic_plus_season_runs, syncedAt: r.details_synced_at, snapshot: r.mythic_plus_quantity_snapshot });
+      oldMythicMap.set(r.blizzard_char_id, {
+        weekly: r.mythic_plus_weekly_runs,
+        season: r.mythic_plus_season_runs,
+        syncedAt: r.details_synced_at,
+        snapshot: r.mythic_plus_quantity_snapshot,
+        worldWeekly: r.world_vault_weekly_objectives,
+        worldSnapshot: r.world_vault_quantity_snapshot,
+      });
     }
   }
 
@@ -1318,6 +1426,8 @@ export async function refreshRaidersCache(
     let newSnapshot: number | null = old?.snapshot ?? null;
     let newWeeklyRuns: number | null = null;
     let newPrevWeeklyRuns: number | null = rioLastWeek;
+    let newWorldWeeklyObjectives: number | null = null;
+    let newWorldSnapshot: number | null = old?.worldSnapshot ?? null;
     const shouldBootstrapFromLifetimeTotal =
       isDuringMidnightSeason1FirstWeek(now) &&
       currentLifetime !== null &&
@@ -1386,6 +1496,21 @@ export async function refreshRaidersCache(
       newPrevWeeklyRuns = rioLastWeek;
     }
 
+    const worldLifetime = detailed.worldVaultLifetimeObjectives;
+    if (worldLifetime !== null) {
+      if (old && old.syncedAt !== null && old.syncedAt < weeklyResetTs) {
+        newWorldSnapshot = worldLifetime;
+        newWorldWeeklyObjectives = 0;
+      } else if (newWorldSnapshot !== null && newWorldSnapshot >= 0) {
+        newWorldWeeklyObjectives = Math.max(0, worldLifetime - newWorldSnapshot);
+      } else {
+        newWorldSnapshot = worldLifetime;
+        newWorldWeeklyObjectives = 0;
+      }
+    } else {
+      newWorldWeeklyObjectives = old?.worldWeekly ?? null;
+    }
+
     await db
       .prepare(
         `UPDATE raider_metrics_cache
@@ -1410,6 +1535,8 @@ export async function refreshRaidersCache(
              mythic_plus_vault_ilvl_1 = ?,
              mythic_plus_vault_ilvl_2 = ?,
              mythic_plus_vault_ilvl_3 = ?,
+             world_vault_weekly_objectives = ?,
+             world_vault_quantity_snapshot = ?,
              mythic_plus_quantity_snapshot = ?,
              total_upgrades_missing = ?,
              raid_progress_raid_name = ?,
@@ -1443,6 +1570,8 @@ export async function refreshRaidersCache(
         detailed.mythicPlusVaultIlvl1,
         detailed.mythicPlusVaultIlvl2,
         detailed.mythicPlusVaultIlvl3,
+        newWorldWeeklyObjectives,
+        newWorldSnapshot,
         newSnapshot,
         detailed.totalUpgradesMissing,
         detailed.raidProgressRaidName,
@@ -1684,6 +1813,7 @@ export async function getRaiderByCharId(charId: number, dbInput?: D1Database): P
           mythic_plus_vault_ilvl_1,
           mythic_plus_vault_ilvl_2,
           mythic_plus_vault_ilvl_3,
+          world_vault_weekly_objectives,
           total_upgrades_missing,
           raid_progress_raid_name,
            raid_progress_label,
@@ -1733,6 +1863,8 @@ export async function getRaiderByCharId(charId: number, dbInput?: D1Database): P
     mythicPlusVaultIlvl2: row.mythic_plus_vault_ilvl_2,
     mythicPlusVaultIlvl3: row.mythic_plus_vault_ilvl_3,
     mythicPlusLifetimeTotal: row.mythic_plus_run_count,
+    worldVaultWeeklyObjectives: row.world_vault_weekly_objectives,
+    worldVaultLifetimeObjectives: null,
     totalUpgradesMissing: row.total_upgrades_missing,
     raidProgressRaidName: row.raid_progress_raid_name,
     raidProgressLabel: row.raid_progress_label,

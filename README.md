@@ -8,6 +8,16 @@ The site combines public guild information, Blizzard-authenticated member profil
 
 ## Latest Release
 
+### v1.6.0
+
+- Great Vault rows now use live slot-state sources for Raiders detail pages:
+	- Raid slots from weekly per-boss raid encounter timestamps
+	- Dungeon slots from Raider.IO weekly key data
+	- World unlocks from weekly delve objective tracking
+- Fixed Raider.IO parsing to support `mythic_level` responses so Dungeon vault slot ilvls populate correctly.
+- Updated raid vault reward mapping to match in-game values (Heroic now displays 266 where applicable).
+- Added migration `0042_world_vault_weekly_snapshot.sql` for world vault weekly objective and snapshot columns.
+
 ### v1.5.24
 
 - Switched Raiders M+ weekly sourcing to Raider.IO's live character statistics API path used by the stats page.
@@ -408,6 +418,12 @@ npm run db:setup:prod
 ```
 
 Migrations are stored in `migrations/` and should be applied in order.
+
+For existing production databases, apply only newly introduced migrations instead of replaying the full chain. Example for this release:
+
+```sh
+wrangler d1 execute hidden-lodge-db --remote --file=migrations/0042_world_vault_weekly_snapshot.sql
+```
 
 ## Environment Variables
 

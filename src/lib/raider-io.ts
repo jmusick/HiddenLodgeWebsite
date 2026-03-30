@@ -11,6 +11,7 @@ const WEEK_SECONDS = 7 * 24 * 60 * 60;
 interface RaiderIoKeystoneRun {
   keystone_run_id?: number;
   keystone_level?: number;
+  mythic_level?: number;
   map_challenge_mode_id?: number;
   completed_at?: string;
   completed_at_timestamp?: number;
@@ -155,7 +156,7 @@ function listLength(list: RaiderIoKeystoneRun[] | undefined): number | null {
 function extractKeyLevels(list: RaiderIoKeystoneRun[] | undefined): number[] {
   if (!list || list.length === 0) return [];
   return list
-    .map((run) => Number(run.keystone_level ?? NaN))
+    .map((run) => Number(run.keystone_level ?? run.mythic_level ?? NaN))
     .filter((level) => Number.isInteger(level) && level > 0)
     .sort((a, b) => b - a);
 }
