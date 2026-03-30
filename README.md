@@ -8,6 +8,11 @@ The site combines public guild information, Blizzard-authenticated member profil
 
 ## Latest Release
 
+### v1.7.1
+
+- Fixed Great Vault world-content weekly objective bootstrapping so current-week delve progress is not zeroed when tracking starts mid-week.
+- Restores world-vault slot population for raiders who already completed delves before the new tracking baseline was established.
+
 ### v1.7.0
 
 - Added weekly Great Vault history snapshots with migration `0043_vault_history.sql`.

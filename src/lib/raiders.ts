@@ -1674,7 +1674,19 @@ export async function refreshRaidersCache(
 
     const worldLifetime = detailed.worldVaultLifetimeObjectives;
     if (worldLifetime !== null) {
-      if (old && old.syncedAt !== null && old.syncedAt < weeklyResetTs) {
+      const shouldBootstrapWorldFromLifetimeTotal =
+        isDuringMidnightSeason1FirstWeek(now) &&
+        worldLifetime > 0 &&
+        (old?.worldWeekly ?? 0) === 0 &&
+        ((old?.worldSnapshot ?? null) === null || (old?.worldSnapshot ?? 0) === worldLifetime);
+
+      if (shouldBootstrapWorldFromLifetimeTotal) {
+        // If world-vault tracking ships after players already did delves during the
+        // first season week, treating the current total as the baseline erases all
+        // current-week progress. Bootstrap from the current total instead.
+        newWorldSnapshot = 0;
+        newWorldWeeklyObjectives = worldLifetime;
+      } else if (old && old.syncedAt !== null && old.syncedAt < weeklyResetTs) {
         newWorldSnapshot = worldLifetime;
         newWorldWeeklyObjectives = 0;
       } else if (newWorldSnapshot !== null && newWorldSnapshot >= 0) {
