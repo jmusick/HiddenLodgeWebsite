@@ -8,6 +8,11 @@ The site combines public guild information, Blizzard-authenticated member profil
 
 ## Latest Release
 
+### v1.5.24
+
+- Switched Raiders M+ weekly sourcing to Raider.IO's live character statistics API path used by the stats page.
+- Eliminates one-by-one corrections by enabling accurate bulk refresh behavior for all members each cache cycle.
+
 ### v1.5.23
 
 - Fixed a week-one undercount path where capped Raider.IO initialization could lock in an overly high snapshot baseline.

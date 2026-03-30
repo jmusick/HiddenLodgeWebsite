@@ -2,6 +2,11 @@ import { getRaiderIoConfig } from './runtime-env';
 
 const RAIDER_IO_BASE = 'https://raider.io/api/v1';
 const DEFAULT_REGION = 'us';
+const RAIDER_IO_INTERNAL_API_BASE = 'https://raider.io/api';
+const MIDNIGHT_SEASON_SLUG = 'season-mn-1';
+const MIDNIGHT_CURRENT_TIER = '35';
+const MIDNIGHT_SEASON_1_START_TIMESTAMP = Math.floor(Date.UTC(2026, 2, 24, 15, 0, 0, 0) / 1000);
+const WEEK_SECONDS = 7 * 24 * 60 * 60;
 
 interface RaiderIoKeystoneRun {
   keystone_run_id?: number;
@@ -18,6 +23,22 @@ interface RaiderIoCharacterProfileResponse {
   mythic_plus_highest_level_runs?: RaiderIoKeystoneRun[];
   mythic_plus_weekly_highest_level_runs?: RaiderIoKeystoneRun[];
   mythic_plus_previous_weekly_highest_level_runs?: RaiderIoKeystoneRun[];
+}
+
+interface RaiderIoCharacterDetailsResponse {
+  characterDetails?: {
+    character?: {
+      id?: number;
+    };
+  };
+}
+
+interface RaiderIoStatisticsRunsRow {
+  quantity?: number;
+}
+
+interface RaiderIoStatisticsResponse {
+  data?: RaiderIoStatisticsRunsRow[];
 }
 
 function buildCharacterProfileUrl(realm: string, name: string): string {
@@ -43,6 +64,64 @@ function buildCharacterProfileUrl(realm: string, name: string): string {
   }
 
   return url.toString();
+}
+
+function buildCharacterDetailsUrl(realm: string, name: string): string {
+  const url = new URL(`${RAIDER_IO_INTERNAL_API_BASE}/characters/${DEFAULT_REGION}/${encodeURIComponent(realm)}/${encodeURIComponent(name)}`);
+  url.searchParams.set('season', MIDNIGHT_SEASON_SLUG);
+  url.searchParams.set('tier', MIDNIGHT_CURRENT_TIER);
+  return url.toString();
+}
+
+function getCurrentSeasonWeek(nowTs: number): number {
+  if (nowTs <= MIDNIGHT_SEASON_1_START_TIMESTAMP) return 1;
+  return Math.max(1, Math.floor((nowTs - MIDNIGHT_SEASON_1_START_TIMESTAMP) / WEEK_SECONDS) + 1);
+}
+
+function buildStatisticsRunsUrl(realm: string, name: string, characterId: number, seasonWeek: number): string {
+  const href = `/characters/${DEFAULT_REGION}/${encodeURIComponent(realm)}/${encodeURIComponent(name)}/stats/mythic-plus-runs?groupBy=dungeon&statSeason=${MIDNIGHT_SEASON_SLUG}`;
+  const url = new URL(`${RAIDER_IO_INTERNAL_API_BASE}/statistics/get-data`);
+  url.searchParams.set('season', MIDNIGHT_SEASON_SLUG);
+  url.searchParams.set('type', 'runs-over-time');
+  url.searchParams.set('minMythicLevel', '2');
+  url.searchParams.set('maxMythicLevel', '99');
+  url.searchParams.set('seasonWeekStart', String(seasonWeek));
+  url.searchParams.set('seasonWeekEnd', String(seasonWeek));
+  url.searchParams.set('href', href);
+  url.searchParams.set('version', '4');
+  url.searchParams.set('characterIds', String(characterId));
+  url.searchParams.set('groupBy', 'dungeon');
+  return url.toString();
+}
+
+async function fetchCharacterIdForStatistics(realm: string, name: string): Promise<number | null> {
+  const response = await fetch(buildCharacterDetailsUrl(realm, name), {
+    headers: {
+      Accept: 'application/json',
+    },
+  });
+
+  if (!response.ok) return null;
+  const payload = (await response.json()) as RaiderIoCharacterDetailsResponse;
+  const rawId = Number(payload?.characterDetails?.character?.id ?? NaN);
+  return Number.isInteger(rawId) && rawId > 0 ? rawId : null;
+}
+
+async function fetchStatisticsWeekTotal(realm: string, name: string, characterId: number, seasonWeek: number): Promise<number | null> {
+  const response = await fetch(buildStatisticsRunsUrl(realm, name, characterId, seasonWeek), {
+    headers: {
+      Accept: 'application/json',
+    },
+  });
+
+  if (!response.ok) return null;
+
+  const payload = (await response.json()) as RaiderIoStatisticsResponse;
+  const rows = payload.data ?? [];
+  if (!Array.isArray(rows) || rows.length === 0) return null;
+
+  const total = rows.reduce((sum, row) => sum + Math.max(0, Number(row?.quantity ?? 0)), 0);
+  return Number.isFinite(total) ? total : null;
 }
 
 export interface MythicPlusRunCounts {
@@ -172,9 +251,31 @@ export async function getCharacterMythicPlusRunCounts(realmSlug: string, name: s
   const payload = (await response.json()) as RaiderIoCharacterProfileResponse;
   const thisWeekKeyLevels = extractKeyLevels(payload.mythic_plus_weekly_highest_level_runs);
   const estimatedWeekly = estimateWeeklyRunCounts(payload);
+
+  let statisticsThisWeekTotal: number | null = null;
+  try {
+    const characterId = await fetchCharacterIdForStatistics(realmSlug, name);
+    if (characterId !== null) {
+      statisticsThisWeekTotal = await fetchStatisticsWeekTotal(
+        realmSlug,
+        name,
+        characterId,
+        getCurrentSeasonWeek(Math.floor(Date.now() / 1000))
+      );
+    }
+  } catch {
+    statisticsThisWeekTotal = null;
+  }
+
+  const mergedThisWeek = Math.max(
+    estimatedWeekly.thisWeek ?? 0,
+    statisticsThisWeekTotal ?? 0,
+    listLength(payload.mythic_plus_weekly_highest_level_runs) ?? 0
+  );
+
   return {
     total: collectUniqueRunIds(payload),
-    thisWeek: estimatedWeekly.thisWeek ?? listLength(payload.mythic_plus_weekly_highest_level_runs),
+    thisWeek: mergedThisWeek > 0 ? mergedThisWeek : null,
     lastWeek: estimatedWeekly.lastWeek ?? listLength(payload.mythic_plus_previous_weekly_highest_level_runs),
     thisWeekKeyLevels,
   };
