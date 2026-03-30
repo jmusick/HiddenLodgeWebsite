@@ -84,7 +84,7 @@ function crestShortLabel(label: string): string {
   return label;
 }
 
-type VaultTrack = 'Mythic' | 'Heroic' | 'Champion' | 'Veteran' | null;
+type VaultTrack = 'Mythic' | 'Heroic' | 'Champion' | 'Veteran' | 'Normal' | 'Raid Finder' | null;
 
 function vaultTrackFromIlvl(itemLevel: number | null): VaultTrack {
   if (itemLevel === null) return null;
@@ -95,9 +95,20 @@ function vaultTrackFromIlvl(itemLevel: number | null): VaultTrack {
   return null;
 }
 
+function raidVaultTrackFromIlvl(itemLevel: number | null): VaultTrack {
+  if (itemLevel === null) return null;
+  if (itemLevel >= 272) return 'Mythic';
+  if (itemLevel >= 266) return 'Heroic';
+  if (itemLevel >= 259) return 'Normal';
+  if (itemLevel >= 252) return 'Raid Finder';
+  return null;
+}
+
 function vaultTrackColor(track: VaultTrack): string {
   if (track === 'Mythic') return '#ff8000';
   if (track === 'Heroic') return '#a335ee';
+  if (track === 'Normal') return '#0070dd';
+  if (track === 'Raid Finder') return '#1eff00';
   if (track === 'Champion') return '#0070dd';
   if (track === 'Veteran') return '#1eff00';
   return '#8ea4b2';
@@ -683,7 +694,9 @@ function gemAffixState(item: (typeof gear)[number] | undefined): { missing: bool
 
                 <div class="vault-option-strip" role="list" aria-label={`${row.label} vault options`}>
                   {row.options.map((option, index) => {
-                    const track = vaultTrackFromIlvl(option.itemLevel);
+                    const track = row.label === 'Raid'
+                      ? raidVaultTrackFromIlvl(option.itemLevel)
+                      : vaultTrackFromIlvl(option.itemLevel);
                     const unlocked = option.unlocked;
                     const trackLabel = track ?? (unlocked ? 'Unlocked' : 'Locked');
                     const rewardLabel = option.itemLevel !== null
