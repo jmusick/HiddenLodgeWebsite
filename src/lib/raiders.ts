@@ -234,7 +234,9 @@ function computeDisplayedMythicPlusTotal(row: Pick<CachedRaiderRow, 'mythic_plus
     return (row.mythic_plus_season_runs ?? 0) + (row.mythic_plus_weekly_runs ?? 0);
   }
 
-  return row.mythic_plus_run_count;
+  // Do not fall back to the Blizzard lifetime total — it spans all seasons and
+  // will badly inflate totals when weekly/season have been cleared or not yet set.
+  return null;
 }
 
 interface BlizzardSummaryResponse {
