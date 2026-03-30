@@ -235,6 +235,12 @@ function computeDisplayedMythicPlusTotal(row: Pick<CachedRaiderRow, 'mythic_plus
     const weeklyRuns = row.mythic_plus_weekly_runs ?? 0;
     const prevWeeklyRuns = row.mythic_plus_prev_weekly_runs ?? 0;
 
+    // If season and weekly are identical, they represent the same bucket for
+    // display purposes and should not be added together.
+    if (row.mythic_plus_weekly_runs !== null && row.mythic_plus_season_runs !== null && seasonRuns === weeklyRuns) {
+      return weeklyRuns;
+    }
+
     // If last-week is still zero but season and weekly are both populated,
     // season can already include this week's runs in legacy rows.
     if (row.mythic_plus_weekly_runs !== null && row.mythic_plus_season_runs !== null && prevWeeklyRuns === 0) {
