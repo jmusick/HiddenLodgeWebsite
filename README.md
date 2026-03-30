@@ -8,6 +8,11 @@ The site combines public guild information, Blizzard-authenticated member profil
 
 ## Latest Release
 
+### v1.5.23
+
+- Fixed a week-one undercount path where capped Raider.IO initialization could lock in an overly high snapshot baseline.
+- Added snapshot recovery logic so affected rows re-anchor and converge closer to Raider.IO totals during Season 1 week one.
+
 ### v1.5.22
 
 - Tightened the Raider.IO-calibrated Week 1 Mythic+ weekly cap to reduce inflated totals for outlier legacy snapshot rows.

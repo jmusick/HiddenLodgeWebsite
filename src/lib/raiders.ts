@@ -19,6 +19,7 @@ const MIDNIGHT_SEASON_1_START_TIMESTAMP = Math.floor(Date.UTC(2026, 2, 24, 15, 0
 const WEEK_SECONDS = 7 * 24 * 60 * 60;
 const RIO_WEEKLY_EXPANSION_MULTIPLIER = 4;
 const RIO_WEEKLY_MIN_CAP_WITHOUT_SIGNAL = 40;
+const RIO_WEEKLY_SUSPECT_SNAPSHOT_MULTIPLIER = 2;
 
 const CREST_STAT_IDS = {
   adventurer: 62292,
@@ -1349,7 +1350,27 @@ export async function refreshRaidersCache(
       } else if (newSnapshot !== null && newSnapshot > 0) {
         // Same week: delta from snapshot gives true run count (uncapped).
         const snapshotDelta = Math.max(0, currentLifetime - newSnapshot);
-        newWeeklyRuns = calibrateWeeklyRunsFromSignals(snapshotDelta, rioThisWeek);
+
+        const shouldRecoverSuspectWeekOneSnapshot =
+          isDuringMidnightSeason1FirstWeek(now) &&
+          (old?.season ?? 0) === 0 &&
+          rioThisWeek !== null &&
+          snapshotDelta <= rioThisWeek &&
+          currentLifetime >= rioThisWeek * 2;
+
+        if (shouldRecoverSuspectWeekOneSnapshot) {
+          // Some week-one rows were initialized using capped Raider.IO weekly lists,
+          // which sets an overly high baseline snapshot and permanently suppresses
+          // weekly totals. Re-anchor against current lifetime with a tighter cap.
+          const suspectWeekOneCap = Math.max(
+            RIO_WEEKLY_MIN_CAP_WITHOUT_SIGNAL,
+            rioThisWeek * RIO_WEEKLY_SUSPECT_SNAPSHOT_MULTIPLIER
+          );
+          newWeeklyRuns = Math.max(rioThisWeek, Math.min(currentLifetime, suspectWeekOneCap));
+          newSnapshot = Math.max(0, currentLifetime - newWeeklyRuns);
+        } else {
+          newWeeklyRuns = calibrateWeeklyRunsFromSignals(snapshotDelta, rioThisWeek);
+        }
       } else if (rioThisWeek !== null) {
         // Use Raider.IO timestamp-based estimate if we don't yet have a valid baseline snapshot.
         newWeeklyRuns = rioThisWeek;
