@@ -800,7 +800,7 @@ function gemAffixState(item: (typeof gear)[number] | undefined): { missing: bool
                     const rewardLabel = option.itemLevel !== null
                       ? `iLvl ${option.itemLevel}`
                       : unlocked
-                        ? 'Unlocked'
+                        ? null
                         : '—';
                     return (
                       <article class:list={[
@@ -816,7 +816,7 @@ function gemAffixState(item: (typeof gear)[number] | undefined): { missing: bool
                         <div class="vault-reward-track" style={`color: ${vaultTrackColor(track)}`}>
                           {trackLabel}
                         </div>
-                        <div class="vault-item-level">{rewardLabel}</div>
+                        {rewardLabel !== null && <div class="vault-item-level">{rewardLabel}</div>}
                       </article>
                     );
                   })}
@@ -2059,10 +2059,15 @@ function gemAffixState(item: (typeof gear)[number] | undefined): { missing: bool
   }
 
   .vault-item-level {
+    display: block;
+    max-width: 100%;
     font-family: 'Cinzel', serif;
     color: #f1d9a9;
-    font-size: 0.97rem;
-    line-height: 1;
+    font-size: 0.9rem;
+    line-height: 1.05;
+    white-space: normal;
+    overflow-wrap: anywhere;
+    word-break: break-word;
   }
 
   .vault-score-formula {
