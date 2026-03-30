@@ -230,11 +230,15 @@ interface CachedRaiderRow {
 }
 
 function computeDisplayedMythicPlusTotal(row: Pick<CachedRaiderRow, 'mythic_plus_run_count' | 'mythic_plus_weekly_runs' | 'mythic_plus_season_runs'>): number | null {
+  if (row.mythic_plus_run_count !== null) {
+    return row.mythic_plus_run_count;
+  }
+
   if (row.mythic_plus_weekly_runs !== null || row.mythic_plus_season_runs !== null) {
     return (row.mythic_plus_season_runs ?? 0) + (row.mythic_plus_weekly_runs ?? 0);
   }
 
-  return row.mythic_plus_run_count;
+  return null;
 }
 
 interface BlizzardSummaryResponse {
