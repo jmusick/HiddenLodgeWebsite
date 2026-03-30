@@ -1366,8 +1366,28 @@ export async function refreshRaidersCache(
         Math.max(1, options?.batchSize ?? DETAIL_BATCH_SIZE),
         effectiveRaidProgressTierId
       );
-  const detailedRaiders = await mapWithConcurrency(detailCandidates, REQUEST_CONCURRENCY, (row) =>
-    enrichRaider(row, now, effectiveRaidProgressTierId)
+  const detailResults = await mapWithConcurrency(
+    detailCandidates,
+    REQUEST_CONCURRENCY,
+    async (row) => {
+      try {
+        return {
+          row,
+          detailed: await enrichRaider(row, now, effectiveRaidProgressTierId),
+        };
+      } catch (error) {
+        console.error('Raider detail enrichment failed', {
+          charId: row.blizzard_char_id,
+          name: row.name,
+          realmSlug: row.realm_slug,
+          error,
+        });
+        return {
+          row,
+          detailed: null as RaiderRecord | null,
+        };
+      }
+    }
   );
 
   // Fetch old M+ data to compute season accumulation on weekly rollover.
@@ -1414,7 +1434,8 @@ export async function refreshRaidersCache(
 
   for (let i = 0; i < detailCandidates.length; i += 1) {
     const source = detailCandidates[i];
-    const detailed = detailedRaiders[i];
+    const detailed = detailResults[i]?.detailed ?? null;
+    if (!detailed) continue;
 
     // Compute true weekly runs as delta from the start-of-week Blizzard stat snapshot.
     // On weekly rollover: accumulate old weekly into season and reset the snapshot.
