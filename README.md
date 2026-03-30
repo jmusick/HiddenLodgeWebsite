@@ -8,6 +8,11 @@ The site combines public guild information, Blizzard-authenticated member profil
 
 ## Latest Release
 
+### v1.5.21
+
+- Hotfixed Raider M+ weekly totals to use a conservative Raider.IO-calibrated envelope, reducing Blizzard snapshot outliers while preserving high-volume runners.
+- Kept all data sources on Raider.IO published API endpoints and avoided undocumented internal endpoints.
+
 ### v1.5.20
 
 - Hotfixed Raiders Mythic+ totals so displayed M+ Total now reflects current-season runs instead of the raw lifetime-style Blizzard stat.

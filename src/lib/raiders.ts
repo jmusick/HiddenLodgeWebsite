@@ -17,6 +17,9 @@ const PREPAREDNESS_HISTORY_WINDOW_SECONDS = 14 * 24 * 60 * 60; // 14 days (2 wee
 const PROGRESSION_HISTORY_WINDOW_SECONDS = 28 * 24 * 60 * 60; // 28 days (4 weeks)
 const MIDNIGHT_SEASON_1_START_TIMESTAMP = Math.floor(Date.UTC(2026, 2, 24, 15, 0, 0, 0) / 1000);
 const WEEK_SECONDS = 7 * 24 * 60 * 60;
+const RIO_WEEKLY_EXPANSION_MULTIPLIER = 4;
+const RIO_WEEKLY_EXPANSION_OFFSET = 4;
+const RIO_WEEKLY_MIN_CAP_WITHOUT_SIGNAL = 40;
 
 const CREST_STAT_IDS = {
   adventurer: 62292,
@@ -86,6 +89,28 @@ function getUsWeeklyResetTimestamp(): number {
 
 function isDuringMidnightSeason1FirstWeek(now: number): boolean {
   return now >= MIDNIGHT_SEASON_1_START_TIMESTAMP && now < MIDNIGHT_SEASON_1_START_TIMESTAMP + WEEK_SECONDS;
+}
+
+function calibrateWeeklyRunsFromSignals(blizzardDerivedWeekly: number, rioThisWeek: number | null): number {
+  const normalizedBlizzardWeekly = Math.max(0, Math.floor(blizzardDerivedWeekly));
+  if (!Number.isFinite(normalizedBlizzardWeekly)) return 0;
+
+  if (rioThisWeek === null) {
+    return normalizedBlizzardWeekly;
+  }
+
+  const normalizedRioWeekly = Math.max(0, Math.floor(rioThisWeek));
+
+  // Raider.IO profile endpoints expose capped run lists. Expand that observed
+  // floor into a conservative upper envelope so we can damp obvious Blizzard
+  // stat outliers without forcing totals down to the capped list size.
+  const rioEnvelopeCap = Math.max(
+    normalizedRioWeekly * RIO_WEEKLY_EXPANSION_MULTIPLIER + RIO_WEEKLY_EXPANSION_OFFSET,
+    normalizedRioWeekly + 20,
+    RIO_WEEKLY_MIN_CAP_WITHOUT_SIGNAL
+  );
+
+  return Math.max(normalizedRioWeekly, Math.min(normalizedBlizzardWeekly, rioEnvelopeCap));
 }
 
 // Look up Great Vault ilvl for a keystone level at the given sorted-desc slot index.
@@ -1309,7 +1334,7 @@ export async function refreshRaidersCache(
         // total so the page converges immediately instead of waiting for a future reset.
         newSeasonRuns = 0;
         newSnapshot = 0;
-        newWeeklyRuns = currentLifetime;
+        newWeeklyRuns = calibrateWeeklyRunsFromSignals(currentLifetime, rioThisWeek);
         newPrevWeeklyRuns = 0;
       } else if (old && old.syncedAt !== null && old.syncedAt < weeklyResetTs) {
         // New week detected: commit previous week's count into season and reset baseline.
@@ -1326,7 +1351,7 @@ export async function refreshRaidersCache(
       } else if (newSnapshot !== null && newSnapshot > 0) {
         // Same week: delta from snapshot gives true run count (uncapped).
         const snapshotDelta = Math.max(0, currentLifetime - newSnapshot);
-        newWeeklyRuns = rioThisWeek !== null ? Math.max(snapshotDelta, rioThisWeek) : snapshotDelta;
+        newWeeklyRuns = calibrateWeeklyRunsFromSignals(snapshotDelta, rioThisWeek);
       } else if (rioThisWeek !== null) {
         // Use Raider.IO timestamp-based estimate if we don't yet have a valid baseline snapshot.
         newWeeklyRuns = rioThisWeek;
