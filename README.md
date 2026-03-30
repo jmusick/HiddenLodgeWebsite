@@ -8,6 +8,11 @@ The site combines public guild information, Blizzard-authenticated member profil
 
 ## Latest Release
 
+### v1.5.22
+
+- Tightened the Raider.IO-calibrated Week 1 Mythic+ weekly cap to reduce inflated totals for outlier legacy snapshot rows.
+- Improves convergence for characters that were still over-reporting weekly/total runs compared to Raider.IO.
+
 ### v1.5.21
 
 - Hotfixed Raider M+ weekly totals to use a conservative Raider.IO-calibrated envelope, reducing Blizzard snapshot outliers while preserving high-volume runners.

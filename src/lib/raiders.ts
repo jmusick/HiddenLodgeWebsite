@@ -18,7 +18,6 @@ const PROGRESSION_HISTORY_WINDOW_SECONDS = 28 * 24 * 60 * 60; // 28 days (4 week
 const MIDNIGHT_SEASON_1_START_TIMESTAMP = Math.floor(Date.UTC(2026, 2, 24, 15, 0, 0, 0) / 1000);
 const WEEK_SECONDS = 7 * 24 * 60 * 60;
 const RIO_WEEKLY_EXPANSION_MULTIPLIER = 4;
-const RIO_WEEKLY_EXPANSION_OFFSET = 4;
 const RIO_WEEKLY_MIN_CAP_WITHOUT_SIGNAL = 40;
 
 const CREST_STAT_IDS = {
@@ -105,8 +104,7 @@ function calibrateWeeklyRunsFromSignals(blizzardDerivedWeekly: number, rioThisWe
   // floor into a conservative upper envelope so we can damp obvious Blizzard
   // stat outliers without forcing totals down to the capped list size.
   const rioEnvelopeCap = Math.max(
-    normalizedRioWeekly * RIO_WEEKLY_EXPANSION_MULTIPLIER + RIO_WEEKLY_EXPANSION_OFFSET,
-    normalizedRioWeekly + 20,
+    normalizedRioWeekly * RIO_WEEKLY_EXPANSION_MULTIPLIER,
     RIO_WEEKLY_MIN_CAP_WITHOUT_SIGNAL
   );
 
