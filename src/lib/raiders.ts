@@ -229,42 +229,12 @@ interface CachedRaiderRow {
   avg_30d_enchantable_slots: number | null;
 }
 
-function computeDisplayedMythicPlusTotal(row: Pick<CachedRaiderRow, 'mythic_plus_run_count' | 'mythic_plus_weekly_runs' | 'mythic_plus_prev_weekly_runs' | 'mythic_plus_season_runs'>): number | null {
+function computeDisplayedMythicPlusTotal(row: Pick<CachedRaiderRow, 'mythic_plus_run_count' | 'mythic_plus_weekly_runs' | 'mythic_plus_season_runs'>): number | null {
   if (row.mythic_plus_weekly_runs !== null || row.mythic_plus_season_runs !== null) {
-    const seasonRuns = row.mythic_plus_season_runs ?? 0;
-    const weeklyRuns = row.mythic_plus_weekly_runs ?? 0;
-    const prevWeeklyRuns = row.mythic_plus_prev_weekly_runs ?? 0;
-
-    // If season and weekly are identical, they represent the same bucket for
-    // display purposes and should not be added together.
-    if (row.mythic_plus_weekly_runs !== null && row.mythic_plus_season_runs !== null && seasonRuns === weeklyRuns) {
-      return weeklyRuns;
-    }
-
-    // If last-week is still zero but season and weekly are both populated,
-    // season can already include this week's runs in legacy rows.
-    if (row.mythic_plus_weekly_runs !== null && row.mythic_plus_season_runs !== null && prevWeeklyRuns === 0) {
-      return weeklyRuns;
-    }
-
-    // During season week 1, season counters can carry stale pre-season or
-    // bootstrap values. Prefer the current-week signal when available.
-    if (isDuringMidnightSeason1FirstWeek(nowInSeconds())) {
-      if (row.mythic_plus_weekly_runs !== null) {
-        return weeklyRuns;
-      }
-
-      return seasonRuns;
-    }
-
-    return seasonRuns + weeklyRuns;
+    return (row.mythic_plus_season_runs ?? 0) + (row.mythic_plus_weekly_runs ?? 0);
   }
 
-  if (row.mythic_plus_run_count !== null) {
-    return row.mythic_plus_run_count;
-  }
-
-  return null;
+  return row.mythic_plus_run_count;
 }
 
 interface BlizzardSummaryResponse {
@@ -1644,12 +1614,13 @@ export async function refreshRaidersCache(
 
     if (currentLifetime !== null) {
       if (shouldBootstrapFromLifetimeTotal) {
-        // Legacy rows created before the snapshot logic shipped have a zero snapshot
-        // during the season's opening week. Treat lifetime completions as this week's
-        // total so the page converges immediately instead of waiting for a future reset.
+        // Use Raider.IO's timestamp-based weekly estimate directly.
+        // The Blizzard lifetime total is NOT week-specific and must not be
+        // used as a weekly count — it inflates the total when passed to
+        // calibrateWeeklyRunsFromSignals.
         newSeasonRuns = 0;
-        newSnapshot = 0;
-        newWeeklyRuns = calibrateWeeklyRunsFromSignals(currentLifetime, rioThisWeek);
+        newWeeklyRuns = rioThisWeek ?? 0;
+        newSnapshot = Math.max(0, currentLifetime - newWeeklyRuns);
         newPrevWeeklyRuns = 0;
       } else if (old && old.syncedAt !== null && old.syncedAt < weeklyResetTs) {
         // New week detected: commit previous week's count into season and reset baseline.
