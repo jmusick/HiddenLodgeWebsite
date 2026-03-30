@@ -229,10 +229,17 @@ interface CachedRaiderRow {
   avg_30d_enchantable_slots: number | null;
 }
 
-function computeDisplayedMythicPlusTotal(row: Pick<CachedRaiderRow, 'mythic_plus_run_count' | 'mythic_plus_weekly_runs' | 'mythic_plus_season_runs'>): number | null {
+function computeDisplayedMythicPlusTotal(row: Pick<CachedRaiderRow, 'mythic_plus_run_count' | 'mythic_plus_weekly_runs' | 'mythic_plus_prev_weekly_runs' | 'mythic_plus_season_runs'>): number | null {
   if (row.mythic_plus_weekly_runs !== null || row.mythic_plus_season_runs !== null) {
     const seasonRuns = row.mythic_plus_season_runs ?? 0;
     const weeklyRuns = row.mythic_plus_weekly_runs ?? 0;
+    const prevWeeklyRuns = row.mythic_plus_prev_weekly_runs ?? 0;
+
+    // If last-week is still zero but season and weekly are both populated,
+    // season can already include this week's runs in legacy rows.
+    if (row.mythic_plus_weekly_runs !== null && row.mythic_plus_season_runs !== null && prevWeeklyRuns === 0) {
+      return weeklyRuns;
+    }
 
     // During season week 1, season counters can carry stale pre-season or
     // bootstrap values. Prefer the current-week signal when available.
