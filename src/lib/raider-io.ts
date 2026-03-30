@@ -125,6 +125,23 @@ async function fetchStatisticsWeekTotal(realm: string, name: string, characterId
   return Number.isFinite(total) ? total : null;
 }
 
+/**
+ * Fetch the total Mythic+ runs for the current season week from the RIO stats endpoint.
+ * Uses two internal API calls: character details (for RIO char ID) then statistics.
+ * Returns null if either call fails or the character has no data.
+ * Used only as a bootstrap seed when a character has no accumulated keystones yet.
+ */
+export async function fetchStatisticsWeeklyTotal(realm: string, name: string): Promise<number | null> {
+  try {
+    const characterId = await fetchCharacterIdForStatistics(realm, name);
+    if (characterId === null) return null;
+    const seasonWeek = getCurrentSeasonWeek(Math.floor(Date.now() / 1000));
+    return await fetchStatisticsWeekTotal(realm, name, characterId, seasonWeek);
+  } catch {
+    return null;
+  }
+}
+
 export interface KeystoneRun {
   completedTs: number;       // unix seconds
   dungeonId: number | null;  // map_challenge_mode_id

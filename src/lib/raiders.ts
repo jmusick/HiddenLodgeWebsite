@@ -5,7 +5,7 @@ import { fallbackClassIconUrl } from './class-icons';
 import { getLatestDroptimizerForRaiders, getLatestSingleTargetForRaiders } from './sim-api';
 import { getBlizzardAppAccessToken as getSharedBlizzardAppAccessToken } from './blizzard-app-token';
 import { fetchBlizzardJsonWithRetry } from './blizzard-fetch';
-import { getCharacterMythicPlusRunCounts, type KeystoneRun } from './raider-io';
+import { getCharacterMythicPlusRunCounts, fetchStatisticsWeeklyTotal, type KeystoneRun } from './raider-io';
 
 const API_BASE = 'https://us.api.blizzard.com';
 const PROFILE_NAMESPACE = 'profile-us';
@@ -1623,7 +1623,27 @@ export async function refreshRaidersCache(
     let newWorldSnapshot: number | null = old?.worldSnapshot ?? null;
 
     await mergeKeystoneRuns(db, source.blizzard_char_id, detailed.mythicPlusAllRuns);
-    const keystoneCounts = await countKeystoneRuns(db, source.blizzard_char_id, weeklyResetTs);
+    let keystoneCounts = await countKeystoneRuns(db, source.blizzard_char_id, weeklyResetTs);
+
+    // Bootstrap: if no runs have been accumulated yet, hit the RIO stats endpoint
+    // (which shows the same totals as the RIO stats page) to seed the count immediately.
+    // This avoids raiders starting at 0 and slowly climbing over days.
+    if (keystoneCounts.weekly === 0) {
+      const statsTotal = await fetchStatisticsWeeklyTotal(source.realm_slug, source.name).catch(() => null);
+      if (statsTotal !== null && statsTotal > 0) {
+        // Insert synthetic placeholder rows representing each run as a unique second
+        // within the current week. The real timestamps will overwrite on future refreshes
+        // since INSERT OR IGNORE won't clobber real rows with matching timestamps.
+        const syntheticRuns: KeystoneRun[] = Array.from({ length: statsTotal }, (_, idx) => ({
+          completedTs: weeklyResetTs + idx + 1,
+          dungeonId: null,
+          keystoneLevel: null,
+        }));
+        await mergeKeystoneRuns(db, source.blizzard_char_id, syntheticRuns);
+        keystoneCounts = await countKeystoneRuns(db, source.blizzard_char_id, weeklyResetTs);
+      }
+    }
+
     const newWeeklyRuns: number = keystoneCounts.weekly;
     const newSeasonRuns: number = keystoneCounts.season;
     const newPrevWeeklyRuns: number | null = detailed.mythicPlusPrevWeeklyRuns;
