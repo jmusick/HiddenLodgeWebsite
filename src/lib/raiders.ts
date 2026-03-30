@@ -230,12 +230,21 @@ interface CachedRaiderRow {
 }
 
 function computeDisplayedMythicPlusTotal(row: Pick<CachedRaiderRow, 'mythic_plus_run_count' | 'mythic_plus_weekly_runs' | 'mythic_plus_season_runs'>): number | null {
-  if (row.mythic_plus_run_count !== null) {
-    return row.mythic_plus_run_count;
+  if (row.mythic_plus_weekly_runs !== null || row.mythic_plus_season_runs !== null) {
+    const seasonRuns = row.mythic_plus_season_runs ?? 0;
+    const weeklyRuns = row.mythic_plus_weekly_runs ?? 0;
+
+    // During season week 1, both fields can represent the same bucket in legacy
+    // rows; prefer the larger value to avoid doubling the displayed total.
+    if (isDuringMidnightSeason1FirstWeek(nowInSeconds())) {
+      return Math.max(seasonRuns, weeklyRuns);
+    }
+
+    return seasonRuns + weeklyRuns;
   }
 
-  if (row.mythic_plus_weekly_runs !== null || row.mythic_plus_season_runs !== null) {
-    return (row.mythic_plus_season_runs ?? 0) + (row.mythic_plus_weekly_runs ?? 0);
+  if (row.mythic_plus_run_count !== null) {
+    return row.mythic_plus_run_count;
   }
 
   return null;
