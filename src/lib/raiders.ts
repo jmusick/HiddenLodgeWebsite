@@ -5,7 +5,7 @@ import { fallbackClassIconUrl } from './class-icons';
 import { getLatestDroptimizerForRaiders, getLatestSingleTargetForRaiders } from './sim-api';
 import { getBlizzardAppAccessToken as getSharedBlizzardAppAccessToken } from './blizzard-app-token';
 import { fetchBlizzardJsonWithRetry } from './blizzard-fetch';
-import { getCharacterMythicPlusRunCounts } from './raider-io';
+import { getCharacterMythicPlusRunCounts, type KeystoneRun } from './raider-io';
 
 const API_BASE = 'https://us.api.blizzard.com';
 const PROFILE_NAMESPACE = 'profile-us';
@@ -18,9 +18,6 @@ const PROGRESSION_HISTORY_WINDOW_SECONDS = 28 * 24 * 60 * 60; // 28 days (4 week
 const VAULT_HISTORY_WINDOW_SECONDS = 28 * 24 * 60 * 60; // 28 days (4 weeks)
 const MIDNIGHT_SEASON_1_START_TIMESTAMP = Math.floor(Date.UTC(2026, 2, 24, 15, 0, 0, 0) / 1000);
 const WEEK_SECONDS = 7 * 24 * 60 * 60;
-const RIO_WEEKLY_EXPANSION_MULTIPLIER = 4;
-const RIO_WEEKLY_MIN_CAP_WITHOUT_SIGNAL = 40;
-const RIO_WEEKLY_SUSPECT_SNAPSHOT_MULTIPLIER = 2;
 const DELVES_TOTAL_STAT_ID = 40734;
 
 const CREST_STAT_IDS = {
@@ -144,31 +141,6 @@ function getUsWeeklyResetTimestamp(): number {
   return Math.floor(resetUtc.getTime() / 1000);
 }
 
-function isDuringMidnightSeason1FirstWeek(now: number): boolean {
-  return now >= MIDNIGHT_SEASON_1_START_TIMESTAMP && now < MIDNIGHT_SEASON_1_START_TIMESTAMP + WEEK_SECONDS;
-}
-
-function calibrateWeeklyRunsFromSignals(blizzardDerivedWeekly: number, rioThisWeek: number | null): number {
-  const normalizedBlizzardWeekly = Math.max(0, Math.floor(blizzardDerivedWeekly));
-  if (!Number.isFinite(normalizedBlizzardWeekly)) return 0;
-
-  if (rioThisWeek === null) {
-    return normalizedBlizzardWeekly;
-  }
-
-  const normalizedRioWeekly = Math.max(0, Math.floor(rioThisWeek));
-
-  // Raider.IO profile endpoints expose capped run lists. Expand that observed
-  // floor into a conservative upper envelope so we can damp obvious Blizzard
-  // stat outliers without forcing totals down to the capped list size.
-  const rioEnvelopeCap = Math.max(
-    normalizedRioWeekly * RIO_WEEKLY_EXPANSION_MULTIPLIER,
-    RIO_WEEKLY_MIN_CAP_WITHOUT_SIGNAL
-  );
-
-  return Math.max(normalizedRioWeekly, Math.min(normalizedBlizzardWeekly, rioEnvelopeCap));
-}
-
 // Look up Great Vault ilvl for a keystone level at the given sorted-desc slot index.
 function computeVaultIlvl(sortedLevels: number[], slotIndex: 0 | 3 | 7): number | null {
   const level = sortedLevels[slotIndex];
@@ -177,7 +149,62 @@ function computeVaultIlvl(sortedLevels: number[], slotIndex: 0 | 3 | 7): number 
   return GREAT_VAULT_DUNGEON_ILVL.get(clamped) ?? null;
 }
 
-type RaiderAuthState = 'ready' | 'missing' | 'expired' | 'unavailable';
+/** Merge newly-seen RIO runs into the persistent keystones table (INSERT OR IGNORE). */
+async function mergeKeystoneRuns(
+  db: D1Database,
+  blizzardCharId: number,
+  runs: KeystoneRun[]
+): Promise<void> {
+  if (runs.length === 0) return;
+  // D1 batch limit; process in chunks of 50
+  const CHUNK = 50;
+  for (let i = 0; i < runs.length; i += CHUNK) {
+    const chunk = runs.slice(i, i + CHUNK);
+    const statements = chunk.map((run) =>
+      db
+        .prepare(
+          `INSERT OR IGNORE INTO raider_keystones (blizzard_char_id, completed_ts, dungeon_id, keystone_level)
+           VALUES (?, ?, ?, ?)`
+        )
+        .bind(blizzardCharId, run.completedTs, run.dungeonId ?? null, run.keystoneLevel ?? null)
+    );
+    await db.batch(statements);
+  }
+}
+
+/** Count runs in the keystones table for the current week and full season. */
+async function countKeystoneRuns(
+  db: D1Database,
+  blizzardCharId: number,
+  weeklyResetTs: number
+): Promise<{ weekly: number; season: number; weeklyKeyLevels: number[] }> {
+  const [weeklyResult, seasonResult, keyLevelsResult] = await Promise.all([
+    db
+      .prepare(`SELECT COUNT(*) AS cnt FROM raider_keystones WHERE blizzard_char_id = ? AND completed_ts >= ?`)
+      .bind(blizzardCharId, weeklyResetTs)
+      .first<{ cnt: number }>(),
+    db
+      .prepare(`SELECT COUNT(*) AS cnt FROM raider_keystones WHERE blizzard_char_id = ? AND completed_ts >= ?`)
+      .bind(blizzardCharId, MIDNIGHT_SEASON_1_START_TIMESTAMP)
+      .first<{ cnt: number }>(),
+    db
+      .prepare(
+        `SELECT keystone_level FROM raider_keystones
+         WHERE blizzard_char_id = ? AND completed_ts >= ? AND keystone_level IS NOT NULL
+         ORDER BY keystone_level DESC`
+      )
+      .bind(blizzardCharId, weeklyResetTs)
+      .all<{ keystone_level: number }>(),
+  ]);
+
+  return {
+    weekly: weeklyResult?.cnt ?? 0,
+    season: seasonResult?.cnt ?? 0,
+    weeklyKeyLevels: (keyLevelsResult.results ?? []).map((r) => r.keystone_level),
+  };
+}
+
+
 
 interface RaiderSourceRow {
   blizzard_char_id: number;
@@ -230,12 +257,14 @@ interface CachedRaiderRow {
 }
 
 function computeDisplayedMythicPlusTotal(row: Pick<CachedRaiderRow, 'mythic_plus_run_count' | 'mythic_plus_weekly_runs' | 'mythic_plus_season_runs'>): number | null {
-  if (row.mythic_plus_weekly_runs !== null || row.mythic_plus_season_runs !== null) {
-    return (row.mythic_plus_season_runs ?? 0) + (row.mythic_plus_weekly_runs ?? 0);
+  // mythic_plus_season_runs is now the full season total (current week included).
+  // mythic_plus_weekly_runs separately tracks just this week for Great Vault display.
+  if (row.mythic_plus_season_runs !== null) {
+    return row.mythic_plus_season_runs;
   }
-
-  // Do not fall back to the Blizzard lifetime total — it spans all seasons and
-  // will badly inflate totals when weekly/season have been cleared or not yet set.
+  if (row.mythic_plus_weekly_runs !== null) {
+    return row.mythic_plus_weekly_runs;
+  }
   return null;
 }
 
@@ -524,6 +553,7 @@ export interface RaiderRecord {
   mythicPlusVaultIlvl2: number | null;
   mythicPlusVaultIlvl3: number | null;
   mythicPlusLifetimeTotal: number | null;
+  mythicPlusAllRuns: KeystoneRun[];
   worldVaultWeeklyObjectives: number | null;
   worldVaultLifetimeObjectives: number | null;
   totalUpgradesMissing: number | null;
@@ -896,6 +926,7 @@ async function enrichRaider(row: RaiderSourceRow, now: number, raidProgressTarge
     mythicPlusVaultIlvl2: null,
     mythicPlusVaultIlvl3: null,
     mythicPlusLifetimeTotal: null,
+    mythicPlusAllRuns: [],
     worldVaultWeeklyObjectives: null,
     worldVaultLifetimeObjectives: null,
     totalUpgradesMissing: null,
@@ -968,11 +999,12 @@ async function enrichRaider(row: RaiderSourceRow, now: number, raidProgressTarge
     mythicPlusRunCount: mythicPlusLifetimeTotal,
     mythicPlusWeeklyRuns: mythicPlusRunCount.thisWeek,
     mythicPlusPrevWeeklyRuns: mythicPlusRunCount.lastWeek,
-    mythicPlusSeasonRuns: null, // computed in update loop from old DB values
-    mythicPlusVaultIlvl1: computeVaultIlvl(mythicPlusRunCount.thisWeekKeyLevels, 0),
-    mythicPlusVaultIlvl2: computeVaultIlvl(mythicPlusRunCount.thisWeekKeyLevels, 3),
-    mythicPlusVaultIlvl3: computeVaultIlvl(mythicPlusRunCount.thisWeekKeyLevels, 7),
+    mythicPlusSeasonRuns: null, // computed in update loop from keystones table
+    mythicPlusVaultIlvl1: null, // computed in update loop from keystones table
+    mythicPlusVaultIlvl2: null, // computed in update loop from keystones table
+    mythicPlusVaultIlvl3: null, // computed in update loop from keystones table
     mythicPlusLifetimeTotal,
+    mythicPlusAllRuns: mythicPlusRunCount.allRuns,
     worldVaultWeeklyObjectives: null,
     worldVaultLifetimeObjectives: delvesLifetimeTotal,
     totalUpgradesMissing,
@@ -1547,22 +1579,16 @@ export async function refreshRaidersCache(
     }
   );
 
-  // Fetch old M+ data to compute season accumulation on weekly rollover.
+  // Fetch old world-vault data to compute delve objectives on weekly rollover.
   const weeklyResetTs = getUsWeeklyResetTimestamp();
   type OldMetricsRow = {
     blizzard_char_id: number;
-    mythic_plus_weekly_runs: number | null;
-    mythic_plus_season_runs: number | null;
     details_synced_at: number | null;
-    mythic_plus_quantity_snapshot: number | null;
     world_vault_weekly_objectives: number | null;
     world_vault_quantity_snapshot: number | null;
   };
   const oldMythicMap = new Map<number, {
-    weekly: number | null;
-    season: number | null;
     syncedAt: number | null;
-    snapshot: number | null;
     worldWeekly: number | null;
     worldSnapshot: number | null;
   }>();
@@ -1570,8 +1596,7 @@ export async function refreshRaidersCache(
     const placeholders = detailCandidates.map(() => '?').join(',');
     const oldRows = await db
       .prepare(
-        `SELECT blizzard_char_id, mythic_plus_weekly_runs, mythic_plus_season_runs, details_synced_at, mythic_plus_quantity_snapshot,
-                world_vault_weekly_objectives, world_vault_quantity_snapshot
+        `SELECT blizzard_char_id, details_synced_at, world_vault_weekly_objectives, world_vault_quantity_snapshot
          FROM raider_metrics_cache
          WHERE blizzard_char_id IN (${placeholders})`
       )
@@ -1579,10 +1604,7 @@ export async function refreshRaidersCache(
       .all<OldMetricsRow>();
     for (const r of oldRows.results ?? []) {
       oldMythicMap.set(r.blizzard_char_id, {
-        weekly: r.mythic_plus_weekly_runs,
-        season: r.mythic_plus_season_runs,
         syncedAt: r.details_synced_at,
-        snapshot: r.mythic_plus_quantity_snapshot,
         worldWeekly: r.world_vault_weekly_objectives,
         worldSnapshot: r.world_vault_quantity_snapshot,
       });
@@ -1594,91 +1616,24 @@ export async function refreshRaidersCache(
     const detailed = detailResults[i]?.detailed ?? null;
     if (!detailed) continue;
 
-    // Compute true weekly runs as delta from the start-of-week Blizzard stat snapshot.
-    // On weekly rollover: accumulate old weekly into season and reset the snapshot.
+    // Accumulate keystones from this refresh into the persistent keystones table,
+    // then count weekly/season totals directly from that table.
     const old = oldMythicMap.get(source.blizzard_char_id);
-    const currentLifetime = detailed.mythicPlusLifetimeTotal;
-    const rioThisWeek = detailed.mythicPlusWeeklyRuns;
-    const rioLastWeek = detailed.mythicPlusPrevWeeklyRuns;
-    let newSeasonRuns: number | null = old?.season ?? null;
-    let newSnapshot: number | null = old?.snapshot ?? null;
-    let newWeeklyRuns: number | null = null;
-    let newPrevWeeklyRuns: number | null = rioLastWeek;
     let newWorldWeeklyObjectives: number | null = null;
     let newWorldSnapshot: number | null = old?.worldSnapshot ?? null;
-    const shouldBootstrapFromLifetimeTotal =
-      isDuringMidnightSeason1FirstWeek(now) &&
-      currentLifetime !== null &&
-      (old?.season ?? null) === null &&
-      (old?.weekly ?? 0) === 0 &&
-      (old?.snapshot ?? 0) === 0 &&
-      (rioLastWeek ?? 0) === 0;
 
-    if (currentLifetime !== null) {
-      if (shouldBootstrapFromLifetimeTotal) {
-        // Use Raider.IO's timestamp-based weekly estimate directly.
-        // The Blizzard lifetime total is NOT week-specific and must not be
-        // used as a weekly count — it inflates the total when passed to
-        // calibrateWeeklyRunsFromSignals.
-        newSeasonRuns = 0;
-        newWeeklyRuns = rioThisWeek ?? 0;
-        newSnapshot = Math.max(0, currentLifetime - newWeeklyRuns);
-        newPrevWeeklyRuns = 0;
-      } else if (old && old.syncedAt !== null && old.syncedAt < weeklyResetTs) {
-        // New week detected: commit previous week's count into season and reset baseline.
-        newSeasonRuns = (old.season ?? 0) + (old.weekly ?? 0);
-        newPrevWeeklyRuns = old.weekly ?? rioLastWeek;
-
-        if (rioThisWeek !== null) {
-          newWeeklyRuns = rioThisWeek;
-          newSnapshot = Math.max(0, currentLifetime - newWeeklyRuns);
-        } else {
-          newSnapshot = currentLifetime;
-          newWeeklyRuns = 0;
-        }
-      } else if (newSnapshot !== null && newSnapshot > 0) {
-        // Same week: delta from snapshot gives true run count (uncapped).
-        const snapshotDelta = Math.max(0, currentLifetime - newSnapshot);
-
-        const shouldRecoverSuspectWeekOneSnapshot =
-          isDuringMidnightSeason1FirstWeek(now) &&
-          (old?.season ?? 0) === 0 &&
-          rioThisWeek !== null &&
-          snapshotDelta <= rioThisWeek &&
-          currentLifetime >= rioThisWeek * 2;
-
-        if (shouldRecoverSuspectWeekOneSnapshot) {
-          // Some week-one rows were initialized using capped Raider.IO weekly lists,
-          // which sets an overly high baseline snapshot and permanently suppresses
-          // weekly totals. Re-anchor against current lifetime with a tighter cap.
-          const suspectWeekOneCap = Math.max(
-            RIO_WEEKLY_MIN_CAP_WITHOUT_SIGNAL,
-            rioThisWeek * RIO_WEEKLY_SUSPECT_SNAPSHOT_MULTIPLIER
-          );
-          newWeeklyRuns = Math.max(rioThisWeek, Math.min(currentLifetime, suspectWeekOneCap));
-          newSnapshot = Math.max(0, currentLifetime - newWeeklyRuns);
-        } else {
-          newWeeklyRuns = calibrateWeeklyRunsFromSignals(snapshotDelta, rioThisWeek);
-        }
-      } else if (rioThisWeek !== null) {
-        // Use Raider.IO timestamp-based estimate if we don't yet have a valid baseline snapshot.
-        newWeeklyRuns = rioThisWeek;
-        newSnapshot = Math.max(0, currentLifetime - newWeeklyRuns);
-      } else {
-        // First capture ever: establish snapshot, weekly starts at 0.
-        newSnapshot = currentLifetime;
-        newWeeklyRuns = 0;
-      }
-    } else {
-      // If Blizzard lifetime counters are unavailable, fall back entirely to Raider.IO estimates.
-      newWeeklyRuns = rioThisWeek;
-      newPrevWeeklyRuns = rioLastWeek;
-    }
+    await mergeKeystoneRuns(db, source.blizzard_char_id, detailed.mythicPlusAllRuns);
+    const keystoneCounts = await countKeystoneRuns(db, source.blizzard_char_id, weeklyResetTs);
+    const newWeeklyRuns: number = keystoneCounts.weekly;
+    const newSeasonRuns: number = keystoneCounts.season;
+    const newPrevWeeklyRuns: number | null = detailed.mythicPlusPrevWeeklyRuns;
+    const keystoneVaultKeyLevels = keystoneCounts.weeklyKeyLevels;
 
     const worldLifetime = detailed.worldVaultLifetimeObjectives;
     if (worldLifetime !== null) {
+      const duringFirstWeek = now >= MIDNIGHT_SEASON_1_START_TIMESTAMP && now < MIDNIGHT_SEASON_1_START_TIMESTAMP + WEEK_SECONDS;
       const shouldBootstrapWorldFromLifetimeTotal =
-        isDuringMidnightSeason1FirstWeek(now) &&
+        duringFirstWeek &&
         worldLifetime > 0 &&
         (old?.worldWeekly ?? 0) === 0 &&
         ((old?.worldSnapshot ?? null) === null || (old?.worldSnapshot ?? 0) === worldLifetime);
@@ -1758,12 +1713,12 @@ export async function refreshRaidersCache(
         newWeeklyRuns,
         newPrevWeeklyRuns,
         newSeasonRuns,
-        detailed.mythicPlusVaultIlvl1,
-        detailed.mythicPlusVaultIlvl2,
-        detailed.mythicPlusVaultIlvl3,
+        computeVaultIlvl(keystoneVaultKeyLevels, 0),
+        computeVaultIlvl(keystoneVaultKeyLevels, 3),
+        computeVaultIlvl(keystoneVaultKeyLevels, 7),
         newWorldWeeklyObjectives,
         newWorldSnapshot,
-        newSnapshot,
+        null, // mythic_plus_quantity_snapshot no longer used
         detailed.totalUpgradesMissing,
         detailed.raidProgressRaidName,
         detailed.raidProgressLabel,

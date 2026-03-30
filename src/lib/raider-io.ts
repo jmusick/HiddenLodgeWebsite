@@ -125,11 +125,19 @@ async function fetchStatisticsWeekTotal(realm: string, name: string, characterId
   return Number.isFinite(total) ? total : null;
 }
 
+export interface KeystoneRun {
+  completedTs: number;       // unix seconds
+  dungeonId: number | null;  // map_challenge_mode_id
+  keystoneLevel: number | null;
+}
+
 export interface MythicPlusRunCounts {
   total: number | null;
   thisWeek: number | null;
   lastWeek: number | null;
   thisWeekKeyLevels: number[];
+  /** All deduplicated runs seen across all profile lists, for persistent accumulation. */
+  allRuns: KeystoneRun[];
 }
 
 function easternUtcOffsetMinutes(atUtc: Date): number {
@@ -235,7 +243,11 @@ function parseRunTimestamp(run: RaiderIoKeystoneRun): number | null {
   return Math.floor(parsed / 1000);
 }
 
-function estimateWeeklyRunCounts(response: RaiderIoCharacterProfileResponse): { thisWeek: number | null; lastWeek: number | null } {
+function deduplicateAndCollectRuns(response: RaiderIoCharacterProfileResponse): {
+  allRuns: KeystoneRun[];
+  thisWeek: number;
+  lastWeek: number;
+} {
   const resetTs = getUsWeeklyResetTimestamp();
   const previousResetTs = resetTs - (7 * 24 * 60 * 60);
 
@@ -253,28 +265,29 @@ function estimateWeeklyRunCounts(response: RaiderIoCharacterProfileResponse): { 
     .filter((entry): entry is { ts: number; run: RaiderIoKeystoneRun } => entry.ts !== null)
     .sort((a, b) => a.ts - b.ts);
 
-  if (timestampedRuns.length === 0) {
-    return { thisWeek: null, lastWeek: null };
-  }
-
   // Match WoWAudit behavior: if two runs are within 60 seconds, treat as duplicate.
-  const uniqueRunTimestamps: number[] = [];
+  const uniqueRuns: { ts: number; run: RaiderIoKeystoneRun }[] = [];
   for (const entry of timestampedRuns) {
-    const isDuplicate = uniqueRunTimestamps.some((existingTs) => Math.abs(existingTs - entry.ts) < 60);
-    if (!isDuplicate) uniqueRunTimestamps.push(entry.ts);
+    const isDuplicate = uniqueRuns.some((existing) => Math.abs(existing.ts - entry.ts) < 60);
+    if (!isDuplicate) uniqueRuns.push(entry);
   }
 
   let thisWeek = 0;
   let lastWeek = 0;
-  for (const ts of uniqueRunTimestamps) {
-    if (ts >= resetTs) {
-      thisWeek += 1;
-    } else if (ts >= previousResetTs) {
-      lastWeek += 1;
-    }
+  for (const { ts } of uniqueRuns) {
+    if (ts >= resetTs) thisWeek += 1;
+    else if (ts >= previousResetTs) lastWeek += 1;
   }
 
-  return { thisWeek, lastWeek };
+  const allRuns: KeystoneRun[] = uniqueRuns.map(({ ts, run }) => ({
+    completedTs: ts,
+    dungeonId: Number.isInteger(run.map_challenge_mode_id) ? (run.map_challenge_mode_id ?? null) : null,
+    keystoneLevel: Number.isInteger(run.mythic_level ?? run.keystone_level)
+      ? (run.mythic_level ?? run.keystone_level ?? null)
+      : null,
+  }));
+
+  return { allRuns, thisWeek, lastWeek };
 }
 
 export async function getCharacterMythicPlusRunCounts(realmSlug: string, name: string): Promise<MythicPlusRunCounts> {
@@ -285,23 +298,24 @@ export async function getCharacterMythicPlusRunCounts(realmSlug: string, name: s
   });
 
   if (!response.ok) {
-    if (response.status === 404) return { total: null, thisWeek: null, lastWeek: null, thisWeekKeyLevels: [] };
+    if (response.status === 404) return { total: null, thisWeek: null, lastWeek: null, thisWeekKeyLevels: [], allRuns: [] };
     throw new Error(`Raider.IO character profile request failed (HTTP ${response.status}).`);
   }
 
   const payload = (await response.json()) as RaiderIoCharacterProfileResponse;
   const thisWeekKeyLevels = extractKeyLevels(payload.mythic_plus_weekly_highest_level_runs);
-  const estimatedWeekly = estimateWeeklyRunCounts(payload);
+  const { allRuns, thisWeek, lastWeek } = deduplicateAndCollectRuns(payload);
 
   const mergedThisWeek = Math.max(
-    estimatedWeekly.thisWeek ?? 0,
+    thisWeek,
     listLength(payload.mythic_plus_weekly_highest_level_runs) ?? 0
   );
 
   return {
     total: collectUniqueRunIds(payload),
     thisWeek: mergedThisWeek > 0 ? mergedThisWeek : null,
-    lastWeek: estimatedWeekly.lastWeek ?? listLength(payload.mythic_plus_previous_weekly_highest_level_runs),
+    lastWeek: lastWeek > 0 ? lastWeek : listLength(payload.mythic_plus_previous_weekly_highest_level_runs),
     thisWeekKeyLevels,
+    allRuns,
   };
 }
