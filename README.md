@@ -8,6 +8,11 @@ The site combines public guild information, Blizzard-authenticated member profil
 
 ## Latest Release
 
+### v1.8.0
+
+- Added Great Vault score to the desktop sync API payload so downstream tools can consume the same website scoring model.
+- Desktop sync endpoint now returns preparedness tiers and Great Vault score in one authorized response.
+
 ### v1.7.1
 
 - Fixed Great Vault world-content weekly objective bootstrapping so current-week delve progress is not zeroed when tracking starts mid-week.
