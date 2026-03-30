@@ -77,30 +77,27 @@ function preparednessTierDisplay(filled: number | null, total: number | null): {
   return { label: 'D Tier', color: '#ffffff' };
 }
 
-function crestSortValue(raider: (typeof sortedRaiders)[number]): number {
+function crestTotalValue(raider: (typeof sortedRaiders)[number]): number | null {
   const adventurer = Math.max(0, raider.adventurerCrests ?? 0);
   const veteran = Math.max(0, raider.veteranCrests ?? 0);
   const champion = Math.max(0, raider.championCrests ?? 0);
   const hero = Math.max(0, raider.heroCrests ?? 0);
   const myth = Math.max(0, raider.mythCrests ?? 0);
 
-  const highestTier =
-    myth > 0 ? 5 :
-    hero > 0 ? 4 :
-    champion > 0 ? 3 :
-    veteran > 0 ? 2 :
-    adventurer > 0 ? 1 :
-    0;
+  const hasAnyValue =
+    raider.adventurerCrests !== null ||
+    raider.veteranCrests !== null ||
+    raider.championCrests !== null ||
+    raider.heroCrests !== null ||
+    raider.mythCrests !== null;
+  if (!hasAnyValue) return null;
 
-  // Sort by best tier first, then use per-tier counts as deterministic tie breakers.
-  return (
-    highestTier * 1_000_000 +
-    myth * 10_000 +
-    hero * 1_000 +
-    champion * 100 +
-    veteran * 10 +
-    adventurer
-  );
+  return adventurer + veteran + champion + hero + myth;
+}
+
+function crestSortValue(raider: (typeof sortedRaiders)[number]): number {
+  const total = crestTotalValue(raider);
+  return total ?? -1;
 }
 
 function crestColor(label: string): string {
@@ -167,15 +164,32 @@ const topSingleTarget = sortedRaiders.reduce((best, raider) =>
   (raider.singleTargetDps ?? -1) > (best?.singleTargetDps ?? -1) ? raider : best,
   null as (typeof sortedRaiders)[number] | null
 );
+const crestCandidates = sortedRaiders.filter((raider) => crestTotalValue(raider) !== null);
+const topCrests = crestCandidates.reduce(
+  (best, raider) => ((crestTotalValue(raider) ?? -1) > (best ? (crestTotalValue(best) ?? -1) : -1) ? raider : best),
+  null as (typeof sortedRaiders)[number] | null
+);
+const missingUpgradeCandidates = sortedRaiders.filter(
+  (raider) => raider.totalUpgradesMissing !== null && raider.totalUpgradesMissing !== undefined
+);
+const fewestMissingUpgrades = missingUpgradeCandidates.reduce(
+  (best, raider) => ((raider.totalUpgradesMissing ?? Number.POSITIVE_INFINITY) < (best?.totalUpgradesMissing ?? Number.POSITIVE_INFINITY) ? raider : best),
+  null as (typeof sortedRaiders)[number] | null
+);
+const topMplusTotal = sortedRaiders.reduce((best, raider) =>
+  (raider.mythicPlusRunCount ?? -1) > (best?.mythicPlusRunCount ?? -1) ? raider : best,
+  null as (typeof sortedRaiders)[number] | null
+);
+const topMplusCurrent = sortedRaiders.reduce((best, raider) =>
+  (raider.mythicPlusWeeklyRuns ?? -1) > (best?.mythicPlusWeeklyRuns ?? -1) ? raider : best,
+  null as (typeof sortedRaiders)[number] | null
+);
+const topMplusLast = sortedRaiders.reduce((best, raider) =>
+  (raider.mythicPlusPrevWeeklyRuns ?? -1) > (best?.mythicPlusPrevWeeklyRuns ?? -1) ? raider : best,
+  null as (typeof sortedRaiders)[number] | null
+);
 
 const spotlightCards = [
-  {
-    label: 'Tracked Raiders',
-    icon: 'lucide:users-round',
-    value: String(totalMembers),
-    detail: `${readyCount} with data`,
-    className: '',
-  },
   {
     label: 'Highest Item Level',
     icon: 'lucide:shield',
@@ -199,7 +213,47 @@ const spotlightCards = [
     detail: topMythicScore?.name ?? '—',
     className: topMythicScore?.className ?? '',
   },
+  {
+    label: 'Most Crests',
+    icon: 'lucide:gem',
+    value: topCrests ? (crestTotalValue(topCrests) ?? 0).toLocaleString() : '—',
+    detail: topCrests?.name ?? '—',
+    className: topCrests?.className ?? '',
+  },
+  {
+    label: 'Fewest Missing Upgrades',
+    icon: 'lucide:wrench',
+    value: fewestMissingUpgrades?.totalUpgradesMissing !== null && fewestMissingUpgrades?.totalUpgradesMissing !== undefined
+      ? fewestMissingUpgrades.totalUpgradesMissing.toLocaleString()
+      : '—',
+    detail: fewestMissingUpgrades?.name ?? '—',
+    className: fewestMissingUpgrades?.className ?? '',
+  },
 ];
+
+const mplusWinnerData = {
+  total: {
+    value: topMplusTotal?.mythicPlusRunCount !== null && topMplusTotal?.mythicPlusRunCount !== undefined
+      ? topMplusTotal.mythicPlusRunCount.toLocaleString()
+      : '—',
+    name: topMplusTotal?.name ?? '—',
+    color: topMplusTotal?.className ? classColor(topMplusTotal.className) : '#d8e2e8',
+  },
+  current: {
+    value: topMplusCurrent?.mythicPlusWeeklyRuns !== null && topMplusCurrent?.mythicPlusWeeklyRuns !== undefined
+      ? topMplusCurrent.mythicPlusWeeklyRuns.toLocaleString()
+      : '—',
+    name: topMplusCurrent?.name ?? '—',
+    color: topMplusCurrent?.className ? classColor(topMplusCurrent.className) : '#d8e2e8',
+  },
+  last: {
+    value: topMplusLast?.mythicPlusPrevWeeklyRuns !== null && topMplusLast?.mythicPlusPrevWeeklyRuns !== undefined
+      ? topMplusLast.mythicPlusPrevWeeklyRuns.toLocaleString()
+      : '—',
+    name: topMplusLast?.name ?? '—',
+    color: topMplusLast?.className ? classColor(topMplusLast.className) : '#d8e2e8',
+  },
+};
 ---
 
 <Layout title="The Hidden Lodge | Raiders" description="Guild-member view backed by cached Blizzard character-profile data for roster-team members.">
@@ -221,6 +275,34 @@ const spotlightCards = [
         </article>
       );
     })}
+
+    <article
+      class="spotlight-card"
+      id="mplus-winner-card"
+      data-total-value={mplusWinnerData.total.value}
+      data-total-name={mplusWinnerData.total.name}
+      data-total-color={mplusWinnerData.total.color}
+      data-current-value={mplusWinnerData.current.value}
+      data-current-name={mplusWinnerData.current.name}
+      data-current-color={mplusWinnerData.current.color}
+      data-last-value={mplusWinnerData.last.value}
+      data-last-name={mplusWinnerData.last.name}
+      data-last-color={mplusWinnerData.last.color}
+    >
+      <div class="mplus-winner-topline">
+        <header class="spotlight-header">
+          <Icon name="lucide:medal" class="spotlight-icon" aria-hidden="true" />
+          <span class="spotlight-label">M+ Leader</span>
+        </header>
+        <select id="spotlight-mplus-select" class="spotlight-metric-select" aria-label="Select M plus winner metric">
+          <option value="total" selected>Total</option>
+          <option value="current">This Week</option>
+          <option value="last">Last Week</option>
+        </select>
+      </div>
+      <p class="spotlight-value" id="mplus-winner-value">{mplusWinnerData.total.value}</p>
+      <p class="spotlight-name" id="mplus-winner-name" style={`color: ${mplusWinnerData.total.color}`}>{mplusWinnerData.total.name}</p>
+    </article>
   </section>
 
   <section class="panel">
@@ -269,10 +351,20 @@ const spotlightCards = [
             <th><button class="sort-btn" type="button" data-sort-key="equippedItemLevel">iLvl</button></th>
             <th><button class="sort-btn" type="button" data-sort-key="singleTargetDps">Sim DPS</button></th>
             <th><button class="sort-btn" type="button" data-sort-key="mythicScore">M+ Score</button></th>
+            <th>
+              <div class="metric-header">
+                <button class="sort-btn" type="button" data-sort-key="mplusMetric" data-tooltip="M+ metric column. Use the selector to switch between Total, This Week, and Last Week values; sorting follows the selected metric." aria-label="M plus metric column with selector for total, this week, and last week. Sorting follows the selected metric.">M+ <Icon name="lucide:info" class="col-help-icon" aria-hidden="true" /></button>
+                <select id="mplus-metric-select" class="metric-select" aria-label="Select which M plus metric to display">
+                  <option value="total" selected>Total</option>
+                  <option value="current">This Week</option>
+                  <option value="last">Last Week</option>
+                </select>
+              </div>
+            </th>
             <th><button class="sort-btn" type="button" data-sort-key="tierPiecesEquipped">Tier</button></th>
-            <th><button class="sort-btn" type="button" data-sort-key="crestSort">Crests Earned</button></th>
+            <th><button class="sort-btn" type="button" data-sort-key="crestSort" data-tooltip="Total crests across all types (Adventurer + Veteran + Champion + Hero + Myth). Hover a crest total in the table to see the color-coded type breakdown." aria-label="Crests total across all crest types. Hover a crest total in the table to see the color-coded type breakdown.">Crests <Icon name="lucide:info" class="col-help-icon" aria-hidden="true" /></button></th>
             <th><button class="sort-btn" type="button" data-sort-key="totalUpgradesMissing">Missing Upgrades</button></th>
-            <th><button class="sort-btn" type="button" data-sort-key="preparednessScore" data-tooltip="Preparedness = 2-week rolling average of (Socketed Gems + Enchanted Slots) / (Total Sockets + Enchantable Slots). Falls back to current snapshot until history accumulates. Tiers: S = 100%, A >= 85%, B >= 70%, C >= 40%, D < 40%." aria-label="Preparedness. Based on a 2-week rolling average of gem and enchant coverage. Formula: (Socketed Gems + Enchanted Slots) / (Total Sockets + Enchantable Slots). Tiers: S equals 100 percent, A 85 percent or higher, B 70 percent or higher, C 40 percent or higher, D below 40 percent.">Preparedness</button></th>
+            <th><button class="sort-btn" type="button" data-sort-key="preparednessScore" data-tooltip="Preparedness = 2-week rolling average of (Socketed Gems + Enchanted Slots) / (Total Sockets + Enchantable Slots). Falls back to current snapshot until history accumulates. Tiers: S = 100%, A >= 85%, B >= 70%, C >= 40%, D < 40%." aria-label="Preparedness. Based on a 2-week rolling average of gem and enchant coverage. Formula: (Socketed Gems + Enchanted Slots) / (Total Sockets + Enchantable Slots). Tiers: S equals 100 percent, A 85 percent or higher, B 70 percent or higher, C 40 percent or higher, D below 40 percent.">Preparedness <Icon name="lucide:info" class="col-help-icon" aria-hidden="true" /></button></th>
           </tr>
         </thead>
         <tbody>
@@ -290,6 +382,9 @@ const spotlightCards = [
                 data-equipped-item-level={String(raider.equippedItemLevel ?? -1)}
                 data-raid-progress-kills={String(raider.raidProgressKills ?? -1)}
                 data-mythic-score={String(raider.mythicScore ?? -1)}
+                data-mythic-plus-run-count={String(raider.mythicPlusRunCount ?? -1)}
+                data-mythic-plus-weekly-runs={String(raider.mythicPlusWeeklyRuns ?? -1)}
+                data-mythic-plus-prev-weekly-runs={String(raider.mythicPlusPrevWeeklyRuns ?? -1)}
                 data-single-target-dps={String(raider.singleTargetDps ?? -1)}
                 data-tier-pieces-equipped={String(raider.tierPiecesEquipped ?? -1)}
                 data-crest-sort={String(crestSortValue(raider))}
@@ -333,19 +428,26 @@ const spotlightCards = [
                 </td>
                 <td>{raider.singleTargetDps ? raider.singleTargetDps.toLocaleString(undefined, { maximumFractionDigits: 0 }) : '—'}</td>
                 <td>{raider.mythicScore ? raider.mythicScore.toLocaleString(undefined, { maximumFractionDigits: 0 }) : '—'}</td>
+                <td class="mplus-cell" data-mplus-cell>{raider.mythicPlusRunCount !== null ? raider.mythicPlusRunCount.toLocaleString() : '—'}</td>
                 <td>{raider.tierPiecesEquipped ?? '—'}</td>
                 <td>
-                  <span class="crest-summary" title={`Adventurer ${raider.adventurerCrests ?? '—'}, Veteran ${raider.veteranCrests ?? '—'}, Champion ${raider.championCrests ?? '—'}, Hero ${raider.heroCrests ?? '—'}, Myth ${raider.mythCrests ?? '—'}`}>
-                    {crestSummaryParts(raider).length > 0 ? (
-                      crestSummaryParts(raider).map((part) => (
-                        <span class="crest-token" style={`color: ${crestColor(part.label)}`}>
-                          {part.label}:{part.value}
-                        </span>
-                      ))
-                    ) : (
-                      '—'
-                    )}
-                  </span>
+                  {crestTotalValue(raider) !== null ? (
+                    <span
+                      class="crest-total"
+                      title={`Adventurer: ${raider.adventurerCrests ?? 0}, Veteran: ${raider.veteranCrests ?? 0}, Champion: ${raider.championCrests ?? 0}, Hero: ${raider.heroCrests ?? 0}, Myth: ${raider.mythCrests ?? 0}`}
+                    >
+                      {crestTotalValue(raider)}
+                      <span class="crest-tooltip" role="tooltip" aria-hidden="true">
+                        <span class="crest-token crest-token-a">A: {raider.adventurerCrests ?? 0}</span>
+                        <span class="crest-token crest-token-v">V: {raider.veteranCrests ?? 0}</span>
+                        <span class="crest-token crest-token-c">C: {raider.championCrests ?? 0}</span>
+                        <span class="crest-token crest-token-h">H: {raider.heroCrests ?? 0}</span>
+                        <span class="crest-token crest-token-m">M: {raider.mythCrests ?? 0}</span>
+                      </span>
+                    </span>
+                  ) : (
+                    '—'
+                  )}
                 </td>
                 <td>{raider.totalUpgradesMissing ?? '—'}</td>
                 <td><span class="score-val" style={`color: ${preparednessTier.color}`}>{preparednessTier.label}</span></td>
@@ -355,6 +457,11 @@ const spotlightCards = [
         </tbody>
       </table>
     </div>
+    <p class="mplus-metric-note">
+      M+ values are best-effort estimates from Blizzard and Raider.IO APIs. Weekly values can undercount when profile run history is capped.
+      See
+      <a href="https://support.raider.io/kb/frequently-asked-questions/how-does-the-mythic-plus-leaderboard-slash-api-capacity-work" target="_blank" rel="noopener noreferrer">Raider.IO API capacity FAQ</a>.
+    </p>
   </section>
 </Layout>
 
@@ -370,6 +477,11 @@ const spotlightCards = [
   const searchInput = document.querySelector<HTMLInputElement>('#raiders-search');
   const classFilter = document.getElementById('raiders-class-filter') as unknown as HTMLSelectElement | null;
   const teamFilter = document.getElementById('raiders-team-filter') as unknown as HTMLSelectElement | null;
+  const mplusMetricSelect = document.getElementById('mplus-metric-select') as unknown as HTMLSelectElement | null;
+  const mplusWinnerSelect = document.getElementById('spotlight-mplus-select') as unknown as HTMLSelectElement | null;
+  const mplusWinnerCard = document.getElementById('mplus-winner-card') as HTMLElement | null;
+  const mplusWinnerValue = document.getElementById('mplus-winner-value') as HTMLParagraphElement | null;
+  const mplusWinnerName = document.getElementById('mplus-winner-name') as HTMLParagraphElement | null;
   const countLabel = document.querySelector<HTMLParagraphElement>('#raiders-count');
   const table = document.querySelector<HTMLTableElement>('#raiders-table');
   const tableBody = table?.querySelector('tbody');
@@ -377,11 +489,63 @@ const spotlightCards = [
 
   let sortKey = 'equippedItemLevel';
   let sortDirection = 'desc';
+  let mplusMetric: 'total' | 'current' | 'last' = 'total';
 
   const compareText = (a: string, b: string) => a.localeCompare(b, undefined, { sensitivity: 'base' });
 
+  function getMplusDatasetKey(): 'mythicPlusRunCount' | 'mythicPlusWeeklyRuns' | 'mythicPlusPrevWeeklyRuns' {
+    if (mplusMetric === 'current') return 'mythicPlusWeeklyRuns';
+    if (mplusMetric === 'last') return 'mythicPlusPrevWeeklyRuns';
+    return 'mythicPlusRunCount';
+  }
+
+  function formatMplusValue(value: number): string {
+    return value >= 0 ? value.toLocaleString() : '—';
+  }
+
+  function syncMplusWinnerCard() {
+    if (!mplusWinnerCard || !mplusWinnerValue || !mplusWinnerName) return;
+
+    const prefix = mplusMetric;
+    const value = mplusWinnerCard.dataset[`${prefix}Value`] ?? '—';
+    const name = mplusWinnerCard.dataset[`${prefix}Name`] ?? '—';
+    const color = mplusWinnerCard.dataset[`${prefix}Color`] ?? '#d8e2e8';
+
+    mplusWinnerValue.textContent = value;
+    mplusWinnerName.textContent = name;
+    mplusWinnerName.style.color = color;
+  }
+
+  function syncMplusSelectors() {
+    if (mplusMetricSelect) mplusMetricSelect.value = mplusMetric;
+    if (mplusWinnerSelect) mplusWinnerSelect.value = mplusMetric;
+  }
+
+  function setMplusMetric(nextMetric: string) {
+    mplusMetric = nextMetric === 'current' || nextMetric === 'last' ? nextMetric : 'total';
+    currentPage = 1;
+    syncMplusSelectors();
+    syncMplusWinnerCard();
+    applyFiltersAndSort();
+  }
+
+  function syncMplusCells() {
+    if (!tableBody) return;
+    const metricKey = getMplusDatasetKey();
+    const rows = [...tableBody.querySelectorAll('tr')];
+
+    rows.forEach((row) => {
+      const cell = row.querySelector<HTMLElement>('[data-mplus-cell]');
+      if (!cell) return;
+      const metricValue = Number(row.dataset[metricKey] ?? -1);
+      cell.textContent = formatMplusValue(metricValue);
+    });
+  }
+
   function applyFiltersAndSort() {
     if (!tableBody) return;
+
+    syncMplusCells();
 
     const query = searchInput?.value.trim().toLowerCase() ?? '';
     const selectedClass = classFilter?.value ?? 'all';
@@ -403,6 +567,14 @@ const spotlightCards = [
     const numericKeys = new Set(['equippedItemLevel', 'raidProgressKills', 'mythicScore', 'singleTargetDps', 'tierPiecesEquipped', 'crestSort', 'totalUpgradesMissing', 'preparednessScore']);
 
     visibleRows.sort((rowA, rowB) => {
+      if (sortKey === 'mplusMetric') {
+        const metricKey = getMplusDatasetKey();
+        const valueA = Number(rowA.dataset[metricKey] ?? -1);
+        const valueB = Number(rowB.dataset[metricKey] ?? -1);
+        const order = valueA - valueB;
+        return sortDirection === 'asc' ? order : order * -1;
+      }
+
       const toAttr = (key: string) => key.replace(/[A-Z]/g, (char) => `-${char.toLowerCase()}`);
       const valueA = rowA.dataset[toAttr(sortKey)] ?? rowA.dataset[sortKey] ?? '';
       const valueB = rowB.dataset[toAttr(sortKey)] ?? rowB.dataset[sortKey] ?? '';
@@ -469,6 +641,14 @@ const spotlightCards = [
     applyFiltersAndSort();
   });
 
+  mplusMetricSelect?.addEventListener('change', () => {
+    setMplusMetric(mplusMetricSelect.value);
+  });
+
+  mplusWinnerSelect?.addEventListener('change', () => {
+    setMplusMetric(mplusWinnerSelect.value);
+  });
+
   sortButtons.forEach((button) => {
     button.addEventListener('click', () => {
       const nextKey = button.dataset.sortKey;
@@ -485,6 +665,8 @@ const spotlightCards = [
     });
   });
 
+  syncMplusSelectors();
+  syncMplusWinnerCard();
   applyFiltersAndSort();
 
   // Make entire rows clickable, but let clicks on existing links/buttons pass through
@@ -520,12 +702,59 @@ const spotlightCards = [
     box-shadow: 0 14px 28px rgba(0, 0, 0, 0.22);
   }
 
-  .cache-panel {
-    padding-block: 0.85rem;
+  .crest-total {
+    position: relative;
+    display: inline-block;
+    border-bottom: 1px dotted rgba(214, 176, 106, 0.45);
+    cursor: help;
   }
 
-  .panel-text {
-    margin: 0.75rem 0 0;
+  .crest-tooltip {
+    display: none;
+    position: absolute;
+    left: 50%;
+    transform: translateX(-50%);
+    bottom: calc(100% + 0.35rem);
+    z-index: 30;
+    width: max-content;
+    max-width: min(36rem, 82vw);
+    white-space: nowrap;
+    padding: 0.4rem 0.55rem;
+    border-radius: 0.42rem;
+    border: 1px solid rgba(214, 176, 106, 0.45);
+    background: rgba(7, 14, 22, 0.97);
+    color: #d8e2e8;
+    font-size: 0.86rem;
+    line-height: 1.35;
+    box-shadow: 0 10px 22px rgba(0, 0, 0, 0.38);
+    pointer-events: none;
+    gap: 0.45rem;
+    align-items: center;
+  }
+
+  .crest-total:hover .crest-tooltip,
+  .crest-total:focus-visible .crest-tooltip {
+    display: inline-flex;
+  }
+
+  .crest-token-a {
+    color: #ffffff;
+  }
+
+  .crest-token-v {
+    color: #1eff00;
+  }
+
+  .crest-token-c {
+    color: #0070dd;
+  }
+
+  .crest-token-h {
+    color: #a335ee;
+  }
+
+  .crest-token-m {
+    color: #ff8000;
   }
 
   .error-text {
@@ -580,9 +809,29 @@ const spotlightCards = [
 
   .spotlights {
     display: grid;
-    grid-template-columns: repeat(4, minmax(0, 1fr));
+    grid-template-columns: repeat(3, minmax(0, 1fr));
     gap: 0.75rem;
     margin-top: 1rem;
+  }
+
+  .mplus-winner-topline {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 0.5rem;
+  }
+
+  .spotlight-metric-select {
+    width: fit-content;
+    border: 1px solid rgba(214, 176, 106, 0.4);
+    border-radius: 0.4rem;
+    background: rgba(7, 14, 22, 0.9);
+    color: #d8e2e8;
+    padding: 0.22rem 0.42rem;
+    font-size: 0.74rem;
+    font-weight: 600;
+    letter-spacing: 0.03em;
+    text-transform: uppercase;
   }
 
   .spotlight-card {
@@ -633,6 +882,23 @@ const spotlightCards = [
     border: 1px solid rgba(214, 176, 106, 0.24);
     border-radius: 0.65rem;
     background: rgba(5, 10, 16, 0.55);
+  }
+
+  .mplus-metric-note {
+    margin: 0.7rem 0 0;
+    color: #9fb5c2;
+    font-size: 0.8rem;
+    line-height: 1.4;
+  }
+
+  .mplus-metric-note a {
+    color: #f3cf94;
+    text-decoration: underline;
+    text-underline-offset: 2px;
+  }
+
+  .mplus-metric-note a:hover {
+    color: #ffe1b0;
   }
 
   .pagination-controls {
@@ -723,6 +989,36 @@ const spotlightCards = [
     cursor: pointer;
     padding: 0;
     position: relative;
+  }
+
+  .metric-header {
+    display: flex;
+    align-items: center;
+    gap: 0.45rem;
+  }
+
+  .metric-header .sort-btn {
+    width: auto;
+  }
+
+  .metric-select {
+    border: 1px solid rgba(214, 176, 106, 0.4);
+    border-radius: 0.42rem;
+    background: rgba(7, 14, 22, 0.92);
+    color: #d8e2e8;
+    padding: 0.16rem 0.35rem;
+    font-size: 0.72rem;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    text-transform: uppercase;
+  }
+
+  .col-help-icon {
+    width: 0.72rem;
+    height: 0.72rem;
+    margin-left: 0.2rem;
+    vertical-align: -0.08rem;
+    opacity: 0.9;
   }
 
   .sort-btn[data-tooltip]:hover::before,
@@ -914,6 +1210,10 @@ const spotlightCards = [
 
   @media (max-width: 1000px) {
     .controls {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .spotlights {
       grid-template-columns: repeat(2, minmax(0, 1fr));
     }
 

@@ -75,13 +75,72 @@ function crestColor(label: string): string {
   return '#ffffff';
 }
 
+function crestShortLabel(label: string): string {
+  if (label === 'Adventurer') return 'Adv';
+  if (label === 'Veteran') return 'Vet';
+  if (label === 'Champion') return 'Champ';
+  if (label === 'Hero') return 'Hero';
+  if (label === 'Myth') return 'Myth';
+  return label;
+}
+
 const crestCards = [
   { label: 'Adventurer', value: raider.adventurerCrests },
   { label: 'Veteran', value: raider.veteranCrests },
   { label: 'Champion', value: raider.championCrests },
   { label: 'Hero', value: raider.heroCrests },
   { label: 'Myth', value: raider.mythCrests },
-].filter((entry) => entry.value !== null);
+];
+
+const crestTotal = [
+  raider.adventurerCrests,
+  raider.veteranCrests,
+  raider.championCrests,
+  raider.heroCrests,
+  raider.mythCrests,
+].some((value) => value !== null)
+  ? Math.max(0, raider.adventurerCrests ?? 0)
+    + Math.max(0, raider.veteranCrests ?? 0)
+    + Math.max(0, raider.championCrests ?? 0)
+    + Math.max(0, raider.heroCrests ?? 0)
+    + Math.max(0, raider.mythCrests ?? 0)
+  : null;
+
+function preparednessTotals(record: NonNullable<typeof raider>) {
+  const socketedGems = record.avg30dSocketedGems ?? record.socketedGems;
+  const totalSockets = record.avg30dTotalSockets ?? record.totalSockets;
+  const enchantedSlots = record.avg30dEnchantedSlots ?? record.enchantedSlots;
+  const enchantableSlots = record.avg30dEnchantableSlots ?? record.enchantableSlots;
+
+  if (
+    socketedGems === null ||
+    totalSockets === null ||
+    enchantedSlots === null ||
+    enchantableSlots === null
+  ) {
+    return { filled: null, total: null };
+  }
+
+  return {
+    filled: socketedGems + enchantedSlots,
+    total: totalSockets + enchantableSlots,
+  };
+}
+
+function preparednessTierDisplay(filled: number | null, total: number | null): { label: string; color: string } {
+  if (filled === null || total === null) return { label: '—', color: '#ffffff' };
+  if (total === 0) return { label: 'N/A', color: '#ffffff' };
+
+  const pct = filled / total;
+  if (pct >= 1) return { label: 'S Tier', color: '#ff8000' };
+  if (pct >= 0.85) return { label: 'A Tier', color: '#a335ee' };
+  if (pct >= 0.7) return { label: 'B Tier', color: '#0070dd' };
+  if (pct >= 0.4) return { label: 'C Tier', color: '#1eff00' };
+  return { label: 'D Tier', color: '#ffffff' };
+}
+
+const preparedness = preparednessTotals(raider);
+const preparednessTier = preparednessTierDisplay(preparedness.filled, preparedness.total);
 
 interface RaidProgressMatrixRow {
   mode: 'L' | 'N' | 'H' | 'M';
@@ -479,6 +538,31 @@ function gemAffixState(item: (typeof gear)[number] | undefined): { missing: bool
             )}
           </div>
         </div>
+
+        <section class="raid-progress-panel panel" aria-label="Raid progress">
+          <h2 class="raid-progress-title">
+            <Icon name="lucide:swords" class="raid-progress-icon" aria-hidden="true" />
+            Raid Progress
+          </h2>
+          {raidProgressMatrix ? (
+            <div class="raid-progress-grid-lg" style={`--raid-cols: ${raidProgressMatrix.headers.length}`}>
+              {raidProgressMatrix.headers.map((header, index) => (
+                <div class:list={['raid-grid-lg-cell', 'raid-grid-lg-head', { 'starts-col-two': index === 0 }]}>{fullRaidName(header)}</div>
+              ))}
+
+              {raidProgressMatrix.rows.map((row) => (
+                <>
+                  <div class="raid-grid-lg-cell mode-col">{fullDifficultyName(row.mode)}</div>
+                  {row.cells.map((cell) => (
+                    <div class="raid-grid-lg-cell">{cell}</div>
+                  ))}
+                </>
+              ))}
+            </div>
+          ) : (
+            <p class="raid-progress-empty">No tracked raid progress available yet.</p>
+          )}
+        </section>
       </div>
     )}
     <div class="stats-col">
@@ -493,10 +577,12 @@ function gemAffixState(item: (typeof gear)[number] | undefined): { missing: bool
 
         <div class="stat-card">
           <div class="stat-label">
-            <Icon name="lucide:layers" class="stat-icon" aria-hidden="true" />
-            Average Item Level
+            <Icon name="lucide:crosshair" class="stat-icon" aria-hidden="true" />
+            Sim DPS
           </div>
-          <div class="stat-value">{raider.averageItemLevel ?? '—'}</div>
+          <div class="stat-value">
+            {raider.singleTargetDps ? raider.singleTargetDps.toLocaleString(undefined, { maximumFractionDigits: 0 }) : '—'}
+          </div>
         </div>
 
         <div class="stat-card">
@@ -511,6 +597,30 @@ function gemAffixState(item: (typeof gear)[number] | undefined): { missing: bool
 
         <div class="stat-card">
           <div class="stat-label">
+            <Icon name="lucide:hash" class="stat-icon" aria-hidden="true" />
+            M+ Total
+          </div>
+          <div class="stat-value">{raider.mythicPlusRunCount !== null ? raider.mythicPlusRunCount.toLocaleString() : '—'}</div>
+        </div>
+
+        <div class="stat-card">
+          <div class="stat-label">
+            <Icon name="lucide:calendar-check" class="stat-icon" aria-hidden="true" />
+            M+ This Week
+          </div>
+          <div class="stat-value">{raider.mythicPlusWeeklyRuns !== null ? raider.mythicPlusWeeklyRuns.toLocaleString() : '—'}</div>
+        </div>
+
+        <div class="stat-card">
+          <div class="stat-label">
+            <Icon name="lucide:calendar-range" class="stat-icon" aria-hidden="true" />
+            M+ Last Week
+          </div>
+          <div class="stat-value">{raider.mythicPlusPrevWeeklyRuns !== null ? raider.mythicPlusPrevWeeklyRuns.toLocaleString() : '—'}</div>
+        </div>
+
+        <div class="stat-card">
+          <div class="stat-label">
             <Icon name="lucide:star" class="stat-icon" aria-hidden="true" />
             Tier Pieces
           </div>
@@ -519,56 +629,57 @@ function gemAffixState(item: (typeof gear)[number] | undefined): { missing: bool
 
         <div class="stat-card">
           <div class="stat-label">
+            <Icon name="lucide:coins" class="stat-icon" aria-hidden="true" />
+            <a href="#crests-earned-title" class="stat-anchor">Crests</a>
+          </div>
+          <div class="stat-value">{crestTotal !== null ? crestTotal.toLocaleString() : '—'}</div>
+        </div>
+
+        <div class="stat-card">
+          <div class="stat-label">
             <Icon name="lucide:arrow-up-circle" class="stat-icon" aria-hidden="true" />
-            Missing Crest Upgrades
+            Missing Upgrades
           </div>
           <div class="stat-value">{raider.totalUpgradesMissing ?? '—'}</div>
         </div>
 
+        <div class="stat-card">
+          <div class="stat-label">
+            <Icon name="lucide:badge-check" class="stat-icon" aria-hidden="true" />
+            Preparedness
+          </div>
+          <div class="stat-value" style={`color: ${preparednessTier.color}`}>{preparednessTier.label}</div>
+        </div>
+
+        <div class="stat-card">
+          <div class="stat-label">
+            <Icon name="lucide:layers" class="stat-icon" aria-hidden="true" />
+            Average Item Level
+          </div>
+          <div class="stat-value">{raider.averageItemLevel ?? '—'}</div>
+        </div>
+
       </div>
 
+      <p class="mplus-metric-note">
+        M+ totals and weekly values are best-effort estimates from Blizzard and Raider.IO APIs. Weekly values can undercount when Raider.IO profile history is capacity-limited.
+        See
+        <a href="https://support.raider.io/kb/frequently-asked-questions/how-does-the-mythic-plus-leaderboard-slash-api-capacity-work" target="_blank" rel="noopener noreferrer">Raider.IO API capacity FAQ</a>.
+      </p>
+
       <section class="raid-progress-panel panel" aria-label="Crests earned">
-        <h2 class="raid-progress-title">
+        <h2 id="crests-earned-title" class="raid-progress-title">
           <Icon name="lucide:coins" class="raid-progress-icon" aria-hidden="true" />
           Crests Earned
         </h2>
-        {crestCards.length > 0 ? (
-          <div class="crest-grid">
-            {crestCards.map((crest) => (
-              <div class="crest-cell">
-                <span class="crest-name" style={`color: ${crestColor(crest.label)}`}>{crest.label}</span>
-                <strong class="crest-value" style={`color: ${crestColor(crest.label)}`}>{crest.value}</strong>
-              </div>
-            ))}
-          </div>
-        ) : (
-          <p class="raid-progress-empty">No crest data available yet.</p>
-        )}
-      </section>
-
-      <section class="raid-progress-panel panel" aria-label="Raid progress">
-        <h2 class="raid-progress-title">
-          <Icon name="lucide:swords" class="raid-progress-icon" aria-hidden="true" />
-          Raid Progress
-        </h2>
-        {raidProgressMatrix ? (
-          <div class="raid-progress-grid-lg" style={`--raid-cols: ${raidProgressMatrix.headers.length}`}>
-            {raidProgressMatrix.headers.map((header, index) => (
-              <div class:list={['raid-grid-lg-cell', 'raid-grid-lg-head', { 'starts-col-two': index === 0 }]}>{fullRaidName(header)}</div>
-            ))}
-
-            {raidProgressMatrix.rows.map((row) => (
-              <>
-                <div class="raid-grid-lg-cell mode-col">{fullDifficultyName(row.mode)}</div>
-                {row.cells.map((cell) => (
-                  <div class="raid-grid-lg-cell">{cell}</div>
-                ))}
-              </>
-            ))}
-          </div>
-        ) : (
-          <p class="raid-progress-empty">No tracked raid progress available yet.</p>
-        )}
+        <div class="crest-grid">
+          {crestCards.map((crest) => (
+            <div class="crest-cell">
+              <span class="crest-name" style={`color: ${crestColor(crest.label)}`} title={crest.label}>{crestShortLabel(crest.label)}</span>
+              <strong class="crest-value" style={`color: ${crestColor(crest.label)}`}>{crest.value ?? '—'}</strong>
+            </div>
+          ))}
+        </div>
       </section>
 
       <details class="preparedness-history-panel panel">
@@ -791,6 +902,29 @@ function gemAffixState(item: (typeof gear)[number] | undefined): { missing: bool
     />
   </section>
 </Layout>
+
+<script>
+  document.addEventListener('click', (event) => {
+    const target = event.target as HTMLElement;
+    const link = target.closest<HTMLAnchorElement>('a.stat-anchor[href^="#"]');
+    if (!link) return;
+
+    const hash = link.getAttribute('href');
+    if (!hash || hash.length < 2) return;
+    const anchorTarget = document.querySelector<HTMLElement>(hash);
+    if (!anchorTarget) return;
+
+    event.preventDefault();
+
+    // Keep anchors below the sticky top nav.
+    const top = Math.max(0, anchorTarget.getBoundingClientRect().top + window.scrollY - 92);
+    window.scrollTo({ top, behavior: 'smooth' });
+
+    if (window.history?.replaceState) {
+      window.history.replaceState(null, '', hash);
+    }
+  });
+</script>
 
 <style>
   .back-link {
@@ -1257,12 +1391,41 @@ function gemAffixState(item: (typeof gear)[number] | undefined): { missing: bool
     flex-shrink: 0;
   }
 
+  .stat-anchor {
+    color: inherit;
+    text-decoration: underline;
+    text-underline-offset: 2px;
+    text-decoration-color: rgba(214, 176, 106, 0.55);
+  }
+
+  .stat-anchor:hover {
+    color: #f1d9a9;
+    text-decoration-color: currentColor;
+  }
+
   .stat-value {
     font-family: 'Cinzel', serif;
     font-size: clamp(1.2rem, 2.5vw, 1.7rem);
     font-weight: 700;
     color: #f1d9a9;
     line-height: 1;
+  }
+
+  .mplus-metric-note {
+    margin: 0.7rem 0 0.95rem;
+    color: #9fb5c2;
+    font-size: 0.8rem;
+    line-height: 1.4;
+  }
+
+  .mplus-metric-note a {
+    color: #f3cf94;
+    text-decoration: underline;
+    text-underline-offset: 2px;
+  }
+
+  .mplus-metric-note a:hover {
+    color: #ffe1b0;
   }
 
   .raid-progress-panel {
@@ -1342,7 +1505,7 @@ function gemAffixState(item: (typeof gear)[number] | undefined): { missing: bool
 
   .crest-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(8.5rem, 1fr));
+    grid-template-columns: repeat(5, minmax(0, 1fr));
     gap: 0.5rem;
   }
 
@@ -1646,6 +1809,10 @@ function gemAffixState(item: (typeof gear)[number] | undefined): { missing: bool
     .sync-info {
       padding-left: 0.85rem;
       padding-right: 0.85rem;
+  
+    #crests-earned-title {
+      scroll-margin-top: 7.5rem;
+    }
     }
 
     .full-body-col {

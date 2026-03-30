@@ -163,6 +163,7 @@ interface BlizzardAchievementStatisticsResponse {
 interface BlizzardAchievementStatisticsCategory {
   name?: string;
   statistics?: BlizzardAchievementStatistic[];
+  sub_categories?: BlizzardAchievementStatisticsCategory[];
 }
 
 interface BlizzardAchievementStatistic {
@@ -500,12 +501,24 @@ function extractCrestCounts(stats: BlizzardAchievementStatisticsResponse | null)
 // Sums the lifetime `quantity` for all Season 16 tracked dungeons across every
 // achievement statistics category. Used to compute weekly run deltas.
 function extractMythicPlusLifetimeTotal(stats: BlizzardAchievementStatisticsResponse | null): number {
-  let total = 0;
-  for (const category of stats?.categories ?? []) {
-    for (const stat of category.statistics ?? []) {
-      if (stat.id !== undefined && SEASON_16_MYTHIC_DUNGEON_STAT_IDS.has(stat.id)) {
-        total += Number(stat.quantity ?? 0);
+  const collectStatistics = (categories: BlizzardAchievementStatisticsCategory[] | undefined): BlizzardAchievementStatistic[] => {
+    if (!categories || categories.length === 0) return [];
+
+    const collected: BlizzardAchievementStatistic[] = [];
+    for (const category of categories) {
+      collected.push(...(category.statistics ?? []));
+      if (category.sub_categories?.length) {
+        collected.push(...collectStatistics(category.sub_categories));
       }
+    }
+
+    return collected;
+  };
+
+  let total = 0;
+  for (const stat of collectStatistics(stats?.categories)) {
+    if (stat.id !== undefined && SEASON_16_MYTHIC_DUNGEON_STAT_IDS.has(stat.id)) {
+      total += Number(stat.quantity ?? 0);
     }
   }
   return total;
@@ -743,6 +756,7 @@ async function enrichRaider(row: RaiderSourceRow, now: number, raidProgressTarge
   const socketCounts = countSockets(equippedItems);
   const enchantCounts = countEnchants(equippedItems);
   const crestCounts = extractCrestCounts(achievementStatistics);
+  const mythicPlusLifetimeTotal = extractMythicPlusLifetimeTotal(achievementStatistics);
   const raidProgress = extractRaidProgress(raidEncounters, raidProgressTarget);
   const totalUpgradesMissing = computeTotalUpgradesMissing(equippedItems);
 
@@ -763,14 +777,14 @@ async function enrichRaider(row: RaiderSourceRow, now: number, raidProgressTarge
     championCrests: crestCounts.championCrests,
     heroCrests: crestCounts.heroCrests,
     mythCrests: crestCounts.mythCrests,
-    mythicPlusRunCount: mythicPlusRunCount.total,
-    mythicPlusWeeklyRuns: null, // computed in update loop via Blizzard stat delta
+    mythicPlusRunCount: mythicPlusLifetimeTotal,
+    mythicPlusWeeklyRuns: mythicPlusRunCount.thisWeek,
     mythicPlusPrevWeeklyRuns: mythicPlusRunCount.lastWeek,
     mythicPlusSeasonRuns: null, // computed in update loop from old DB values
     mythicPlusVaultIlvl1: computeVaultIlvl(mythicPlusRunCount.thisWeekKeyLevels, 0),
     mythicPlusVaultIlvl2: computeVaultIlvl(mythicPlusRunCount.thisWeekKeyLevels, 3),
     mythicPlusVaultIlvl3: computeVaultIlvl(mythicPlusRunCount.thisWeekKeyLevels, 7),
-    mythicPlusLifetimeTotal: extractMythicPlusLifetimeTotal(achievementStatistics),
+    mythicPlusLifetimeTotal,
     totalUpgradesMissing,
     raidProgressRaidName: raidProgress.raidName,
     raidProgressLabel: raidProgress.label,
@@ -1260,24 +1274,43 @@ export async function refreshRaidersCache(
     // On weekly rollover: accumulate old weekly into season and reset the snapshot.
     const old = oldMythicMap.get(source.blizzard_char_id);
     const currentLifetime = detailed.mythicPlusLifetimeTotal;
+    const rioThisWeek = detailed.mythicPlusWeeklyRuns;
+    const rioLastWeek = detailed.mythicPlusPrevWeeklyRuns;
     let newSeasonRuns: number | null = old?.season ?? null;
     let newSnapshot: number | null = old?.snapshot ?? null;
     let newWeeklyRuns: number | null = null;
+    let newPrevWeeklyRuns: number | null = rioLastWeek;
 
     if (currentLifetime !== null) {
       if (old && old.syncedAt !== null && old.syncedAt < weeklyResetTs) {
         // New week detected: commit previous week's count into season and reset baseline.
         newSeasonRuns = (old.season ?? 0) + (old.weekly ?? 0);
-        newSnapshot = currentLifetime;
-        newWeeklyRuns = 0;
-      } else if (newSnapshot !== null) {
+        newPrevWeeklyRuns = old.weekly ?? rioLastWeek;
+
+        if (rioThisWeek !== null) {
+          newWeeklyRuns = rioThisWeek;
+          newSnapshot = Math.max(0, currentLifetime - newWeeklyRuns);
+        } else {
+          newSnapshot = currentLifetime;
+          newWeeklyRuns = 0;
+        }
+      } else if (newSnapshot !== null && newSnapshot > 0) {
         // Same week: delta from snapshot gives true run count (uncapped).
-        newWeeklyRuns = Math.max(0, currentLifetime - newSnapshot);
+        const snapshotDelta = Math.max(0, currentLifetime - newSnapshot);
+        newWeeklyRuns = rioThisWeek !== null ? Math.max(snapshotDelta, rioThisWeek) : snapshotDelta;
+      } else if (rioThisWeek !== null) {
+        // Use Raider.IO timestamp-based estimate if we don't yet have a valid baseline snapshot.
+        newWeeklyRuns = rioThisWeek;
+        newSnapshot = Math.max(0, currentLifetime - newWeeklyRuns);
       } else {
         // First capture ever: establish snapshot, weekly starts at 0.
         newSnapshot = currentLifetime;
         newWeeklyRuns = 0;
       }
+    } else {
+      // If Blizzard lifetime counters are unavailable, fall back entirely to Raider.IO estimates.
+      newWeeklyRuns = rioThisWeek;
+      newPrevWeeklyRuns = rioLastWeek;
     }
 
     await db
@@ -1332,7 +1365,7 @@ export async function refreshRaidersCache(
         detailed.mythCrests,
         detailed.mythicPlusRunCount,
         newWeeklyRuns,
-        detailed.mythicPlusPrevWeeklyRuns,
+        newPrevWeeklyRuns,
         newSeasonRuns,
         detailed.mythicPlusVaultIlvl1,
         detailed.mythicPlusVaultIlvl2,

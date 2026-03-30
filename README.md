@@ -6,6 +6,14 @@ Official guild website for The Hidden Lodge, a semi-hardcore AOTC/Mythic raiding
 
 The site combines public guild information, Blizzard-authenticated member profiles, cached roster and raider analytics views, curated resource links, a lore archive, and a guild officer admin area for day-to-day operations.
 
+## Latest Release
+
+### v1.5.19
+
+- Expanded Raiders analytics with improved Mythic+ metrics (total/this week/last week) and configurable table display.
+- Added new winner spotlight cards (M+ leader, most crests, fewest missing upgrades) and improved tooltip/help text.
+- Updated raider detail layout with table-order stat cards, crest total/deep-linking, and relocated Raid Progress under the character model.
+
 ## Quick Navigation
 
 - [Quick Start](#quick-start)
