@@ -366,13 +366,13 @@ const mplusWinnerData = {
           <span class="spotlight-label">M+ Leader</span>
         </header>
         <select id="spotlight-mplus-select" class="spotlight-metric-select" aria-label="Select M plus winner metric">
-          <option value="total" selected>Total</option>
-          <option value="current">This Week</option>
+          <option value="total">Total</option>
+          <option value="current" selected>This Week</option>
           <option value="last">Last Week</option>
         </select>
       </div>
-      <p class="spotlight-value" id="mplus-winner-value">{mplusWinnerData.total.value}</p>
-      <p class="spotlight-name" id="mplus-winner-name" style={`color: ${mplusWinnerData.total.color}`}>{mplusWinnerData.total.name}</p>
+      <p class="spotlight-value" id="mplus-winner-value">{mplusWinnerData.current.value}</p>
+      <p class="spotlight-name" id="mplus-winner-name" style={`color: ${mplusWinnerData.current.color}`}>{mplusWinnerData.current.name}</p>
     </article>
   </section>
 
@@ -426,8 +426,8 @@ const mplusWinnerData = {
               <div class="metric-header">
                 <button class="sort-btn" type="button" data-sort-key="mplusMetric" data-tooltip="M+ metric column. Use the selector to switch between Total, This Week, and Last Week values; sorting follows the selected metric." aria-label="M plus metric column with selector for total, this week, and last week. Sorting follows the selected metric.">M+ <Icon name="lucide:info" class="col-help-icon" aria-hidden="true" /></button>
                 <select id="mplus-metric-select" class="metric-select" aria-label="Select which M plus metric to display">
-                  <option value="total" selected>Total</option>
-                  <option value="current">This Week</option>
+                  <option value="total">Total</option>
+                  <option value="current" selected>This Week</option>
                   <option value="last">Last Week</option>
                 </select>
               </div>
@@ -502,7 +502,7 @@ const mplusWinnerData = {
                 </td>
                 <td>{raider.singleTargetDps ? raider.singleTargetDps.toLocaleString(undefined, { maximumFractionDigits: 0 }) : '—'}</td>
                 <td>{raider.mythicScore ? raider.mythicScore.toLocaleString(undefined, { maximumFractionDigits: 0 }) : '—'}</td>
-                <td class="mplus-cell" data-mplus-cell>{raider.mythicPlusRunCount !== null ? raider.mythicPlusRunCount.toLocaleString() : '—'}</td>
+                <td class="mplus-cell" data-mplus-cell>{raider.mythicPlusWeeklyRuns !== null ? raider.mythicPlusWeeklyRuns.toLocaleString() : '—'}</td>
                 <td>
                   <a href={`/raiders/${raider.blizzardCharId}`} class="vault-score-link" title="View exact score formula and weighting details on profile">
                     <span class="score-val" style={`color: ${vaultScore.color}`}>{vaultScore.score}</span>
@@ -568,7 +568,7 @@ const mplusWinnerData = {
 
   let sortKey = 'equippedItemLevel';
   let sortDirection = 'desc';
-  let mplusMetric: 'total' | 'current' | 'last' = 'total';
+  let mplusMetric: 'total' | 'current' | 'last' = 'current';
 
   const compareText = (a: string, b: string) => a.localeCompare(b, undefined, { sensitivity: 'base' });
 
