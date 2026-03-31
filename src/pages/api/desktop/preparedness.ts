@@ -6,6 +6,10 @@ import { isAuthorizedDesktopRequest } from '../../../lib/desktop-auth';
 
 const US_WEEKLY_RESET_HOUR_EASTERN = 10;
 const WEEK_SECONDS = 7 * 24 * 60 * 60;
+const GREAT_VAULT_DUNGEON_ILVL = new Map<number, number>([
+	[10, 272], [9, 269], [8, 269], [7, 269], [6, 266],
+	[5, 263], [4, 263], [3, 259], [2, 259],
+]);
 
 function easternUtcOffsetMinutes(atUtc: Date): number {
 	const parts = new Intl.DateTimeFormat('en-US', {
@@ -106,6 +110,9 @@ interface CharRow {
 	mythic_plus_vault_ilvl_3: number | null;
 	world_vault_weekly_objectives: number | null;
 	raid_progress_label: string | null;
+	prev_week_key_level_1: number | null;
+	prev_week_key_level_4: number | null;
+	prev_week_key_level_8: number | null;
 	raid_slot_1_ilvl: number | null;
 	raid_slot_2_ilvl: number | null;
 	raid_slot_3_ilvl: number | null;
@@ -113,6 +120,14 @@ interface CharRow {
 	dungeon_slot_2_ilvl: number | null;
 	dungeon_slot_3_ilvl: number | null;
 	world_slots_filled: number | null;
+}
+
+function dungeonVaultIlvlForKeystone(level: number | null): number | null {
+	if (level === null) return null;
+	const normalized = Math.floor(level);
+	if (!Number.isFinite(normalized) || normalized < 2) return null;
+	const capped = Math.min(normalized, 10);
+	return GREAT_VAULT_DUNGEON_ILVL.get(capped) ?? null;
 }
 
 function parseRaidVaultOptions(raidProgressLabel: string | null): [number | null, number | null, number | null] {
@@ -238,6 +253,7 @@ export async function GET(context: APIContext): Promise<Response> {
 	const targetLastWeekStartTs = isPostResetThisCalendarWeek(now)
 		? currentWeekStartTs - WEEK_SECONDS
 		: currentWeekStartTs;
+	const targetLastWeekEndTs = targetLastWeekStartTs + WEEK_SECONDS;
 
 	const result = await env.DB.prepare(`
 		SELECT
@@ -257,6 +273,36 @@ export async function GET(context: APIContext): Promise<Response> {
 			mc.mythic_plus_vault_ilvl_3,
 			mc.world_vault_weekly_objectives,
 			mc.raid_progress_label,
+			(
+				SELECT rk1.keystone_level
+				FROM raider_keystones rk1
+				WHERE rk1.blizzard_char_id = c.blizzard_char_id
+					AND rk1.completed_ts >= ?
+					AND rk1.completed_ts < ?
+					AND rk1.keystone_level IS NOT NULL
+				ORDER BY rk1.keystone_level DESC
+				LIMIT 1 OFFSET 0
+			) AS prev_week_key_level_1,
+			(
+				SELECT rk4.keystone_level
+				FROM raider_keystones rk4
+				WHERE rk4.blizzard_char_id = c.blizzard_char_id
+					AND rk4.completed_ts >= ?
+					AND rk4.completed_ts < ?
+					AND rk4.keystone_level IS NOT NULL
+				ORDER BY rk4.keystone_level DESC
+				LIMIT 1 OFFSET 3
+			) AS prev_week_key_level_4,
+			(
+				SELECT rk8.keystone_level
+				FROM raider_keystones rk8
+				WHERE rk8.blizzard_char_id = c.blizzard_char_id
+					AND rk8.completed_ts >= ?
+					AND rk8.completed_ts < ?
+					AND rk8.keystone_level IS NOT NULL
+				ORDER BY rk8.keystone_level DESC
+				LIMIT 1 OFFSET 7
+			) AS prev_week_key_level_8,
 			vh.raid_slot_1_ilvl,
 			vh.raid_slot_2_ilvl,
 			vh.raid_slot_3_ilvl,
@@ -276,7 +322,17 @@ export async function GET(context: APIContext): Promise<Response> {
 					AND vh2.week_start_ts <= ?
 			)
 		ORDER BY c.name ASC
-	`).bind(targetLastWeekStartTs).all<CharRow>();
+	`)
+		.bind(
+			targetLastWeekStartTs,
+			targetLastWeekEndTs,
+			targetLastWeekStartTs,
+			targetLastWeekEndTs,
+			targetLastWeekStartTs,
+			targetLastWeekEndTs,
+			targetLastWeekStartTs,
+		)
+		.all<CharRow>();
 
 	const entries = (result.results ?? []).map((char) => {
 		const hasLastWeekHistory =
@@ -294,13 +350,16 @@ export async function GET(context: APIContext): Promise<Response> {
 			&& char.details_synced_at < currentWeekStartTs;
 
 		const [cacheRaid1, cacheRaid2, cacheRaid3] = parseRaidVaultOptions(char.raid_progress_label);
+		const fallbackDungeon1 = dungeonVaultIlvlForKeystone(char.prev_week_key_level_1);
+		const fallbackDungeon2 = dungeonVaultIlvlForKeystone(char.prev_week_key_level_4);
+		const fallbackDungeon3 = dungeonVaultIlvlForKeystone(char.prev_week_key_level_8);
 		const effective = {
 			raid_slot_1_ilvl: char.raid_slot_1_ilvl ?? (canUsePreResetCache ? cacheRaid1 : null),
 			raid_slot_2_ilvl: char.raid_slot_2_ilvl ?? (canUsePreResetCache ? cacheRaid2 : null),
 			raid_slot_3_ilvl: char.raid_slot_3_ilvl ?? (canUsePreResetCache ? cacheRaid3 : null),
-			dungeon_slot_1_ilvl: char.dungeon_slot_1_ilvl ?? (canUsePreResetCache ? char.mythic_plus_vault_ilvl_1 : null),
-			dungeon_slot_2_ilvl: char.dungeon_slot_2_ilvl ?? (canUsePreResetCache ? char.mythic_plus_vault_ilvl_2 : null),
-			dungeon_slot_3_ilvl: char.dungeon_slot_3_ilvl ?? (canUsePreResetCache ? char.mythic_plus_vault_ilvl_3 : null),
+			dungeon_slot_1_ilvl: char.dungeon_slot_1_ilvl ?? fallbackDungeon1 ?? (canUsePreResetCache ? char.mythic_plus_vault_ilvl_1 : null),
+			dungeon_slot_2_ilvl: char.dungeon_slot_2_ilvl ?? fallbackDungeon2 ?? (canUsePreResetCache ? char.mythic_plus_vault_ilvl_2 : null),
+			dungeon_slot_3_ilvl: char.dungeon_slot_3_ilvl ?? fallbackDungeon3 ?? (canUsePreResetCache ? char.mythic_plus_vault_ilvl_3 : null),
 			world_slots_filled:
 				char.world_slots_filled
 				?? (canUsePreResetCache ? worldSlotsFromObjectives(char.world_vault_weekly_objectives) : null),
