@@ -221,7 +221,9 @@ export async function GET(context: APIContext): Promise<Response> {
 	const vaultHistoryByCharId = new Map<number, Awaited<ReturnType<typeof getVaultHistory>>[number] | null>();
 	await Promise.all((result.results ?? []).map(async (char) => {
 		const history = await getVaultHistory(char.blizzard_char_id, env.DB);
-		const targetRow = history.find((row) => row.weekStartTs === targetLastWeekStartTs) ?? null;
+		const targetRow = isPostResetThisCalendarWeek(now)
+			? history.find((row) => row.weekStartTs < currentWeekStartTs) ?? null
+			: history.find((row) => row.weekStartTs === currentWeekStartTs) ?? history[0] ?? null;
 		vaultHistoryByCharId.set(char.blizzard_char_id, targetRow);
 	}));
 
