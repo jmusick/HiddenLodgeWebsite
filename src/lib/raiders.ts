@@ -18,6 +18,7 @@ const PROGRESSION_HISTORY_WINDOW_SECONDS = 28 * 24 * 60 * 60; // 28 days (4 week
 const VAULT_HISTORY_WINDOW_SECONDS = 28 * 24 * 60 * 60; // 28 days (4 weeks)
 const MIDNIGHT_SEASON_1_START_TIMESTAMP = Math.floor(Date.UTC(2026, 2, 24, 15, 0, 0, 0) / 1000);
 const WEEK_SECONDS = 7 * 24 * 60 * 60;
+const US_WEEKLY_RESET_HOUR_EASTERN = 10;
 const DELVES_TOTAL_STAT_ID = 40734;
 
 const CREST_STAT_IDS = {
@@ -100,7 +101,7 @@ function easternUtcOffsetMinutes(atUtc: Date): number {
   return sign * (hours * 60 + minutes);
 }
 
-// US weekly reset bucket: Tuesday 11:00 AM America/New_York.
+// US weekly reset bucket: Tuesday 10:00 AM America/New_York.
 function getUsWeeklyResetTimestamp(): number {
   const now = new Date();
   const nowParts = new Intl.DateTimeFormat('en-US', {
@@ -128,12 +129,12 @@ function getUsWeeklyResetTimestamp(): number {
   const dayIndex = weekdayToIndex[weekdayShort] ?? 2;
   const daysSinceTuesday = (dayIndex - 2 + 7) % 7;
 
-  const localResetSeedUtc = new Date(Date.UTC(year, month - 1, day - daysSinceTuesday, 11, 0, 0, 0));
+  const localResetSeedUtc = new Date(Date.UTC(year, month - 1, day - daysSinceTuesday, US_WEEKLY_RESET_HOUR_EASTERN, 0, 0, 0));
   const offsetMinutes = easternUtcOffsetMinutes(localResetSeedUtc);
   let resetUtc = new Date(localResetSeedUtc.getTime() - offsetMinutes * 60 * 1000);
 
   if (resetUtc > now) {
-    const previousWeekLocalSeedUtc = new Date(Date.UTC(year, month - 1, day - daysSinceTuesday - 7, 11, 0, 0, 0));
+    const previousWeekLocalSeedUtc = new Date(Date.UTC(year, month - 1, day - daysSinceTuesday - 7, US_WEEKLY_RESET_HOUR_EASTERN, 0, 0, 0));
     const previousWeekOffsetMinutes = easternUtcOffsetMinutes(previousWeekLocalSeedUtc);
     resetUtc = new Date(previousWeekLocalSeedUtc.getTime() - previousWeekOffsetMinutes * 60 * 1000);
   }
@@ -177,11 +178,20 @@ async function countKeystoneRuns(
   db: D1Database,
   blizzardCharId: number,
   weeklyResetTs: number
-): Promise<{ weekly: number; season: number; weeklyKeyLevels: number[] }> {
-  const [weeklyResult, seasonResult, keyLevelsResult] = await Promise.all([
+): Promise<{ weekly: number; prevWeekly: number; season: number; weeklyKeyLevels: number[] }> {
+  const previousWeeklyResetTs = weeklyResetTs - WEEK_SECONDS;
+  const [weeklyResult, previousWeeklyResult, seasonResult, keyLevelsResult] = await Promise.all([
     db
       .prepare(`SELECT COUNT(*) AS cnt FROM raider_keystones WHERE blizzard_char_id = ? AND completed_ts >= ?`)
       .bind(blizzardCharId, weeklyResetTs)
+      .first<{ cnt: number }>(),
+    db
+      .prepare(
+        `SELECT COUNT(*) AS cnt
+         FROM raider_keystones
+         WHERE blizzard_char_id = ? AND completed_ts >= ? AND completed_ts < ?`
+      )
+      .bind(blizzardCharId, previousWeeklyResetTs, weeklyResetTs)
       .first<{ cnt: number }>(),
     db
       .prepare(`SELECT COUNT(*) AS cnt FROM raider_keystones WHERE blizzard_char_id = ? AND completed_ts >= ?`)
@@ -199,6 +209,7 @@ async function countKeystoneRuns(
 
   return {
     weekly: weeklyResult?.cnt ?? 0,
+    prevWeekly: previousWeeklyResult?.cnt ?? 0,
     season: seasonResult?.cnt ?? 0,
     weeklyKeyLevels: (keyLevelsResult.results ?? []).map((r) => r.keystone_level),
   };
@@ -1649,7 +1660,7 @@ export async function refreshRaidersCache(
     const newSeasonRunsRaw: number = keystoneCounts.season;
     const isSeasonWeekOne = now >= MIDNIGHT_SEASON_1_START_TIMESTAMP && now < MIDNIGHT_SEASON_1_START_TIMESTAMP + WEEK_SECONDS;
     const newSeasonRuns: number = isSeasonWeekOne ? newWeeklyRuns : newSeasonRunsRaw;
-    const newPrevWeeklyRuns: number | null = detailed.mythicPlusPrevWeeklyRuns;
+    const newPrevWeeklyRuns: number | null = keystoneCounts.prevWeekly;
     const keystoneVaultKeyLevels = keystoneCounts.weeklyKeyLevels;
 
     const worldLifetime = detailed.worldVaultLifetimeObjectives;
