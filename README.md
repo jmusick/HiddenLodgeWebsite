@@ -263,8 +263,8 @@ Intended usage: internal website/admin UI reads. These endpoints require an auth
 
 | Endpoint | Method | Description |
 |---|---|---|
-| `/api/sim/launch` | POST | Launches a raider sim job through the external WoWSim app using either site data or pasted addon export |
-| `/api/sim/launch/status?job_id=<id>&char_id=<id>` | GET | Polls WoWSim app job status and returns merged latest uploaded recommendations for the raider |
+| `/api/sim/launch` | POST | Launches a raider sim job through the external LodgeSim app using either site data or pasted addon export |
+| `/api/sim/launch/status?job_id=<id>&char_id=<id>` | GET | Polls LodgeSim app job status and returns merged latest uploaded recommendations for the raider |
 
 These endpoints require an authenticated guild-member (or admin) session.
 
@@ -456,10 +456,10 @@ wrangler d1 execute hidden-lodge-db --remote --file=migrations/0043_vault_histor
 | `WCL_CLIENT_SECRET` | No | Warcraft Logs OAuth client secret (enables Recent Logs uploader and publish time metadata) |
 | `CRON_SECRET` | Yes | Shared secret for roster refresh requests |
 | `SIM_RUNNER_KEY` | Yes (for sim APIs) | Shared secret used by `/api/sim/*` machine endpoints via `X-Sim-Runner-Key` |
-| `WOWSIM_APP_BASE_URL` | Yes (for Sim Tools launch) | Base URL for the WoWSim app used by raider profile Sim Tools |
-| `WOWSIM_APP_API_KEY` | No | Optional key sent to WoWSim app in `X-WoWSim-Key` |
-| `WOWSIM_APP_TRIGGER_PATH` | No | WoWSim launch path template; defaults to `/api/jobs/start` |
-| `WOWSIM_APP_STATUS_PATH` | No | WoWSim status path template; defaults to `/api/jobs/{job_id}` |
+| `WOWSIM_APP_BASE_URL` | Yes (for Sim Tools launch) | Base URL for the LodgeSim app used by raider profile Sim Tools |
+| `WOWSIM_APP_API_KEY` | No | Optional key sent to LodgeSim app in `X-LodgeSim-Key` |
+| `WOWSIM_APP_TRIGGER_PATH` | No | LodgeSim launch path template; defaults to `/api/jobs/start` |
+| `WOWSIM_APP_STATUS_PATH` | No | LodgeSim status path template; defaults to `/api/jobs/{job_id}` |
 | `SESSION_SECRET` | Yes | Session signing and validation secret |
 
 ## Deployment

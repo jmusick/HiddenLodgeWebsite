@@ -30,7 +30,7 @@ function buildHeaders(): Record<string, string> {
   };
 
   const apiKey = env.WOWSIM_APP_API_KEY?.trim();
-  if (apiKey) headers['X-WoWSim-Key'] = apiKey;
+  if (apiKey) headers['X-LodgeSim-Key'] = apiKey;
   return headers;
 }
 

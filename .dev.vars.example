@@ -26,10 +26,10 @@ SIM_RUNNER_KEY=replace-with-a-strong-shared-secret
 # Shared secret for desktop bridge machine endpoints (/api/desktop/*).
 DESKTOP_API_KEY=replace-with-a-strong-shared-secret
 
-# WoWSim app connection for raider profile Sim Tools.
-# Example with local WoWSim app: http://127.0.0.1:5050
+# LodgeSim app connection for raider profile Sim Tools.
+# Example with local LodgeSim app: http://127.0.0.1:5050
 WOWSIM_APP_BASE_URL=http://127.0.0.1:5050
-# Optional shared key sent as X-WoWSim-Key to WoWSim app.
+# Optional shared key sent as X-LodgeSim-Key to LodgeSim app.
 WOWSIM_APP_API_KEY=
 # Optional override paths for start/status calls.
 # Defaults are /api/jobs/start and /api/jobs/{job_id}
