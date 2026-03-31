@@ -1361,18 +1361,50 @@ async function recordVaultHistorySnapshot(
        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(blizzard_char_id, week_start_ts) DO UPDATE SET
          snapshot_ts = excluded.snapshot_ts,
-         raid_weekly_boss_kills = excluded.raid_weekly_boss_kills,
-         raid_slot_1_ilvl = excluded.raid_slot_1_ilvl,
-         raid_slot_2_ilvl = excluded.raid_slot_2_ilvl,
-         raid_slot_3_ilvl = excluded.raid_slot_3_ilvl,
-         dungeon_slot_1_ilvl = excluded.dungeon_slot_1_ilvl,
-         dungeon_slot_2_ilvl = excluded.dungeon_slot_2_ilvl,
-         dungeon_slot_3_ilvl = excluded.dungeon_slot_3_ilvl,
-         world_weekly_objectives = excluded.world_weekly_objectives,
-         raid_slots_filled = excluded.raid_slots_filled,
-         dungeon_slots_filled = excluded.dungeon_slots_filled,
-         world_slots_filled = excluded.world_slots_filled,
-         total_slots_filled = excluded.total_slots_filled`
+         raid_weekly_boss_kills = CASE
+           WHEN excluded.raid_weekly_boss_kills IS NULL THEN raider_vault_history.raid_weekly_boss_kills
+           WHEN raider_vault_history.raid_weekly_boss_kills IS NULL THEN excluded.raid_weekly_boss_kills
+           ELSE MAX(raider_vault_history.raid_weekly_boss_kills, excluded.raid_weekly_boss_kills)
+         END,
+         raid_slot_1_ilvl = CASE
+           WHEN excluded.raid_slot_1_ilvl IS NULL THEN raider_vault_history.raid_slot_1_ilvl
+           WHEN raider_vault_history.raid_slot_1_ilvl IS NULL THEN excluded.raid_slot_1_ilvl
+           ELSE MAX(raider_vault_history.raid_slot_1_ilvl, excluded.raid_slot_1_ilvl)
+         END,
+         raid_slot_2_ilvl = CASE
+           WHEN excluded.raid_slot_2_ilvl IS NULL THEN raider_vault_history.raid_slot_2_ilvl
+           WHEN raider_vault_history.raid_slot_2_ilvl IS NULL THEN excluded.raid_slot_2_ilvl
+           ELSE MAX(raider_vault_history.raid_slot_2_ilvl, excluded.raid_slot_2_ilvl)
+         END,
+         raid_slot_3_ilvl = CASE
+           WHEN excluded.raid_slot_3_ilvl IS NULL THEN raider_vault_history.raid_slot_3_ilvl
+           WHEN raider_vault_history.raid_slot_3_ilvl IS NULL THEN excluded.raid_slot_3_ilvl
+           ELSE MAX(raider_vault_history.raid_slot_3_ilvl, excluded.raid_slot_3_ilvl)
+         END,
+         dungeon_slot_1_ilvl = CASE
+           WHEN excluded.dungeon_slot_1_ilvl IS NULL THEN raider_vault_history.dungeon_slot_1_ilvl
+           WHEN raider_vault_history.dungeon_slot_1_ilvl IS NULL THEN excluded.dungeon_slot_1_ilvl
+           ELSE MAX(raider_vault_history.dungeon_slot_1_ilvl, excluded.dungeon_slot_1_ilvl)
+         END,
+         dungeon_slot_2_ilvl = CASE
+           WHEN excluded.dungeon_slot_2_ilvl IS NULL THEN raider_vault_history.dungeon_slot_2_ilvl
+           WHEN raider_vault_history.dungeon_slot_2_ilvl IS NULL THEN excluded.dungeon_slot_2_ilvl
+           ELSE MAX(raider_vault_history.dungeon_slot_2_ilvl, excluded.dungeon_slot_2_ilvl)
+         END,
+         dungeon_slot_3_ilvl = CASE
+           WHEN excluded.dungeon_slot_3_ilvl IS NULL THEN raider_vault_history.dungeon_slot_3_ilvl
+           WHEN raider_vault_history.dungeon_slot_3_ilvl IS NULL THEN excluded.dungeon_slot_3_ilvl
+           ELSE MAX(raider_vault_history.dungeon_slot_3_ilvl, excluded.dungeon_slot_3_ilvl)
+         END,
+         world_weekly_objectives = CASE
+           WHEN excluded.world_weekly_objectives IS NULL THEN raider_vault_history.world_weekly_objectives
+           WHEN raider_vault_history.world_weekly_objectives IS NULL THEN excluded.world_weekly_objectives
+           ELSE MAX(raider_vault_history.world_weekly_objectives, excluded.world_weekly_objectives)
+         END,
+         raid_slots_filled = MAX(raider_vault_history.raid_slots_filled, excluded.raid_slots_filled),
+         dungeon_slots_filled = MAX(raider_vault_history.dungeon_slots_filled, excluded.dungeon_slots_filled),
+         world_slots_filled = MAX(raider_vault_history.world_slots_filled, excluded.world_slots_filled),
+         total_slots_filled = MAX(raider_vault_history.total_slots_filled, excluded.total_slots_filled)`
     )
     .bind(
       raider.blizzardCharId,
