@@ -100,6 +100,12 @@ interface CharRow {
 	avg_30d_total_sockets: number | null;
 	avg_30d_enchanted_slots: number | null;
 	avg_30d_enchantable_slots: number | null;
+	details_synced_at: number | null;
+	mythic_plus_vault_ilvl_1: number | null;
+	mythic_plus_vault_ilvl_2: number | null;
+	mythic_plus_vault_ilvl_3: number | null;
+	world_vault_weekly_objectives: number | null;
+	raid_progress_label: string | null;
 	raid_slot_1_ilvl: number | null;
 	raid_slot_2_ilvl: number | null;
 	raid_slot_3_ilvl: number | null;
@@ -107,6 +113,36 @@ interface CharRow {
 	dungeon_slot_2_ilvl: number | null;
 	dungeon_slot_3_ilvl: number | null;
 	world_slots_filled: number | null;
+}
+
+function parseRaidVaultOptions(raidProgressLabel: string | null): [number | null, number | null, number | null] {
+	if (!raidProgressLabel) return [null, null, null];
+
+	try {
+		const parsed = JSON.parse(raidProgressLabel) as { vaultRaid?: { options?: unknown[] } };
+		const options = Array.isArray(parsed?.vaultRaid?.options) ? parsed.vaultRaid.options : [];
+		const asSlot = (value: unknown): number | null => {
+			const numeric = Number(value);
+			return Number.isFinite(numeric) && numeric > 0 ? Math.floor(numeric) : null;
+		};
+
+		return [
+			asSlot(options[0]),
+			asSlot(options[1]),
+			asSlot(options[2]),
+		];
+	} catch {
+		return [null, null, null];
+	}
+}
+
+function worldSlotsFromObjectives(objectives: number | null): number {
+	const value = Math.max(0, objectives ?? 0);
+	let slots = 0;
+	if (value >= 2) slots += 1;
+	if (value >= 4) slots += 1;
+	if (value >= 8) slots += 1;
+	return slots;
 }
 
 // ---- Preparedness tier calculation ----
@@ -215,6 +251,12 @@ export async function GET(context: APIContext): Promise<Response> {
 			mc.avg_30d_total_sockets,
 			mc.avg_30d_enchanted_slots,
 			mc.avg_30d_enchantable_slots,
+			mc.details_synced_at,
+			mc.mythic_plus_vault_ilvl_1,
+			mc.mythic_plus_vault_ilvl_2,
+			mc.mythic_plus_vault_ilvl_3,
+			mc.world_vault_weekly_objectives,
+			mc.raid_progress_label,
 			vh.raid_slot_1_ilvl,
 			vh.raid_slot_2_ilvl,
 			vh.raid_slot_3_ilvl,
@@ -236,12 +278,41 @@ export async function GET(context: APIContext): Promise<Response> {
 		ORDER BY c.name ASC
 	`).bind(targetLastWeekStartTs).all<CharRow>();
 
-	const entries = (result.results ?? []).map((char) => ({
-		character: char.name,
-		realm: char.realm,
-		preparednessTier: preparednessTier(char),
-		greatVaultScore: greatVaultScore(char),
-	}));
+	const entries = (result.results ?? []).map((char) => {
+		const hasLastWeekHistory =
+			char.raid_slot_1_ilvl !== null
+			|| char.raid_slot_2_ilvl !== null
+			|| char.raid_slot_3_ilvl !== null
+			|| char.dungeon_slot_1_ilvl !== null
+			|| char.dungeon_slot_2_ilvl !== null
+			|| char.dungeon_slot_3_ilvl !== null
+			|| (char.world_slots_filled ?? 0) > 0;
+
+		const canUsePreResetCache =
+			!hasLastWeekHistory
+			&& char.details_synced_at !== null
+			&& char.details_synced_at < currentWeekStartTs;
+
+		const [cacheRaid1, cacheRaid2, cacheRaid3] = parseRaidVaultOptions(char.raid_progress_label);
+		const effective = {
+			raid_slot_1_ilvl: char.raid_slot_1_ilvl ?? (canUsePreResetCache ? cacheRaid1 : null),
+			raid_slot_2_ilvl: char.raid_slot_2_ilvl ?? (canUsePreResetCache ? cacheRaid2 : null),
+			raid_slot_3_ilvl: char.raid_slot_3_ilvl ?? (canUsePreResetCache ? cacheRaid3 : null),
+			dungeon_slot_1_ilvl: char.dungeon_slot_1_ilvl ?? (canUsePreResetCache ? char.mythic_plus_vault_ilvl_1 : null),
+			dungeon_slot_2_ilvl: char.dungeon_slot_2_ilvl ?? (canUsePreResetCache ? char.mythic_plus_vault_ilvl_2 : null),
+			dungeon_slot_3_ilvl: char.dungeon_slot_3_ilvl ?? (canUsePreResetCache ? char.mythic_plus_vault_ilvl_3 : null),
+			world_slots_filled:
+				char.world_slots_filled
+				?? (canUsePreResetCache ? worldSlotsFromObjectives(char.world_vault_weekly_objectives) : null),
+		};
+
+		return {
+			character: char.name,
+			realm: char.realm,
+			preparednessTier: preparednessTier(char),
+			greatVaultScore: greatVaultScore(effective),
+		};
+	});
 
 	return Response.json(entries);
 }
