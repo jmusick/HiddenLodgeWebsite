@@ -315,12 +315,7 @@ export async function GET(context: APIContext): Promise<Response> {
 		LEFT JOIN raider_metrics_cache mc ON mc.blizzard_char_id = c.blizzard_char_id
 		LEFT JOIN raider_vault_history vh
 			ON vh.blizzard_char_id = c.blizzard_char_id
-			AND vh.week_start_ts = (
-				SELECT MAX(vh2.week_start_ts)
-				FROM raider_vault_history vh2
-				WHERE vh2.blizzard_char_id = c.blizzard_char_id
-					AND vh2.week_start_ts <= ?
-			)
+			AND vh.week_start_ts = ?
 		ORDER BY c.name ASC
 	`)
 		.bind(
