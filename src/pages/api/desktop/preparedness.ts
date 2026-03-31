@@ -3,13 +3,10 @@ export const prerender = false;
 import type { APIContext } from 'astro';
 import { env } from 'cloudflare:workers';
 import { isAuthorizedDesktopRequest } from '../../../lib/desktop-auth';
+import { getVaultHistory } from '../../../lib/raiders';
 
 const US_WEEKLY_RESET_HOUR_EASTERN = 10;
 const WEEK_SECONDS = 7 * 24 * 60 * 60;
-const GREAT_VAULT_DUNGEON_ILVL = new Map<number, number>([
-	[10, 272], [9, 269], [8, 269], [7, 269], [6, 266],
-	[5, 263], [4, 263], [3, 259], [2, 259],
-]);
 
 function easternUtcOffsetMinutes(atUtc: Date): number {
 	const parts = new Intl.DateTimeFormat('en-US', {
@@ -94,6 +91,7 @@ function isPostResetThisCalendarWeek(now: Date): boolean {
 // ---- Row types used by desktop preparedness sync ----
 
 interface CharRow {
+	blizzard_char_id: number;
 	name: string;
 	realm: string;
 	socketed_gems: number | null;
@@ -104,66 +102,6 @@ interface CharRow {
 	avg_30d_total_sockets: number | null;
 	avg_30d_enchanted_slots: number | null;
 	avg_30d_enchantable_slots: number | null;
-	details_synced_at: number | null;
-	mythic_plus_vault_ilvl_1: number | null;
-	mythic_plus_vault_ilvl_2: number | null;
-	mythic_plus_vault_ilvl_3: number | null;
-	world_vault_weekly_objectives: number | null;
-	raid_progress_label: string | null;
-	prev_week_key_level_1: number | null;
-	prev_week_key_level_4: number | null;
-	prev_week_key_level_8: number | null;
-	raid_slot_1_ilvl: number | null;
-	raid_slot_2_ilvl: number | null;
-	raid_slot_3_ilvl: number | null;
-	dungeon_slot_1_ilvl: number | null;
-	dungeon_slot_2_ilvl: number | null;
-	dungeon_slot_3_ilvl: number | null;
-	world_slots_filled: number | null;
-}
-
-function dungeonVaultIlvlForKeystone(level: number | null): number | null {
-	if (level === null) return null;
-	const normalized = Math.floor(level);
-	if (!Number.isFinite(normalized) || normalized < 2) return null;
-	const capped = Math.min(normalized, 10);
-	return GREAT_VAULT_DUNGEON_ILVL.get(capped) ?? null;
-}
-
-function pickBestIlvl(primary: number | null, fallback: number | null): number | null {
-	if (primary === null) return fallback;
-	if (fallback === null) return primary;
-	return Math.max(primary, fallback);
-}
-
-function parseRaidVaultOptions(raidProgressLabel: string | null): [number | null, number | null, number | null] {
-	if (!raidProgressLabel) return [null, null, null];
-
-	try {
-		const parsed = JSON.parse(raidProgressLabel) as { vaultRaid?: { options?: unknown[] } };
-		const options = Array.isArray(parsed?.vaultRaid?.options) ? parsed.vaultRaid.options : [];
-		const asSlot = (value: unknown): number | null => {
-			const numeric = Number(value);
-			return Number.isFinite(numeric) && numeric > 0 ? Math.floor(numeric) : null;
-		};
-
-		return [
-			asSlot(options[0]),
-			asSlot(options[1]),
-			asSlot(options[2]),
-		];
-	} catch {
-		return [null, null, null];
-	}
-}
-
-function worldSlotsFromObjectives(objectives: number | null): number {
-	const value = Math.max(0, objectives ?? 0);
-	let slots = 0;
-	if (value >= 2) slots += 1;
-	if (value >= 4) slots += 1;
-	if (value >= 8) slots += 1;
-	return slots;
 }
 
 // ---- Preparedness tier calculation ----
@@ -263,6 +201,7 @@ export async function GET(context: APIContext): Promise<Response> {
 
 	const result = await env.DB.prepare(`
 		SELECT
+			c.blizzard_char_id,
 			c.name,
 			c.realm,
 			mc.socketed_gems,
@@ -272,108 +211,41 @@ export async function GET(context: APIContext): Promise<Response> {
 			mc.avg_30d_socketed_gems,
 			mc.avg_30d_total_sockets,
 			mc.avg_30d_enchanted_slots,
-			mc.avg_30d_enchantable_slots,
-			mc.details_synced_at,
-			mc.mythic_plus_vault_ilvl_1,
-			mc.mythic_plus_vault_ilvl_2,
-			mc.mythic_plus_vault_ilvl_3,
-			mc.world_vault_weekly_objectives,
-			mc.raid_progress_label,
-			(
-				SELECT rk1.keystone_level
-				FROM raider_keystones rk1
-				WHERE rk1.blizzard_char_id = c.blizzard_char_id
-					AND rk1.completed_ts >= ?
-					AND rk1.completed_ts < ?
-					AND rk1.keystone_level IS NOT NULL
-				ORDER BY rk1.keystone_level DESC
-				LIMIT 1 OFFSET 0
-			) AS prev_week_key_level_1,
-			(
-				SELECT rk4.keystone_level
-				FROM raider_keystones rk4
-				WHERE rk4.blizzard_char_id = c.blizzard_char_id
-					AND rk4.completed_ts >= ?
-					AND rk4.completed_ts < ?
-					AND rk4.keystone_level IS NOT NULL
-				ORDER BY rk4.keystone_level DESC
-				LIMIT 1 OFFSET 3
-			) AS prev_week_key_level_4,
-			(
-				SELECT rk8.keystone_level
-				FROM raider_keystones rk8
-				WHERE rk8.blizzard_char_id = c.blizzard_char_id
-					AND rk8.completed_ts >= ?
-					AND rk8.completed_ts < ?
-					AND rk8.keystone_level IS NOT NULL
-				ORDER BY rk8.keystone_level DESC
-				LIMIT 1 OFFSET 7
-			) AS prev_week_key_level_8,
-			vh.raid_slot_1_ilvl,
-			vh.raid_slot_2_ilvl,
-			vh.raid_slot_3_ilvl,
-			vh.dungeon_slot_1_ilvl,
-			vh.dungeon_slot_2_ilvl,
-			vh.dungeon_slot_3_ilvl,
-			vh.world_slots_filled
+			mc.avg_30d_enchantable_slots
 		FROM characters c
 		JOIN roster_members_cache rmc ON rmc.blizzard_char_id = c.blizzard_char_id
 		LEFT JOIN raider_metrics_cache mc ON mc.blizzard_char_id = c.blizzard_char_id
-		LEFT JOIN raider_vault_history vh
-			ON vh.blizzard_char_id = c.blizzard_char_id
-			AND vh.week_start_ts = ?
 		ORDER BY c.name ASC
-	`)
-		.bind(
-			targetLastWeekStartTs,
-			targetLastWeekEndTs,
-			targetLastWeekStartTs,
-			targetLastWeekEndTs,
-			targetLastWeekStartTs,
-			targetLastWeekEndTs,
-			targetLastWeekStartTs,
-		)
-		.all<CharRow>();
+	`).all<CharRow>();
+
+	const vaultHistoryByCharId = new Map<number, Awaited<ReturnType<typeof getVaultHistory>>[number] | null>();
+	await Promise.all((result.results ?? []).map(async (char) => {
+		const history = await getVaultHistory(char.blizzard_char_id, env.DB);
+		const targetRow = history.find((row) => row.weekStartTs === targetLastWeekStartTs) ?? null;
+		vaultHistoryByCharId.set(char.blizzard_char_id, targetRow);
+	}));
 
 	const entries = (result.results ?? []).map((char) => {
-		const hasLastWeekHistory =
-			char.raid_slot_1_ilvl !== null
-			|| char.raid_slot_2_ilvl !== null
-			|| char.raid_slot_3_ilvl !== null
-			|| char.dungeon_slot_1_ilvl !== null
-			|| char.dungeon_slot_2_ilvl !== null
-			|| char.dungeon_slot_3_ilvl !== null
-			|| (char.world_slots_filled ?? 0) > 0;
-
-		const canUsePreResetCache =
-			!hasLastWeekHistory
-			&& char.details_synced_at !== null
-			&& char.details_synced_at < currentWeekStartTs;
-
-		const [cacheRaid1, cacheRaid2, cacheRaid3] = parseRaidVaultOptions(char.raid_progress_label);
-		const fallbackDungeon1 = dungeonVaultIlvlForKeystone(char.prev_week_key_level_1);
-		const fallbackDungeon2 = dungeonVaultIlvlForKeystone(char.prev_week_key_level_4);
-		const fallbackDungeon3 = dungeonVaultIlvlForKeystone(char.prev_week_key_level_8);
-		const effective = {
-			raid_slot_1_ilvl: char.raid_slot_1_ilvl ?? (canUsePreResetCache ? cacheRaid1 : null),
-			raid_slot_2_ilvl: char.raid_slot_2_ilvl ?? (canUsePreResetCache ? cacheRaid2 : null),
-			raid_slot_3_ilvl: char.raid_slot_3_ilvl ?? (canUsePreResetCache ? cacheRaid3 : null),
-			dungeon_slot_1_ilvl: pickBestIlvl(
-				pickBestIlvl(char.dungeon_slot_1_ilvl, fallbackDungeon1),
-				canUsePreResetCache ? char.mythic_plus_vault_ilvl_1 : null,
-			),
-			dungeon_slot_2_ilvl: pickBestIlvl(
-				pickBestIlvl(char.dungeon_slot_2_ilvl, fallbackDungeon2),
-				canUsePreResetCache ? char.mythic_plus_vault_ilvl_2 : null,
-			),
-			dungeon_slot_3_ilvl: pickBestIlvl(
-				pickBestIlvl(char.dungeon_slot_3_ilvl, fallbackDungeon3),
-				canUsePreResetCache ? char.mythic_plus_vault_ilvl_3 : null,
-			),
-			world_slots_filled:
-				char.world_slots_filled
-				?? (canUsePreResetCache ? worldSlotsFromObjectives(char.world_vault_weekly_objectives) : null),
-		};
+		const vaultRow = vaultHistoryByCharId.get(char.blizzard_char_id);
+		const effective = vaultRow
+			? {
+				raid_slot_1_ilvl: vaultRow.raidSlot1Ilvl,
+				raid_slot_2_ilvl: vaultRow.raidSlot2Ilvl,
+				raid_slot_3_ilvl: vaultRow.raidSlot3Ilvl,
+				dungeon_slot_1_ilvl: vaultRow.dungeonSlot1Ilvl,
+				dungeon_slot_2_ilvl: vaultRow.dungeonSlot2Ilvl,
+				dungeon_slot_3_ilvl: vaultRow.dungeonSlot3Ilvl,
+				world_slots_filled: vaultRow.worldSlotsFilled,
+			}
+			: {
+				raid_slot_1_ilvl: null,
+				raid_slot_2_ilvl: null,
+				raid_slot_3_ilvl: null,
+				dungeon_slot_1_ilvl: null,
+				dungeon_slot_2_ilvl: null,
+				dungeon_slot_3_ilvl: null,
+				world_slots_filled: 0,
+			};
 
 		return {
 			character: char.name,
