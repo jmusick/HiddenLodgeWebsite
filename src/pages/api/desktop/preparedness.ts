@@ -5,6 +5,7 @@ import { env } from 'cloudflare:workers';
 import { isAuthorizedDesktopRequest } from '../../../lib/desktop-auth';
 
 const US_WEEKLY_RESET_HOUR_EASTERN = 10;
+const WEEK_SECONDS = 7 * 24 * 60 * 60;
 
 function easternUtcOffsetMinutes(atUtc: Date): number {
 	const parts = new Intl.DateTimeFormat('en-US', {
@@ -62,6 +63,28 @@ function getUsWeeklyResetTimestamp(): number {
 	}
 
 	return Math.floor(resetUtc.getTime() / 1000);
+}
+
+function isPostResetThisCalendarWeek(now: Date): boolean {
+	const parts = new Intl.DateTimeFormat('en-US', {
+		timeZone: 'America/New_York',
+		weekday: 'short',
+		hour: '2-digit',
+		hourCycle: 'h23',
+	}).formatToParts(now);
+
+	const weekday = parts.find((part) => part.type === 'weekday')?.value ?? 'Tue';
+	const hour = Number(parts.find((part) => part.type === 'hour')?.value ?? '0');
+
+	if (weekday === 'Sun' || weekday === 'Mon') {
+		return false;
+	}
+
+	if (weekday === 'Tue') {
+		return hour >= US_WEEKLY_RESET_HOUR_EASTERN;
+	}
+
+	return true;
 }
 
 // ---- Row types used by desktop preparedness sync ----
@@ -174,7 +197,11 @@ export async function GET(context: APIContext): Promise<Response> {
 		return Response.json({ error: 'Unauthorized' }, { status: 401 });
 	}
 
+	const now = new Date();
 	const currentWeekStartTs = getUsWeeklyResetTimestamp();
+	const targetLastWeekStartTs = isPostResetThisCalendarWeek(now)
+		? currentWeekStartTs - WEEK_SECONDS
+		: currentWeekStartTs;
 
 	const result = await env.DB.prepare(`
 		SELECT
@@ -204,10 +231,10 @@ export async function GET(context: APIContext): Promise<Response> {
 				SELECT MAX(vh2.week_start_ts)
 				FROM raider_vault_history vh2
 				WHERE vh2.blizzard_char_id = c.blizzard_char_id
-					AND vh2.week_start_ts < ?
+					AND vh2.week_start_ts <= ?
 			)
 		ORDER BY c.name ASC
-	`).bind(currentWeekStartTs).all<CharRow>();
+	`).bind(targetLastWeekStartTs).all<CharRow>();
 
 	const entries = (result.results ?? []).map((char) => ({
 		character: char.name,
