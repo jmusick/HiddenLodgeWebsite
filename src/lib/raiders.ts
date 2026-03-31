@@ -1484,6 +1484,7 @@ async function listDetailCandidates(
   db: D1Database,
   now: number,
   batchSize: number,
+  weeklyResetTs: number,
   effectiveRaidProgressTierId: string
 ): Promise<RaiderSourceRow[]> {
   const result = await db
@@ -1515,6 +1516,7 @@ async function listDetailCandidates(
            )
            OR rmc.details_synced_at IS NULL
            OR rmc.details_synced_at < ?
+           OR rmc.details_synced_at < ?
          )
        ORDER BY rmc.details_synced_at IS NOT NULL, rmc.details_synced_at ASC, rmc.name ASC
        LIMIT ?`
@@ -1524,6 +1526,7 @@ async function listDetailCandidates(
         effectiveRaidProgressTierId,
         effectiveRaidProgressTierId,
         now - DETAILS_TTL_SECONDS,
+        weeklyResetTs,
         batchSize
       )
     .all<RaiderSourceRow>();
@@ -1537,6 +1540,7 @@ export async function refreshRaidersCache(
 ): Promise<RaidersCacheStatus> {
   const db = getDatabase(dbInput);
   const now = nowInSeconds();
+  const weeklyResetTs = getUsWeeklyResetTimestamp();
   const configuredRaidProgressTarget = await getRaidProgressTarget(db);
   const effectiveRaidProgressTierId =
     resolveRaidProgressTier(configuredRaidProgressTarget)?.id ?? '';
@@ -1570,6 +1574,7 @@ export async function refreshRaidersCache(
         db,
         now,
         Math.max(1, options?.batchSize ?? DETAIL_BATCH_SIZE),
+        weeklyResetTs,
         effectiveRaidProgressTierId
       );
   const detailResults = await mapWithConcurrency(
@@ -1597,7 +1602,6 @@ export async function refreshRaidersCache(
   );
 
   // Fetch old world-vault data to compute delve objectives on weekly rollover.
-  const weeklyResetTs = getUsWeeklyResetTimestamp();
   type OldMetricsRow = {
     blizzard_char_id: number;
     details_synced_at: number | null;
