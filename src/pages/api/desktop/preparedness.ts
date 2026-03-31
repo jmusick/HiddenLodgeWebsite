@@ -4,6 +4,66 @@ import type { APIContext } from 'astro';
 import { env } from 'cloudflare:workers';
 import { isAuthorizedDesktopRequest } from '../../../lib/desktop-auth';
 
+const US_WEEKLY_RESET_HOUR_EASTERN = 10;
+
+function easternUtcOffsetMinutes(atUtc: Date): number {
+	const parts = new Intl.DateTimeFormat('en-US', {
+		timeZone: 'America/New_York',
+		timeZoneName: 'shortOffset',
+		hour: '2-digit',
+	}).formatToParts(atUtc);
+
+	const offsetLabel = parts.find((part) => part.type === 'timeZoneName')?.value ?? 'GMT-5';
+	const match = offsetLabel.match(/GMT([+-])(\d{1,2})(?::?(\d{2}))?/i);
+	if (!match) return -300;
+
+	const sign = match[1] === '-' ? -1 : 1;
+	const hours = Number(match[2] ?? '0');
+	const minutes = Number(match[3] ?? '0');
+	return sign * (hours * 60 + minutes);
+}
+
+// US weekly reset bucket: Tuesday 10:00 AM America/New_York.
+function getUsWeeklyResetTimestamp(): number {
+	const now = new Date();
+	const nowParts = new Intl.DateTimeFormat('en-US', {
+		timeZone: 'America/New_York',
+		weekday: 'short',
+		year: 'numeric',
+		month: '2-digit',
+		day: '2-digit',
+	}).formatToParts(now);
+
+	const weekdayShort = nowParts.find((part) => part.type === 'weekday')?.value ?? 'Tue';
+	const year = Number(nowParts.find((part) => part.type === 'year')?.value ?? '1970');
+	const month = Number(nowParts.find((part) => part.type === 'month')?.value ?? '1');
+	const day = Number(nowParts.find((part) => part.type === 'day')?.value ?? '1');
+
+	const weekdayToIndex: Record<string, number> = {
+		Sun: 0,
+		Mon: 1,
+		Tue: 2,
+		Wed: 3,
+		Thu: 4,
+		Fri: 5,
+		Sat: 6,
+	};
+	const dayIndex = weekdayToIndex[weekdayShort] ?? 2;
+	const daysSinceTuesday = (dayIndex - 2 + 7) % 7;
+
+	const localResetSeedUtc = new Date(Date.UTC(year, month - 1, day - daysSinceTuesday, US_WEEKLY_RESET_HOUR_EASTERN, 0, 0, 0));
+	const offsetMinutes = easternUtcOffsetMinutes(localResetSeedUtc);
+	let resetUtc = new Date(localResetSeedUtc.getTime() - offsetMinutes * 60 * 1000);
+
+	if (resetUtc > now) {
+		const previousWeekLocalSeedUtc = new Date(Date.UTC(year, month - 1, day - daysSinceTuesday - 7, US_WEEKLY_RESET_HOUR_EASTERN, 0, 0, 0));
+		const previousWeekOffsetMinutes = easternUtcOffsetMinutes(previousWeekLocalSeedUtc);
+		resetUtc = new Date(previousWeekLocalSeedUtc.getTime() - previousWeekOffsetMinutes * 60 * 1000);
+	}
+
+	return Math.floor(resetUtc.getTime() / 1000);
+}
+
 // ---- Row types used by desktop preparedness sync ----
 
 interface CharRow {
@@ -114,6 +174,8 @@ export async function GET(context: APIContext): Promise<Response> {
 		return Response.json({ error: 'Unauthorized' }, { status: 401 });
 	}
 
+	const currentWeekStartTs = getUsWeeklyResetTimestamp();
+
 	const result = await env.DB.prepare(`
 		SELECT
 			c.name,
@@ -138,13 +200,14 @@ export async function GET(context: APIContext): Promise<Response> {
 		LEFT JOIN raider_metrics_cache mc ON mc.blizzard_char_id = c.blizzard_char_id
 		LEFT JOIN raider_vault_history vh
 			ON vh.blizzard_char_id = c.blizzard_char_id
-			AND vh.snapshot_ts = (
-				SELECT MAX(vh2.snapshot_ts)
+			AND vh.week_start_ts = (
+				SELECT MAX(vh2.week_start_ts)
 				FROM raider_vault_history vh2
 				WHERE vh2.blizzard_char_id = c.blizzard_char_id
+					AND vh2.week_start_ts < ?
 			)
 		ORDER BY c.name ASC
-	`).all<CharRow>();
+	`).bind(currentWeekStartTs).all<CharRow>();
 
 	const entries = (result.results ?? []).map((char) => ({
 		character: char.name,
