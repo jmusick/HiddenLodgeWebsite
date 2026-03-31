@@ -263,7 +263,7 @@ Intended usage: internal website/admin UI reads. These endpoints require an auth
 
 | Endpoint | Method | Description |
 |---|---|---|
-| `/api/sim/launch` | POST | Launches a raider sim job through the external LodgeSim app using either site data or pasted addon export |
+| `/api/sim/launch` | POST | Manual launch endpoint (disabled; returns an error directing users to automated passive droptimizer scheduling) |
 | `/api/sim/launch/status?job_id=<id>&char_id=<id>` | GET | Polls LodgeSim app job status and returns merged latest uploaded recommendations for the raider |
 
 These endpoints require an authenticated guild-member (or admin) session.

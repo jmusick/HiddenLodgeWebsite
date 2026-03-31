@@ -1233,6 +1233,27 @@ export async function getPassiveSimTasks(
       last_updated_at: number | null;
     }>();
 
+  const latestDroptimizerRows = await db
+    .prepare(
+      `SELECT
+         sr.site_team_id,
+         sr.difficulty,
+         siw.best_blizzard_char_id AS char_id,
+         MAX(sr.updated_at) AS last_updated_at
+       FROM sim_runs sr
+       JOIN ${simTables.itemWinners} siw ON siw.${simTables.winnerRunFk} = sr.id
+       WHERE sr.status = 'finished'
+         AND siw.best_blizzard_char_id IS NOT NULL
+         AND NOT ${SINGLE_TARGET_RUNNER_SQL}
+       GROUP BY sr.site_team_id, sr.difficulty, siw.best_blizzard_char_id`
+    )
+    .all<{
+      site_team_id: number;
+      difficulty: string;
+      char_id: number;
+      last_updated_at: number | null;
+    }>();
+
   const latestSingleByKey = new Map<string, number | null>();
   for (const row of (latestSingleRows.results ?? []) as Array<{
     site_team_id: number;
@@ -1245,6 +1266,18 @@ export async function getPassiveSimTasks(
     latestSingleByKey.set(key, row.last_updated_at ?? null);
   }
 
+  const latestDroptimizerByKey = new Map<string, number | null>();
+  for (const row of (latestDroptimizerRows.results ?? []) as Array<{
+    site_team_id: number;
+    difficulty: string;
+    char_id: number;
+    last_updated_at: number | null;
+  }>) {
+    const diff = normalizeDifficulty(row.difficulty);
+    const key = `${row.site_team_id}:${diff}:${row.char_id}`;
+    latestDroptimizerByKey.set(key, row.last_updated_at ?? null);
+  }
+
   const tasks: PassiveSimTask[] = [];
   for (const team of targets.teams) {
     const difficulty = normalizeDifficulty(team.difficulty);
@@ -1254,6 +1287,8 @@ export async function getPassiveSimTasks(
       const key = `${team.team_id}:${difficulty}:${raider.blizzard_char_id}`;
       const singleTargetLastUpdated = latestSingleByKey.get(key) ?? null;
       const singleTargetStaleSeconds = singleTargetLastUpdated ? Math.max(0, now - singleTargetLastUpdated) : maxAgeSeconds + 1;
+      const droptimizerLastUpdated = latestDroptimizerByKey.get(key) ?? null;
+      const droptimizerStaleSeconds = droptimizerLastUpdated ? Math.max(0, now - droptimizerLastUpdated) : maxAgeSeconds + 1;
 
       const commonTask = {
         site_team_id: team.team_id,
@@ -1275,10 +1310,23 @@ export async function getPassiveSimTasks(
           ...commonTask,
         });
       }
+
+      if (droptimizerStaleSeconds >= maxAgeSeconds) {
+        tasks.push({
+          task_id: `${team.team_id}:${difficulty}:${raider.blizzard_char_id}:droptimizer`,
+          task_type: 'droptimizer',
+          stale_seconds: droptimizerStaleSeconds,
+          last_sim_updated_at: droptimizerLastUpdated,
+          ...commonTask,
+        });
+      }
     }
   }
 
   tasks.sort((a, b) => {
+    if (a.task_type !== b.task_type) {
+      return a.task_type === 'single_target' ? -1 : 1;
+    }
     const aMissing = a.last_sim_updated_at == null;
     const bMissing = b.last_sim_updated_at == null;
     if (aMissing !== bMissing) return aMissing ? -1 : 1;

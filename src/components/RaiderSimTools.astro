@@ -23,13 +23,13 @@ const latest = await getLatestSimForRaider((env as any).DB, charId);
       Sim Tools
       <span class="sim-tools-beta">Beta</span>
     </h2>
-    <p class="sim-tools-subtitle">Run a fresh LodgeSim job and prioritize upgrades by source or slot. This beta feature is still being tuned.</p>
+    <p class="sim-tools-subtitle">Manual sim launches are disabled. Droptimizer sims now run automatically in the background and publish updated recommendations here.</p>
   </header>
 
   <div class="sim-tools-controls">
     <label class="sim-tools-field">
       <span>Input Mode</span>
-      <select data-sim-tools-mode>
+      <select data-sim-tools-mode disabled>
         <option value="site">Use site data</option>
         <option value="addon">Paste SimC addon export</option>
       </select>
@@ -37,7 +37,7 @@ const latest = await getLatestSimForRaider((env as any).DB, charId);
 
     <label class="sim-tools-field">
       <span>Raid</span>
-      <select data-sim-tools-raid>
+      <select data-sim-tools-raid disabled>
         <option value="all">All Raids</option>
         <option value="voidspire">The Voidspire</option>
         <option value="dreamrift">The Dreamrift</option>
@@ -47,7 +47,7 @@ const latest = await getLatestSimForRaider((env as any).DB, charId);
 
     <label class="sim-tools-field">
       <span>Difficulty</span>
-      <select data-sim-tools-difficulty>
+      <select data-sim-tools-difficulty disabled>
         <option value="all">All</option>
         <option value="normal">Normal</option>
         <option value="heroic">Heroic</option>
@@ -55,8 +55,8 @@ const latest = await getLatestSimForRaider((env as any).DB, charId);
       </select>
     </label>
 
-    <button type="button" class="sim-tools-run" data-sim-tools-run>
-      Run Sim for {charName}
+    <button type="button" class="sim-tools-run" data-sim-tools-run disabled>
+      Manual Launch Disabled
     </button>
   </div>
 
@@ -64,6 +64,7 @@ const latest = await getLatestSimForRaider((env as any).DB, charId);
     <span>SimC Addon Export</span>
     <textarea
       data-sim-addon-input
+      disabled
       rows="8"
       placeholder="Paste your /simc export here when using addon mode."
     ></textarea>
@@ -75,7 +76,7 @@ const latest = await getLatestSimForRaider((env as any).DB, charId);
       <span data-sim-connection-text>Checking LodgeSim connection...</span>
     </p>
     <div class="sim-tools-status-row">
-      <p class="sim-tools-status-line" data-sim-status-text>Ready to run.</p>
+      <p class="sim-tools-status-line" data-sim-status-text>Manual launches are disabled. Waiting for automated droptimizer updates.</p>
       {canManageSim && (
         <button type="button" class="sim-tools-purge" data-sim-tools-purge>
           Purge Sim History
@@ -234,7 +235,7 @@ const latest = await getLatestSimForRaider((env as any).DB, charId);
       .replace(/^\s*(lfr|normal|heroic|mythic)\s+-\s+/i, '')
       .trim();
 
-    const idleButtonLabel = runButton.textContent?.trim() || 'Run Sim';
+    const idleButtonLabel = runButton.textContent?.trim() || 'Manual Launch Disabled';
 
     const syncPurgeButtonWidth = () => {
       if (!(purgeButton instanceof HTMLButtonElement)) return;
@@ -815,11 +816,7 @@ const latest = await getLatestSimForRaider((env as any).DB, charId);
     });
 
     runButton.addEventListener('click', () => {
-      if (activeJobId) {
-        setStatus('A run is already active.');
-        return;
-      }
-      void launchRun();
+      setStatus('Manual launches are disabled. Droptimizer sims are automated in the background.');
     });
 
     if (purgeButton instanceof HTMLButtonElement) {
