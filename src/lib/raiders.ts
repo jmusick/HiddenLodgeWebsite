@@ -156,6 +156,12 @@ function computeVaultIlvlFromLevel(level: number | null): number | null {
   return GREAT_VAULT_DUNGEON_ILVL.get(clamped) ?? null;
 }
 
+function pickBestVaultIlvl(primary: number | null, fallback: number | null): number | null {
+  if (primary === null) return fallback;
+  if (fallback === null) return primary;
+  return Math.max(primary, fallback);
+}
+
 /** Merge newly-seen RIO runs into the persistent keystones table (INSERT OR IGNORE). */
 async function mergeKeystoneRuns(
   db: D1Database,
@@ -2216,9 +2222,9 @@ export async function getVaultHistory(charId: number, dbInput?: D1Database): Pro
     const fallbackSlot1 = computeVaultIlvlFromLevel(row.fallback_keystone_level_1);
     const fallbackSlot2 = computeVaultIlvlFromLevel(row.fallback_keystone_level_4);
     const fallbackSlot3 = computeVaultIlvlFromLevel(row.fallback_keystone_level_8);
-    const dungeonSlot1Ilvl = row.dungeon_slot_1_ilvl ?? fallbackSlot1;
-    const dungeonSlot2Ilvl = row.dungeon_slot_2_ilvl ?? fallbackSlot2;
-    const dungeonSlot3Ilvl = row.dungeon_slot_3_ilvl ?? fallbackSlot3;
+    const dungeonSlot1Ilvl = pickBestVaultIlvl(row.dungeon_slot_1_ilvl, fallbackSlot1);
+    const dungeonSlot2Ilvl = pickBestVaultIlvl(row.dungeon_slot_2_ilvl, fallbackSlot2);
+    const dungeonSlot3Ilvl = pickBestVaultIlvl(row.dungeon_slot_3_ilvl, fallbackSlot3);
     const effectiveDungeonFilled = [dungeonSlot1Ilvl, dungeonSlot2Ilvl, dungeonSlot3Ilvl]
       .filter((value) => value !== null).length;
     const raidSlotsFilled = Math.max(0, row.raid_slots_filled ?? 0);

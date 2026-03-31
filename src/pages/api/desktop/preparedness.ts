@@ -130,6 +130,12 @@ function dungeonVaultIlvlForKeystone(level: number | null): number | null {
 	return GREAT_VAULT_DUNGEON_ILVL.get(capped) ?? null;
 }
 
+function pickBestIlvl(primary: number | null, fallback: number | null): number | null {
+	if (primary === null) return fallback;
+	if (fallback === null) return primary;
+	return Math.max(primary, fallback);
+}
+
 function parseRaidVaultOptions(raidProgressLabel: string | null): [number | null, number | null, number | null] {
 	if (!raidProgressLabel) return [null, null, null];
 
@@ -352,9 +358,18 @@ export async function GET(context: APIContext): Promise<Response> {
 			raid_slot_1_ilvl: char.raid_slot_1_ilvl ?? (canUsePreResetCache ? cacheRaid1 : null),
 			raid_slot_2_ilvl: char.raid_slot_2_ilvl ?? (canUsePreResetCache ? cacheRaid2 : null),
 			raid_slot_3_ilvl: char.raid_slot_3_ilvl ?? (canUsePreResetCache ? cacheRaid3 : null),
-			dungeon_slot_1_ilvl: char.dungeon_slot_1_ilvl ?? fallbackDungeon1 ?? (canUsePreResetCache ? char.mythic_plus_vault_ilvl_1 : null),
-			dungeon_slot_2_ilvl: char.dungeon_slot_2_ilvl ?? fallbackDungeon2 ?? (canUsePreResetCache ? char.mythic_plus_vault_ilvl_2 : null),
-			dungeon_slot_3_ilvl: char.dungeon_slot_3_ilvl ?? fallbackDungeon3 ?? (canUsePreResetCache ? char.mythic_plus_vault_ilvl_3 : null),
+			dungeon_slot_1_ilvl: pickBestIlvl(
+				pickBestIlvl(char.dungeon_slot_1_ilvl, fallbackDungeon1),
+				canUsePreResetCache ? char.mythic_plus_vault_ilvl_1 : null,
+			),
+			dungeon_slot_2_ilvl: pickBestIlvl(
+				pickBestIlvl(char.dungeon_slot_2_ilvl, fallbackDungeon2),
+				canUsePreResetCache ? char.mythic_plus_vault_ilvl_2 : null,
+			),
+			dungeon_slot_3_ilvl: pickBestIlvl(
+				pickBestIlvl(char.dungeon_slot_3_ilvl, fallbackDungeon3),
+				canUsePreResetCache ? char.mythic_plus_vault_ilvl_3 : null,
+			),
 			world_slots_filled:
 				char.world_slots_filled
 				?? (canUsePreResetCache ? worldSlotsFromObjectives(char.world_vault_weekly_objectives) : null),
@@ -368,5 +383,9 @@ export async function GET(context: APIContext): Promise<Response> {
 		};
 	});
 
-	return Response.json(entries);
+	return Response.json(entries, {
+		headers: {
+			'Cache-Control': 'no-store, max-age=0',
+		},
+	});
 }
