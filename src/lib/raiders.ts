@@ -150,6 +150,12 @@ function computeVaultIlvl(sortedLevels: number[], slotIndex: 0 | 3 | 7): number 
   return GREAT_VAULT_DUNGEON_ILVL.get(clamped) ?? null;
 }
 
+function computeVaultIlvlFromLevel(level: number | null): number | null {
+  if (level === null || !Number.isFinite(level) || level < 2) return null;
+  const clamped = Math.min(Math.floor(level), 10);
+  return GREAT_VAULT_DUNGEON_ILVL.get(clamped) ?? null;
+}
+
 /** Merge newly-seen RIO runs into the persistent keystones table (INSERT OR IGNORE). */
 async function mergeKeystoneRuns(
   db: D1Database,
@@ -2144,6 +2150,36 @@ export async function getVaultHistory(charId: number, dbInput?: D1Database): Pro
          dungeon_slot_1_ilvl,
          dungeon_slot_2_ilvl,
          dungeon_slot_3_ilvl,
+         (
+           SELECT rk1.keystone_level
+           FROM raider_keystones rk1
+           WHERE rk1.blizzard_char_id = raider_vault_history.blizzard_char_id
+             AND rk1.completed_ts >= raider_vault_history.week_start_ts
+             AND rk1.completed_ts < raider_vault_history.week_end_ts
+             AND rk1.keystone_level IS NOT NULL
+           ORDER BY rk1.keystone_level DESC
+           LIMIT 1 OFFSET 0
+         ) AS fallback_keystone_level_1,
+         (
+           SELECT rk4.keystone_level
+           FROM raider_keystones rk4
+           WHERE rk4.blizzard_char_id = raider_vault_history.blizzard_char_id
+             AND rk4.completed_ts >= raider_vault_history.week_start_ts
+             AND rk4.completed_ts < raider_vault_history.week_end_ts
+             AND rk4.keystone_level IS NOT NULL
+           ORDER BY rk4.keystone_level DESC
+           LIMIT 1 OFFSET 3
+         ) AS fallback_keystone_level_4,
+         (
+           SELECT rk8.keystone_level
+           FROM raider_keystones rk8
+           WHERE rk8.blizzard_char_id = raider_vault_history.blizzard_char_id
+             AND rk8.completed_ts >= raider_vault_history.week_start_ts
+             AND rk8.completed_ts < raider_vault_history.week_end_ts
+             AND rk8.keystone_level IS NOT NULL
+           ORDER BY rk8.keystone_level DESC
+           LIMIT 1 OFFSET 7
+         ) AS fallback_keystone_level_8,
          world_weekly_objectives,
          raid_slots_filled,
          dungeon_slots_filled,
@@ -2166,6 +2202,9 @@ export async function getVaultHistory(charId: number, dbInput?: D1Database): Pro
       dungeon_slot_1_ilvl: number | null;
       dungeon_slot_2_ilvl: number | null;
       dungeon_slot_3_ilvl: number | null;
+      fallback_keystone_level_1: number | null;
+      fallback_keystone_level_4: number | null;
+      fallback_keystone_level_8: number | null;
       world_weekly_objectives: number | null;
       raid_slots_filled: number | null;
       dungeon_slots_filled: number | null;
@@ -2173,23 +2212,39 @@ export async function getVaultHistory(charId: number, dbInput?: D1Database): Pro
       total_slots_filled: number | null;
     }>();
 
-  return (result.results ?? []).map((row) => ({
-    weekStartTs: row.week_start_ts,
-    weekEndTs: row.week_end_ts,
-    snapshotTs: row.snapshot_ts,
-    raidWeeklyBossKills: row.raid_weekly_boss_kills,
-    raidSlot1Ilvl: row.raid_slot_1_ilvl,
-    raidSlot2Ilvl: row.raid_slot_2_ilvl,
-    raidSlot3Ilvl: row.raid_slot_3_ilvl,
-    dungeonSlot1Ilvl: row.dungeon_slot_1_ilvl,
-    dungeonSlot2Ilvl: row.dungeon_slot_2_ilvl,
-    dungeonSlot3Ilvl: row.dungeon_slot_3_ilvl,
-    worldWeeklyObjectives: row.world_weekly_objectives,
-    raidSlotsFilled: Math.max(0, row.raid_slots_filled ?? 0),
-    dungeonSlotsFilled: Math.max(0, row.dungeon_slots_filled ?? 0),
-    worldSlotsFilled: Math.max(0, row.world_slots_filled ?? 0),
-    totalSlotsFilled: Math.max(0, row.total_slots_filled ?? 0),
-  }));
+  return (result.results ?? []).map((row) => {
+    const fallbackSlot1 = computeVaultIlvlFromLevel(row.fallback_keystone_level_1);
+    const fallbackSlot2 = computeVaultIlvlFromLevel(row.fallback_keystone_level_4);
+    const fallbackSlot3 = computeVaultIlvlFromLevel(row.fallback_keystone_level_8);
+    const dungeonSlot1Ilvl = row.dungeon_slot_1_ilvl ?? fallbackSlot1;
+    const dungeonSlot2Ilvl = row.dungeon_slot_2_ilvl ?? fallbackSlot2;
+    const dungeonSlot3Ilvl = row.dungeon_slot_3_ilvl ?? fallbackSlot3;
+    const effectiveDungeonFilled = [dungeonSlot1Ilvl, dungeonSlot2Ilvl, dungeonSlot3Ilvl]
+      .filter((value) => value !== null).length;
+    const raidSlotsFilled = Math.max(0, row.raid_slots_filled ?? 0);
+    const worldSlotsFilled = Math.max(0, row.world_slots_filled ?? 0);
+    const dungeonSlotsFilled = Math.max(Math.max(0, row.dungeon_slots_filled ?? 0), effectiveDungeonFilled);
+    const recomputedTotal = raidSlotsFilled + effectiveDungeonFilled + worldSlotsFilled;
+    const totalSlotsFilled = Math.max(Math.max(0, row.total_slots_filled ?? 0), recomputedTotal);
+
+    return {
+      weekStartTs: row.week_start_ts,
+      weekEndTs: row.week_end_ts,
+      snapshotTs: row.snapshot_ts,
+      raidWeeklyBossKills: row.raid_weekly_boss_kills,
+      raidSlot1Ilvl: row.raid_slot_1_ilvl,
+      raidSlot2Ilvl: row.raid_slot_2_ilvl,
+      raidSlot3Ilvl: row.raid_slot_3_ilvl,
+      dungeonSlot1Ilvl,
+      dungeonSlot2Ilvl,
+      dungeonSlot3Ilvl,
+      worldWeeklyObjectives: row.world_weekly_objectives,
+      raidSlotsFilled,
+      dungeonSlotsFilled,
+      worldSlotsFilled,
+      totalSlotsFilled,
+    };
+  });
 }
 
 export async function getProgressionHistory(charId: number, dbInput?: D1Database): Promise<ProgressionHistoryRow[]> {
