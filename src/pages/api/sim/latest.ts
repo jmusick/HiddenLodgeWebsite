@@ -3,7 +3,7 @@ export const prerender = false;
 import type { APIContext } from 'astro';
 import { env } from 'cloudflare:workers';
 import { isCharacterOwner } from '../../../lib/auth';
-import { getLatestSimByTeam, getLatestSimForRaider, purgeSimHistoryForRaider } from '../../../lib/sim-api';
+import { getLatestSimByTeam, getLatestSimForRaider, getLatestSimsForRaiderByDifficulty, purgeSimHistoryForRaider } from '../../../lib/sim-api';
 
 function parsePositiveInt(value: string | null): number | null {
   if (!value) return null;
@@ -27,8 +27,13 @@ export async function GET(context: APIContext): Promise<Response> {
   const charId = parsePositiveInt(url.searchParams.get('char_id'));
   const teamId = parsePositiveInt(url.searchParams.get('team_id'));
   const difficulty = url.searchParams.get('difficulty');
+  const groupBy = (url.searchParams.get('group_by') ?? '').trim().toLowerCase();
 
   if (charId) {
+    if (groupBy === 'difficulty') {
+      const data = await getLatestSimsForRaiderByDifficulty(env.DB, charId);
+      return Response.json({ data });
+    }
     const data = await getLatestSimForRaider(env.DB, charId);
     return Response.json({ data });
   }
@@ -74,11 +79,13 @@ export async function POST(context: APIContext): Promise<Response> {
   try {
     const deleted = await purgeSimHistoryForRaider(env.DB, charId);
     const latest = await getLatestSimForRaider(env.DB, charId);
+    const latestByDifficulty = await getLatestSimsForRaiderByDifficulty(env.DB, charId);
     return Response.json({
       success: true,
       char_id: charId,
       deleted,
       data: latest,
+      data_by_difficulty: latestByDifficulty,
       latest,
     });
   } catch (error) {

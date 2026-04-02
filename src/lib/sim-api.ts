@@ -200,6 +200,13 @@ export function normalizeDifficulty(value: string | null | undefined): SimDiffic
   return 'unknown';
 }
 
+function difficultySortOrder(value: string | null | undefined): number {
+  const normalized = normalizeDifficulty(value);
+  if (normalized === 'mythic') return 0;
+  if (normalized === 'heroic') return 1;
+  return 2;
+}
+
 function nowSeconds(): number {
   return Math.floor(Date.now() / 1000);
 }
@@ -929,6 +936,152 @@ export async function getLatestSimForRaider(
     updated_at: runRow.updated_at,
     winners,
   };
+}
+
+export async function getLatestSimsForRaiderByDifficulty(
+  db: D1Database,
+  charId: number,
+  options?: { maxAgeSeconds?: number }
+): Promise<RaiderSimRecommendations[]> {
+  if (!(await hasSimRunsTable(db))) return [];
+  if (!(await hasSimResultTables(db))) return [];
+
+  const maxAgeSeconds = Math.max(60 * 60, Math.min(30 * 24 * 60 * 60, options?.maxAgeSeconds ?? 14 * 24 * 60 * 60));
+  const cutoff = nowSeconds() - maxAgeSeconds;
+  const simTables = await getSimTableNames(db);
+  await purgeStaleSimData(db, simTables);
+
+  const runRowsResult = await db
+    .prepare(
+      `SELECT
+         latest.id,
+         latest.run_id,
+         latest.site_team_id,
+         latest.difficulty,
+         latest.finished_at_utc,
+         latest.updated_at,
+         latest.normalized_difficulty
+       FROM (
+         SELECT
+           sr.id,
+           sr.run_id,
+           sr.site_team_id,
+           sr.difficulty,
+           sr.finished_at_utc,
+           sr.updated_at,
+           CASE
+             WHEN LOWER(TRIM(COALESCE(sr.difficulty, ''))) = 'mythic' THEN 'mythic'
+             WHEN LOWER(TRIM(COALESCE(sr.difficulty, ''))) IN ('heroic', 'flex') THEN 'heroic'
+             ELSE 'unknown'
+           END AS normalized_difficulty,
+           ROW_NUMBER() OVER (
+             PARTITION BY CASE
+               WHEN LOWER(TRIM(COALESCE(sr.difficulty, ''))) = 'mythic' THEN 'mythic'
+               WHEN LOWER(TRIM(COALESCE(sr.difficulty, ''))) IN ('heroic', 'flex') THEN 'heroic'
+               ELSE 'unknown'
+             END
+             ORDER BY COALESCE(sr.finished_at_utc, '') DESC, sr.updated_at DESC, sr.id DESC
+           ) AS rn
+         FROM sim_runs sr
+         JOIN ${simTables.itemWinners} siw ON siw.${simTables.winnerRunFk} = sr.id
+         WHERE sr.status = 'finished'
+           AND siw.best_blizzard_char_id = ?
+           AND sr.updated_at >= ?
+       ) latest
+       WHERE latest.rn = 1
+       ORDER BY latest.updated_at DESC, latest.id DESC`
+    )
+    .bind(charId, cutoff)
+    .all<{
+      id: number;
+      run_id: string;
+      site_team_id: number;
+      difficulty: string;
+      finished_at_utc: string | null;
+      updated_at: number;
+      normalized_difficulty: SimDifficulty;
+    }>();
+
+  const runRows = (runRowsResult.results ?? []) as Array<{
+    id: number;
+    run_id: string;
+    site_team_id: number;
+    difficulty: string;
+    finished_at_utc: string | null;
+    updated_at: number;
+    normalized_difficulty: SimDifficulty;
+  }>;
+  if (runRows.length === 0) return [];
+
+  const runIds = runRows.map((row) => row.id);
+  const placeholders = runIds.map(() => '?').join(', ');
+  const winnersResult = await db
+    .prepare(
+      `SELECT
+         ${simTables.itemWinners}.${simTables.winnerRunFk} AS sim_run_id,
+         slot,
+         item_id,
+         item_label,
+         ilvl,
+         source,
+         delta_dps,
+         pct_gain,
+         simc
+       FROM ${simTables.itemWinners}
+       WHERE ${simTables.itemWinners}.${simTables.winnerRunFk} IN (${placeholders})
+       ORDER BY COALESCE(delta_dps, 0) DESC, slot ASC`
+    )
+    .bind(...runIds)
+    .all<(RaiderSimWinner & { sim_run_id: number })>();
+
+  const winnersByRunId = new Map<number, RaiderSimWinner[]>();
+  for (const winner of (winnersResult.results ?? []) as Array<RaiderSimWinner & { sim_run_id: number }>) {
+    const existing = winnersByRunId.get(winner.sim_run_id) ?? [];
+    existing.push({
+      slot: winner.slot,
+      item_id: winner.item_id,
+      item_label: winner.item_label,
+      ilvl: winner.ilvl,
+      source: winner.source,
+      delta_dps: winner.delta_dps,
+      pct_gain: winner.pct_gain,
+      simc: winner.simc,
+    });
+    winnersByRunId.set(winner.sim_run_id, existing);
+  }
+
+  const recommendations = runRows.map((runRow) => {
+    const merged = new Map<string, RaiderSimWinner>();
+    for (const winner of winnersByRunId.get(runRow.id) ?? []) {
+      const key = winnerMergeKey(winner);
+      if (merged.has(key)) continue;
+      merged.set(key, winner);
+    }
+
+    const winners = [...merged.values()].sort((a, b) => {
+      const da = Number(a.delta_dps ?? Number.NEGATIVE_INFINITY);
+      const dbv = Number(b.delta_dps ?? Number.NEGATIVE_INFINITY);
+      if (dbv !== da) return dbv - da;
+      return String(a.slot ?? '').localeCompare(String(b.slot ?? ''));
+    });
+
+    return {
+      run_id: runRow.run_id,
+      site_team_id: runRow.site_team_id,
+      difficulty: normalizeDifficulty(runRow.difficulty),
+      finished_at_utc: runRow.finished_at_utc,
+      updated_at: runRow.updated_at,
+      winners,
+    } satisfies RaiderSimRecommendations;
+  });
+
+  recommendations.sort((a, b) => {
+    const difficultyDelta = difficultySortOrder(a.difficulty) - difficultySortOrder(b.difficulty);
+    if (difficultyDelta !== 0) return difficultyDelta;
+    return b.updated_at - a.updated_at;
+  });
+
+  return recommendations;
 }
 
 export async function purgeSimHistoryForRaider(

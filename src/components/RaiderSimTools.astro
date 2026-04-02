@@ -2,7 +2,7 @@
 import { env } from 'cloudflare:workers';
 import { Icon } from 'astro-icon/components';
 import { classColor } from '../lib/wow';
-import { getLatestSimForRaider } from '../lib/sim-api';
+import { getLatestSimsForRaiderByDifficulty } from '../lib/sim-api';
 
 interface Props {
   charId: number;
@@ -11,9 +11,9 @@ interface Props {
   canManageSim?: boolean;
 }
 
-const { charId, charName, charClass, canManageSim = false } = Astro.props as Props;
+const { charId, charClass, canManageSim = false } = Astro.props as Props;
 const accent = classColor(charClass);
-const latest = await getLatestSimForRaider((env as any).DB, charId);
+const latestByDifficulty = await getLatestSimsForRaiderByDifficulty((env as any).DB, charId);
 ---
 
 <section class="sim-tools-panel" data-sim-tools-root data-char-id={String(charId)} data-can-manage={canManageSim ? '1' : '0'} aria-label="Sim tools">
@@ -89,12 +89,16 @@ const latest = await getLatestSimForRaider((env as any).DB, charId);
   </div>
 
   <div class="sim-tools-meta" data-sim-meta>
-    {latest ? (
-      <p>
-        Latest result: <strong>{latest.run_id}</strong>
-        <span aria-hidden="true"> • </span>
-        Updated {new Date(latest.updated_at * 1000).toLocaleString()}
-      </p>
+    {latestByDifficulty.length > 0 ? (
+      latestByDifficulty.map((run) => (
+        <p>
+          <strong>{String(run.difficulty).charAt(0).toUpperCase() + String(run.difficulty).slice(1)}</strong>
+          <span aria-hidden="true"> • </span>
+          <strong>{run.run_id}</strong>
+          <span aria-hidden="true"> • </span>
+          Updated {new Date(run.updated_at * 1000).toLocaleString()}
+        </p>
+      ))
     ) : (
       <p>No uploaded sim results for this raider yet.</p>
     )}
@@ -107,15 +111,23 @@ const latest = await getLatestSimForRaider((env as any).DB, charId);
     <table class="sim-tools-table" data-sim-table>
       <thead>
         <tr>
+          <th><button type="button" class="sim-sort" data-sort-key="runDifficulty">Run Difficulty</button></th>
           <th><button type="button" class="sim-sort" data-sort-key="slot">Slot</button></th>
           <th><button type="button" class="sim-sort" data-sort-key="item">Item</button></th>
           <th><button type="button" class="sim-sort" data-sort-key="source">Source</button></th>
-          <th><button type="button" class="sim-sort" data-sort-key="difficulty">Source Difficulty</button></th>
+          <th><button type="button" class="sim-sort" data-sort-key="sourceDifficulty">Source Difficulty</button></th>
           <th><button type="button" class="sim-sort" data-sort-key="ilvl">iLvl</button></th>
           <th><button type="button" class="sim-sort" data-sort-key="delta">Delta DPS</button></th>
           <th><button type="button" class="sim-sort" data-sort-key="pct">Gain %</button></th>
         </tr>
         <tr class="sim-filter-row">
+          <th>
+            <select data-filter-key="runDifficulty" class="sim-filter-select">
+              <option value="">All Runs</option>
+              <option value="heroic">Heroic</option>
+              <option value="mythic">Mythic</option>
+            </select>
+          </th>
           <th>
             <select data-filter-key="slot" class="sim-filter-select">
               <option value="">All Slots</option>
@@ -128,7 +140,7 @@ const latest = await getLatestSimForRaider((env as any).DB, charId);
             </select>
           </th>
           <th>
-            <select data-filter-key="difficulty" class="sim-filter-select">
+            <select data-filter-key="sourceDifficulty" class="sim-filter-select">
               <option value="">All</option>
               <option value="normal">Normal</option>
               <option value="heroic">Heroic</option>
@@ -138,15 +150,18 @@ const latest = await getLatestSimForRaider((env as any).DB, charId);
           <th></th>
           <th></th>
           <th></th>
+          <th></th>
         </tr>
       </thead>
       <tbody data-sim-table-body>
         <tr>
-          <td colspan="7" class="sim-tools-empty">Loading recommendations...</td>
+          <td colspan="8" class="sim-tools-empty">Loading recommendations...</td>
         </tr>
       </tbody>
     </table>
   </div>
+
+  <script type="application/json" data-sim-tools-initial>{JSON.stringify(latestByDifficulty)}</script>
 </section>
 
 <script>
@@ -180,6 +195,7 @@ const latest = await getLatestSimForRaider((env as any).DB, charId);
     const progressFill = panel.querySelector('[data-sim-progress-fill]');
     const tableBody = panel.querySelector('[data-sim-table-body]');
     const meta = panel.querySelector('[data-sim-meta]');
+    const initialPayload = panel.querySelector('[data-sim-tools-initial]');
 
     if (!(modeSelect instanceof HTMLSelectElement)) return;
     if (!(raidSelect instanceof HTMLSelectElement)) return;
@@ -199,7 +215,15 @@ const latest = await getLatestSimForRaider((env as any).DB, charId);
       forceOffline('Connection check stalled. Refresh page.');
     }, 6000);
 
-    let latest = null;
+    let latestRuns = [];
+    if (initialPayload instanceof HTMLScriptElement) {
+      try {
+        const parsed = JSON.parse(initialPayload.textContent || '[]');
+        latestRuns = Array.isArray(parsed) ? parsed : [];
+      } catch {
+        latestRuns = [];
+      }
+    }
     let activeJobId = null;
     let pollTimer = null;
     let sortKey = 'delta';
@@ -209,10 +233,11 @@ const latest = await getLatestSimForRaider((env as any).DB, charId);
     let remoteRunnerMode = false;
 
     const filterValues = {
+      runDifficulty: '',
       slot: '',
       item: '',
       source: '',
-      difficulty: '',
+      sourceDifficulty: '',
     };
 
     const populateSelectOptions = (selector, options, emptyLabel) => {
@@ -306,6 +331,15 @@ const latest = await getLatestSimForRaider((env as any).DB, charId);
       return 'Unknown';
     };
 
+    const difficultyRank = (value) => {
+      const normalized = String(value || '').trim().toLowerCase();
+      if (normalized === 'mythic') return 0;
+      if (normalized === 'heroic') return 1;
+      if (normalized === 'normal') return 2;
+      if (normalized === 'lfr') return 3;
+      return 4;
+    };
+
     const formatNumber = (value) => {
       if (value === null || value === undefined || !Number.isFinite(Number(value))) return '—';
       return Number(value).toLocaleString(undefined, { maximumFractionDigits: 0 });
@@ -345,6 +379,9 @@ const latest = await getLatestSimForRaider((env as any).DB, charId);
         const na = Number(a ?? Number.NEGATIVE_INFINITY);
         const nb = Number(b ?? Number.NEGATIVE_INFINITY);
         return na - nb;
+      }
+      if (key === 'runDifficulty' || key === 'sourceDifficulty') {
+        return difficultyRank(b) - difficultyRank(a);
       }
       return String(a ?? '').localeCompare(String(b ?? ''), undefined, { sensitivity: 'base' });
     };
@@ -422,13 +459,31 @@ const latest = await getLatestSimForRaider((env as any).DB, charId);
       addonWrap.classList.toggle('is-hidden', !addonMode);
     };
 
+    const getAllRows = () => latestRuns.flatMap((run) => {
+      const winners = Array.isArray(run?.winners) ? run.winners : [];
+      return winners.map((winner) => {
+        const sourceDifficulty = inferSourceDifficulty(winner);
+        return {
+          ...winner,
+          runId: run.run_id,
+          runUpdatedAt: run.updated_at,
+          runDifficulty: String(run.difficulty || 'unknown').toLowerCase(),
+          slotText: slotLabel(winner.slot),
+          itemText: winner.item_label || `Item #${winner.item_id ?? '—'}`,
+          sourceText: stripSourceDifficultyPrefix(winner.source || 'Unknown source'),
+          sourceDifficulty,
+          ilvlNum: Number.isFinite(Number(winner.ilvl)) ? Number(winner.ilvl) : null,
+          deltaNum: Number.isFinite(Number(winner.delta_dps)) ? Number(winner.delta_dps) : null,
+          pctNum: Number.isFinite(Number(winner.pct_gain)) ? Number(winner.pct_gain) : null,
+        };
+      });
+    });
+
     const updateMeta = () => {
-      if (!latest) {
+      if (!Array.isArray(latestRuns) || latestRuns.length === 0) {
         meta.innerHTML = '<p>No uploaded sim results for this raider yet.</p>';
         return;
       }
-
-      const updated = latest.updated_at ? new Date(latest.updated_at * 1000).toLocaleString() : 'Unknown';
       const contextParts = [];
       if (lastSimRaidLabel && lastSimRaidLabel !== 'All Raids') {
         contextParts.push(esc(lastSimRaidLabel));
@@ -440,48 +495,40 @@ const latest = await getLatestSimForRaider((env as any).DB, charId);
         ? ` <span aria-hidden="true"> • </span> ${contextParts.join(' <span aria-hidden="true"> • </span> ')}`
         : '';
 
-      const winners = Array.isArray(latest.winners) ? latest.winners : [];
-      const hasWinners = winners.length > 0;
-      const hasNegative = winners.some((winner) => Number.isFinite(Number(winner?.delta_dps)) && Number(winner.delta_dps) < 0);
-      const likelyPositiveOnly = hasWinners && !hasNegative;
+      const runSummary = [...latestRuns]
+        .sort((a, b) => difficultyRank(a?.difficulty) - difficultyRank(b?.difficulty))
+        .map((run) => {
+          const updated = run?.updated_at ? new Date(run.updated_at * 1000).toLocaleString() : 'Unknown';
+          const winners = Array.isArray(run?.winners) ? run.winners : [];
+          const hasNegative = winners.some((winner) => Number.isFinite(Number(winner?.delta_dps)) && Number(winner.delta_dps) < 0);
+          const badge = winners.length > 0 && !hasNegative
+            ? ' <span class="sim-meta-badge">positive-only</span>'
+            : '';
+          return `<p><strong>${esc(formatDifficulty(run?.difficulty))}</strong>${contextLabel} <span aria-hidden="true"> • </span> <strong>${esc(run?.run_id || 'Unknown')}</strong> <span aria-hidden="true"> • </span> Updated ${esc(updated)}${badge}</p>`;
+        })
+        .join('');
 
-      const badge = likelyPositiveOnly
-        ? '<span class="sim-meta-badge">This run is positive-only (no DPS losses in uploaded winners).</span>'
-        : '';
+      meta.innerHTML = runSummary;
 
-      meta.innerHTML = `<p>Latest result: <strong>${latest.run_id}</strong>${contextLabel} <span aria-hidden="true"> • </span> Updated ${updated}</p>${badge}`;
-
-      const rows = Array.isArray(latest.winners) ? latest.winners : [];
-      populateSelectOptions('[data-filter-key="slot"]', rows.map((w) => slotLabel(w?.slot)), 'All Slots');
-      populateSelectOptions('[data-filter-key="source"]', rows.map((w) => stripSourceDifficultyPrefix(w?.source || 'Unknown source')), 'All Sources');
+      const rows = getAllRows();
+      populateSelectOptions('[data-filter-key="slot"]', rows.map((w) => w.slotText), 'All Slots');
+      populateSelectOptions('[data-filter-key="source"]', rows.map((w) => w.sourceText), 'All Sources');
     };
 
     const buildRows = () => {
-      if (!latest || !Array.isArray(latest.winners) || latest.winners.length === 0) {
-        tableBody.innerHTML = '<tr><td colspan="7" class="sim-tools-empty">No recommendations yet for this raider.</td></tr>';
+      const rows = getAllRows();
+      if (rows.length === 0) {
+        tableBody.innerHTML = '<tr><td colspan="8" class="sim-tools-empty">No recommendations yet for this raider.</td></tr>';
         return;
       }
-
-      const rows = latest.winners
-        .map((winner) => {
-          const sourceDifficulty = inferSourceDifficulty(winner);
-          return {
-            ...winner,
-            slotText: slotLabel(winner.slot),
-            itemText: winner.item_label || `Item #${winner.item_id ?? '—'}`,
-            sourceText: stripSourceDifficultyPrefix(winner.source || 'Unknown source'),
-            sourceDifficulty,
-            ilvlNum: Number.isFinite(Number(winner.ilvl)) ? Number(winner.ilvl) : null,
-            deltaNum: Number.isFinite(Number(winner.delta_dps)) ? Number(winner.delta_dps) : null,
-            pctNum: Number.isFinite(Number(winner.pct_gain)) ? Number(winner.pct_gain) : null,
-          };
-        })
+      const filteredRows = rows
         .filter((row) => {
           const checks = {
+            runDifficulty: row.runDifficulty,
             slot: row.slotText,
             item: row.itemText,
             source: row.sourceText,
-            difficulty: row.sourceDifficulty,
+            sourceDifficulty: row.sourceDifficulty,
           };
 
           const textMatch = Object.entries(filterValues).every(([key, raw]) => {
@@ -495,21 +542,23 @@ const latest = await getLatestSimForRaider((env as any).DB, charId);
           return true;
         });
 
-      rows.sort((a, b) => {
+      filteredRows.sort((a, b) => {
         const av =
+          sortKey === 'runDifficulty' ? a.runDifficulty :
           sortKey === 'slot' ? a.slotText :
           sortKey === 'item' ? a.itemText :
           sortKey === 'source' ? a.sourceText :
-          sortKey === 'difficulty' ? a.sourceDifficulty :
+          sortKey === 'sourceDifficulty' ? a.sourceDifficulty :
           sortKey === 'ilvl' ? a.ilvlNum :
           sortKey === 'delta' ? a.deltaNum :
           a.pctNum;
 
         const bv =
+          sortKey === 'runDifficulty' ? b.runDifficulty :
           sortKey === 'slot' ? b.slotText :
           sortKey === 'item' ? b.itemText :
           sortKey === 'source' ? b.sourceText :
-          sortKey === 'difficulty' ? b.sourceDifficulty :
+          sortKey === 'sourceDifficulty' ? b.sourceDifficulty :
           sortKey === 'ilvl' ? b.ilvlNum :
           sortKey === 'delta' ? b.deltaNum :
           b.pctNum;
@@ -518,12 +567,12 @@ const latest = await getLatestSimForRaider((env as any).DB, charId);
         return sortDir === 'asc' ? cmp : -cmp;
       });
 
-      if (rows.length === 0) {
-        tableBody.innerHTML = '<tr><td colspan="7" class="sim-tools-empty">No rows match your filters.</td></tr>';
+      if (filteredRows.length === 0) {
+        tableBody.innerHTML = '<tr><td colspan="8" class="sim-tools-empty">No rows match your filters.</td></tr>';
         return;
       }
 
-      tableBody.innerHTML = rows
+      tableBody.innerHTML = filteredRows
         .map((winner) => {
           const delta = winner.deltaNum;
           const deltaLabel = delta === null || delta === undefined || !Number.isFinite(Number(delta))
@@ -535,6 +584,7 @@ const latest = await getLatestSimForRaider((env as any).DB, charId);
 
           return `
             <tr>
+              <td>${esc(formatDifficulty(winner.runDifficulty))}</td>
               <td>${esc(winner.slotText)}</td>
               <td>
                 <div class="sim-item-cell">
@@ -564,12 +614,12 @@ const latest = await getLatestSimForRaider((env as any).DB, charId);
 
     const refreshLatest = async () => {
       try {
-        const resp = await fetchApi(`/api/sim/latest?char_id=${encodeURIComponent(charId)}`, {
+        const resp = await fetchApi(`/api/sim/latest?char_id=${encodeURIComponent(charId)}&group_by=difficulty`, {
           headers: { Accept: 'application/json' },
         });
         if (!resp.ok) return;
         const payload = await resp.json();
-        latest = payload?.data || null;
+        latestRuns = Array.isArray(payload?.data) ? payload.data : [];
         updateMeta();
         buildRows();
       } catch {
@@ -616,7 +666,6 @@ const latest = await getLatestSimForRaider((env as any).DB, charId);
         }
 
         if (payload?.latest) {
-          latest = payload.latest;
           updateMeta();
           buildRows();
         }
@@ -752,7 +801,7 @@ const latest = await getLatestSimForRaider((env as any).DB, charId);
         }
 
         const record = payload && typeof payload === 'object' ? payload : {};
-        latest = record?.latest || null;
+        latestRuns = Array.isArray(record?.data_by_difficulty) ? record.data_by_difficulty : [];
         updateMeta();
         buildRows();
 
@@ -792,7 +841,7 @@ const latest = await getLatestSimForRaider((env as any).DB, charId);
           sortDir = sortDir === 'asc' ? 'desc' : 'asc';
         } else {
           sortKey = key;
-          sortDir = key === 'slot' || key === 'item' || key === 'source' || key === 'difficulty' ? 'asc' : 'desc';
+          sortDir = key === 'runDifficulty' || key === 'slot' || key === 'item' || key === 'source' || key === 'sourceDifficulty' ? 'asc' : 'desc';
         }
         buildRows();
       });

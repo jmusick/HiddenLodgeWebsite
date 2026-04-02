@@ -7,7 +7,7 @@ import { env } from 'cloudflare:workers';
 import { classColor } from '../../lib/wow';
 import { getRaiderByCharId, getRaiderGear, getRaiderMedia, getPreparednessHistory, getProgressionHistory, getVaultHistory } from '../../lib/raiders';
 import { isCharacterOwner } from '../../lib/auth';
-import { getLatestDroptimizerForRaiders, getLatestSingleTargetForRaiders } from '../../lib/sim-api';
+import { getLatestSingleTargetForRaiders, getLatestSimsForRaiderByDifficulty } from '../../lib/sim-api';
 import { RAID_PROGRESS_TARGET_GROUPS } from '../../data/raidProgressTargets';
 import RaiderSimTools from '../../components/RaiderSimTools.astro';
 
@@ -31,12 +31,11 @@ if (!raider) {
 const { portrait, fullBody } = media;
 const nowEpoch = Math.floor(Date.now() / 1000);
 
-const [singleTargetMap, droptimizerMap] = await Promise.all([
+const [singleTargetMap, droptimizerSnapshots] = await Promise.all([
   getLatestSingleTargetForRaiders((env as any).DB, [id], { maxAgeSeconds: 14 * 24 * 60 * 60 }),
-  getLatestDroptimizerForRaiders((env as any).DB, [id], { maxAgeSeconds: 14 * 24 * 60 * 60 }),
+  getLatestSimsForRaiderByDifficulty((env as any).DB, id, { maxAgeSeconds: 14 * 24 * 60 * 60 }),
 ]);
 const singleTargetSnapshot = singleTargetMap.get(id) ?? null;
-const droptimizerSnapshot = droptimizerMap.get(id) ?? null;
 
 function authLabel(state: string): string {
   if (state === 'ready') return 'Loaded';
@@ -60,6 +59,13 @@ function freshnessBadge(updatedAt: number | null): { label: string; className: s
   if (age <= 24 * 60 * 60) return { label: 'fresh', className: 'fresh' };
   if (age <= 2 * 24 * 60 * 60) return { label: 'aging', className: 'aging' };
   return { label: 'stale', className: 'stale' };
+}
+
+function simDifficultyLabel(value: string): string {
+  const normalized = value.trim().toLowerCase();
+  if (normalized === 'mythic') return 'Mythic';
+  if (normalized === 'heroic') return 'Heroic';
+  return 'Unknown';
 }
 
 function formatScore(filled: number | null, total: number | null): string {
@@ -427,7 +433,12 @@ function formatVaultWeekLabel(weekStartTs: number, weekEndTs: number): string {
 const color = classColor(raider.className);
 const pageTitle = `${raider.name} — ${raider.realm} | The Hidden Lodge`;
 const stFresh = freshnessBadge(singleTargetSnapshot?.updated_at ?? null);
-const dropFresh = freshnessBadge(droptimizerSnapshot?.updated_at ?? null);
+const droptimizerFreshness = droptimizerSnapshots.length > 0
+  ? droptimizerSnapshots.map((snapshot) => ({
+      difficulty: simDifficultyLabel(snapshot.difficulty),
+      ...freshnessBadge(snapshot.updated_at),
+    }))
+  : [{ difficulty: 'Droptimizer', ...freshnessBadge(null) }];
 const raidProgressMatrix = parseRaidProgressMatrix(raider.raidProgressLabel);
 const warcraftLogsUrl = `https://www.warcraftlogs.com/character/id/${raider.blizzardCharId}`;
 const canManageSim = Boolean(
@@ -1280,7 +1291,9 @@ function gemAffixState(item: (typeof gear)[number] | undefined): { missing: bool
           Sim Freshness:&nbsp;
           <span class="sim-freshness-wrap">
             <span class:list={['freshness-chip', stFresh.className]}>Sim DPS: {stFresh.label}</span>
-            <span class:list={['freshness-chip', dropFresh.className]}>Droptimizer: {dropFresh.label}</span>
+            {droptimizerFreshness.map((entry) => (
+              <span class:list={['freshness-chip', entry.className]}>{entry.difficulty}: {entry.label}</span>
+            ))}
           </span>
         </p>
         <p class="sync-text">
