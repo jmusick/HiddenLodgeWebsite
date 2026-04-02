@@ -5,6 +5,7 @@ import Layout from '../layouts/Layout.astro';
 import { Icon } from 'astro-icon/components';
 import { classColor } from '../lib/wow';
 import { loadRaidersViewData } from '../lib/raiders';
+import BlinkyWalker from '../components/BlinkyWalker.astro';
 
 const { raiders, totalMembers, readyCount } = await loadRaidersViewData();
 
@@ -374,6 +375,8 @@ const mplusWinnerData = {
       <p class="spotlight-value" id="mplus-winner-value">{mplusWinnerData.current.value}</p>
       <p class="spotlight-name" id="mplus-winner-name" style={`color: ${mplusWinnerData.current.color}`}>{mplusWinnerData.current.name}</p>
     </article>
+
+    <BlinkyWalker />
   </section>
 
   <section class="panel">
@@ -901,6 +904,9 @@ const mplusWinnerData = {
     grid-template-columns: repeat(3, minmax(0, 1fr));
     gap: 0.75rem;
     margin-top: 1rem;
+    position: relative;
+    overflow: visible;
+    padding-top: 1.3rem;
   }
 
   .mplus-winner-topline {
@@ -932,6 +938,8 @@ const mplusWinnerData = {
     padding: 1rem 1.1rem;
     display: grid;
     gap: 0.25rem;
+    position: relative;
+    z-index: 1;
   }
 
   .spotlight-header {
@@ -1304,6 +1312,7 @@ const mplusWinnerData = {
 
     .spotlights {
       grid-template-columns: repeat(2, minmax(0, 1fr));
+      padding-top: 0;
     }
 
     .results-count {
@@ -1322,6 +1331,10 @@ const mplusWinnerData = {
     .controls,
     .spotlights {
       grid-template-columns: 1fr;
+    }
+
+    .spotlights {
+      padding-top: 0;
     }
   }
 </style>

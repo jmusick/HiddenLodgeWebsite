@@ -1,0 +1,118 @@
+<div class="blinky-static" aria-hidden="true">
+  <img src="/images/blinky/blinky.png" alt="" loading="lazy" decoding="async" />
+</div>
+
+<style>
+  .blinky-static {
+    position: absolute;
+    --edge-overlap: 10px;
+    --bubble-initial-offset: -2.3s;
+    top: 1.3rem;
+    right: 0.85rem;
+    width: clamp(6.5rem, 10vw, 8.25rem);
+    transform: translateY(calc(-100% + var(--edge-overlap)));
+    pointer-events: none;
+    z-index: 4;
+  }
+
+  .blinky-static img {
+    display: block;
+    width: 100%;
+    height: auto;
+    filter: drop-shadow(0 10px 10px rgba(0, 0, 0, 0.3));
+  }
+
+  .blinky-static::before {
+    content: "Don't let them skin me Kivara!";
+    position: absolute;
+    right: calc(100% - 0.5rem);
+    bottom: calc(100% - 2.4rem);
+    max-width: 15rem;
+    padding: 0.5rem 0.78rem;
+    border: 2px solid #111;
+    border-radius: 0.9rem;
+    background: #fff;
+    color: #111;
+    font-family: "Comic Sans MS", "Chalkboard SE", "Marker Felt", sans-serif;
+    font-size: 0.82rem;
+    font-weight: 700;
+    letter-spacing: 0;
+    line-height: 1.2;
+    text-shadow: none;
+    box-shadow: 3px 3px 0 rgba(0, 0, 0, 0.85);
+    transform-origin: 92% 100%;
+    animation: blinky-bubble 9s ease-in-out infinite var(--bubble-initial-offset);
+    white-space: nowrap;
+    z-index: 2;
+  }
+
+  .blinky-static::after {
+    content: "";
+    position: absolute;
+    right: calc(100% + 0.2rem);
+    bottom: calc(100% - 2.64rem);
+    width: 0.56rem;
+    height: 0.56rem;
+    background: #fff;
+    border-right: 2px solid #111;
+    border-bottom: 2px solid #111;
+    transform: rotate(45deg);
+    animation: blinky-bubble-tail 9s ease-in-out infinite var(--bubble-initial-offset);
+    z-index: 3;
+  }
+
+  @keyframes blinky-bubble {
+    0%,
+    28%,
+    100% {
+      opacity: 0;
+      transform: translateY(0.35rem) scale(0.9);
+    }
+
+    34%,
+    86% {
+      opacity: 1;
+      transform: translateY(0) scale(1);
+    }
+
+    94% {
+      opacity: 0.9;
+      transform: translateY(-0.18rem) scale(0.98);
+    }
+  }
+
+  @keyframes blinky-bubble-tail {
+    0%,
+    28%,
+    100% {
+      opacity: 0;
+      transform: rotate(45deg) translateY(0.35rem) scale(0.9);
+    }
+
+    34%,
+    86% {
+      opacity: 1;
+      transform: rotate(45deg) translateY(0) scale(1);
+    }
+
+    94% {
+      opacity: 0.9;
+      transform: rotate(45deg) translateY(-0.18rem) scale(0.98);
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .blinky-static::before,
+    .blinky-static::after {
+      animation: none;
+      opacity: 1;
+      transform: none;
+    }
+  }
+
+  @media (max-width: 1000px) {
+    .blinky-static {
+      display: none;
+    }
+  }
+</style>
