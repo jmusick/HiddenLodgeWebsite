@@ -1,5 +1,6 @@
 <div class="blinky-static" aria-hidden="true">
   <img src="/images/blinky/blinky.png" alt="" loading="lazy" decoding="async" />
+  <span class="blinky-rotating-bubble">Kivara, you took my collar?</span>
 </div>
 
 <style>
@@ -20,6 +21,40 @@
     width: 100%;
     height: auto;
     filter: drop-shadow(0 10px 10px rgba(0, 0, 0, 0.3));
+  }
+
+  .blinky-rotating-bubble {
+    position: absolute;
+    right: calc(100% - 0.15rem);
+    bottom: calc(100% - 4.65rem);
+    padding: 0.46rem 0.7rem;
+    border: 2px solid #111;
+    border-radius: 0.9rem;
+    background: #fff;
+    color: #111;
+    font-family: "Comic Sans MS", "Chalkboard SE", "Marker Felt", sans-serif;
+    font-size: 0.78rem;
+    font-weight: 700;
+    line-height: 1.2;
+    letter-spacing: 0;
+    white-space: nowrap;
+    box-shadow: 3px 3px 0 rgba(0, 0, 0, 0.85);
+    transform-origin: 100% 100%;
+    animation: blinky-bubble-rotate 11s ease-in-out infinite -1.2s;
+    z-index: 5;
+  }
+
+  .blinky-rotating-bubble::after {
+    content: "";
+    position: absolute;
+    right: 0.4rem;
+    bottom: -0.37rem;
+    width: 0.52rem;
+    height: 0.52rem;
+    background: #fff;
+    border-right: 2px solid #111;
+    border-bottom: 2px solid #111;
+    transform: rotate(45deg);
   }
 
   .blinky-static::before {
@@ -101,9 +136,38 @@
     }
   }
 
+  @keyframes blinky-bubble-rotate {
+    0%,
+    46%,
+    100% {
+      opacity: 0;
+      transform: translateY(0.22rem) rotate(-7deg) scale(0.92);
+    }
+
+    52%,
+    86% {
+      opacity: 1;
+      transform: translateY(0) rotate(0deg) scale(1);
+    }
+
+    64% {
+      transform: translateY(0) rotate(2deg) scale(1);
+    }
+
+    74% {
+      transform: translateY(-0.06rem) rotate(-2deg) scale(1.01);
+    }
+
+    92% {
+      opacity: 0.85;
+      transform: translateY(-0.1rem) rotate(1deg) scale(0.98);
+    }
+  }
+
   @media (prefers-reduced-motion: reduce) {
     .blinky-static::before,
-    .blinky-static::after {
+    .blinky-static::after,
+    .blinky-rotating-bubble {
       animation: none;
       opacity: 1;
       transform: none;
