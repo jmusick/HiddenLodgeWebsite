@@ -1,6 +1,8 @@
-<div class="blinky-static" aria-hidden="true">
-  <img src="/images/blinky/blinky.png" alt="" loading="lazy" decoding="async" />
-  <span class="blinky-rotating-bubble">Kivara, you took my collar?</span>
+<div class="blinky-static">
+  <a class="blinky-link" href="/lore?story=blinky-the-misunderstood" aria-label="Open Blinky lore story">
+    <img src="/images/blinky/blinky.png" alt="Blinky" loading="lazy" decoding="async" />
+  </a>
+  <span class="blinky-rotating-bubble" aria-hidden="true">Kivara, you took my collar?</span>
 </div>
 
 <style>
@@ -21,6 +23,11 @@
     width: 100%;
     height: auto;
     filter: drop-shadow(0 10px 10px rgba(0, 0, 0, 0.3));
+  }
+
+  .blinky-link {
+    display: block;
+    pointer-events: auto;
   }
 
   .blinky-rotating-bubble {
