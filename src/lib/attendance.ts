@@ -576,6 +576,7 @@ async function fetchFightParticipantsByCharId(
   }
 
   const actorsById = new Map<number, string>();
+  const reportOwnerKeys = new Set<string>();
   for (const actor of report.masterData?.actors ?? []) {
     const actorId = Number(actor.id ?? 0);
     const name = normalizeName(actor.name);
@@ -587,6 +588,7 @@ async function fetchFightParticipantsByCharId(
 
     const ownerKey = ownership.ownerKeyByCharId.get(charId) ?? attendanceOwnerKey(null, charId);
     actorsById.set(actorId, ownerKey);
+    reportOwnerKeys.add(ownerKey);
   }
 
   const fightIds = new Set(fights.map((fight) => Number(fight.id)));
@@ -691,6 +693,23 @@ async function fetchFightParticipantsByCharId(
           killParticipationByOwnerKey.set(ownerKey, killEncounters);
         }
         killEncounters.add(encounterId);
+      }
+    }
+  }
+
+  const firstAttemptedEncounterId = attemptedEncounterIds.values().next().value;
+  const firstKillEncounterId = killEncounterIds.values().next().value;
+
+  // Align with WCL attendance intent: if a mapped character appears in report actors,
+  // treat them as minimally present when combatant events are incomplete.
+  if (typeof firstAttemptedEncounterId === 'number' && firstAttemptedEncounterId > 0) {
+    for (const ownerKey of reportOwnerKeys) {
+      if (!encounterParticipationByOwnerKey.has(ownerKey)) {
+        encounterParticipationByOwnerKey.set(ownerKey, new Set([firstAttemptedEncounterId]));
+      }
+
+      if (typeof firstKillEncounterId === 'number' && firstKillEncounterId > 0 && !killParticipationByOwnerKey.has(ownerKey)) {
+        killParticipationByOwnerKey.set(ownerKey, new Set([firstKillEncounterId]));
       }
     }
   }
@@ -1011,6 +1030,7 @@ function buildScoreForRaid(options: {
   bossesPresent: number;
   totalBosses: number;
   isBench: boolean;
+  canApplyNoShowPenalty: boolean;
 }): { pointsEarned: number; pointsPossible: number; benchBonusPoints: number } {
   const totalBosses = Math.max(0, options.totalBosses);
   if (totalBosses <= 0) {
@@ -1025,7 +1045,7 @@ function buildScoreForRaid(options: {
     };
   }
 
-  if (options.signupStatus === 'coming' && options.bossesPresent <= 0) {
+  if (options.signupStatus === 'coming' && options.bossesPresent <= 0 && options.canApplyNoShowPenalty) {
     return {
       pointsEarned: -ATTENDANCE_COMING_NO_SHOW_PENALTY_POINTS,
       pointsPossible: ATTENDANCE_BASE_POINTS,
@@ -1210,9 +1230,12 @@ export async function getAttendanceSummaryMap(
 
   const participantsByReportAndOwner = new Map<string, number>();
   const bossKillsPresentByReportAndOwner = new Map<string, number>();
+  const participantRowsByReport = new Map<number, number>();
   for (const row of participantsResult.results ?? []) {
     const canonical = canonicalReportByOriginalId.get(row.report_id);
     if (!canonical) continue;
+
+    participantRowsByReport.set(canonical.id, (participantRowsByReport.get(canonical.id) ?? 0) + 1);
 
     const ownerKey = ownership.ownerKeyByCharId.get(row.blizzard_char_id) ?? attendanceOwnerKey(null, row.blizzard_char_id);
     const key = `${canonical.id}|${ownerKey}`;
@@ -1267,12 +1290,14 @@ export async function getAttendanceSummaryMap(
       const bossKillsPresent = Math.min(Math.max(0, report.total_boss_kills), Math.max(0, Math.floor(bossKillsPresentByReportAndOwner.get(lookupKey) ?? 0)));
       const signupStatus = signupByRaidAndOwner.get(lookupKey) ?? 'unsigned';
       const isBench = benchByRaidAndOwner.has(lookupKey);
+      const canApplyNoShowPenalty = (participantRowsByReport.get(report.id) ?? 0) > 0;
 
       const score = buildScoreForRaid({
         signupStatus,
         bossesPresent,
         totalBosses,
         isBench,
+        canApplyNoShowPenalty,
       });
 
       if (score.pointsPossible <= 0) continue;

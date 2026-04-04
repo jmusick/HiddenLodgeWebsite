@@ -1137,7 +1137,7 @@ function gemAffixState(item: (typeof gear)[number] | undefined): { missing: bool
                 <p>Attendance score is normalized to 100 points per raid and then averaged across scored raids.</p>
                 <p>Per raid points = 100 * signupWeight * participationRatio, unless marked bench or Coming no-show.</p>
                 <p>participationRatio = bossesPresent / totalBossEncounters (kills + unique wipe bosses).</p>
-                <p>Special rule: if signupStatus is Coming and participationRatio is 0, per raid points = -30.</p>
+                <p>Special rule: if signupStatus is Coming, participationRatio is 0, and parsed attendance data exists, per raid points = -30.</p>
                 <p>Final attendance score = (sum of per raid points / (100 * scoredRaids)) * 100.</p>
                 <p>Bench override awards full 100 points and adds +12 bonus points for that raid.</p>
                 <div class="vault-formula-table-wrap">
@@ -1150,7 +1150,7 @@ function gemAffixState(item: (typeof gear)[number] | undefined): { missing: bool
                     </thead>
                     <tbody>
                       <tr><td>Coming</td><td>1.00</td></tr>
-                      <tr><td>Coming (No Show)</td><td>-30 points</td></tr>
+                      <tr><td>Coming (Confirmed No Show)</td><td>-30 points</td></tr>
                       <tr><td>Tentative</td><td>0.90</td></tr>
                       <tr><td>Late</td><td>0.90</td></tr>
                       <tr><td>Absent</td><td>0.80</td></tr>
