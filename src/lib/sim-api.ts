@@ -200,6 +200,41 @@ export function normalizeDifficulty(value: string | null | undefined): SimDiffic
   return 'unknown';
 }
 
+type SourceDifficulty = 'mythic' | 'heroic' | 'normal' | 'lfr' | 'unknown';
+
+function parseBonusIds(simc: string | null | undefined): number[] {
+  const match = String(simc ?? '').match(/\bbonus_id=([0-9/]+)/i);
+  if (!match) return [];
+  return match[1]
+    .split('/')
+    .map((part) => Number.parseInt(part, 10))
+    .filter((value) => Number.isInteger(value));
+}
+
+function inferWinnerSourceDifficulty(winner: Pick<RaiderSimWinner, 'simc' | 'source' | 'ilvl'>): SourceDifficulty {
+  const ids = parseBonusIds(winner.simc);
+  if (ids.includes(4797)) return 'lfr';
+  if (ids.includes(4798)) return 'normal';
+  if (ids.includes(4800)) return 'mythic';
+  if (ids.includes(4799)) return 'heroic';
+
+  const sourceText = String(winner.source ?? '').toLowerCase();
+  if (sourceText.includes('lfr') || sourceText.includes('raid finder')) return 'lfr';
+  if (sourceText.includes('normal')) return 'normal';
+  if (sourceText.includes('mythic')) return 'mythic';
+  if (sourceText.includes('heroic')) return 'heroic';
+
+  const ilvl = Number.parseInt(String(winner.ilvl ?? ''), 10);
+  if (Number.isInteger(ilvl)) {
+    if (ilvl >= 282) return 'mythic';
+    if (ilvl >= 272) return 'heroic';
+    if (ilvl >= 263) return 'normal';
+    if (ilvl >= 250) return 'lfr';
+  }
+
+  return 'unknown';
+}
+
 function difficultySortOrder(value: string | null | undefined): number {
   const normalized = normalizeDifficulty(value);
   if (normalized === 'mythic') return 0;
@@ -954,42 +989,18 @@ export async function getLatestSimsForRaiderByDifficulty(
   const runRowsResult = await db
     .prepare(
       `SELECT
-         latest.id,
-         latest.run_id,
-         latest.site_team_id,
-         latest.difficulty,
-         latest.finished_at_utc,
-         latest.updated_at,
-         latest.normalized_difficulty
-       FROM (
-         SELECT
-           sr.id,
-           sr.run_id,
-           sr.site_team_id,
-           sr.difficulty,
-           sr.finished_at_utc,
-           sr.updated_at,
-           CASE
-             WHEN LOWER(TRIM(COALESCE(sr.difficulty, ''))) = 'mythic' THEN 'mythic'
-             WHEN LOWER(TRIM(COALESCE(sr.difficulty, ''))) IN ('heroic', 'flex') THEN 'heroic'
-             ELSE 'unknown'
-           END AS normalized_difficulty,
-           ROW_NUMBER() OVER (
-             PARTITION BY CASE
-               WHEN LOWER(TRIM(COALESCE(sr.difficulty, ''))) = 'mythic' THEN 'mythic'
-               WHEN LOWER(TRIM(COALESCE(sr.difficulty, ''))) IN ('heroic', 'flex') THEN 'heroic'
-               ELSE 'unknown'
-             END
-             ORDER BY COALESCE(sr.finished_at_utc, '') DESC, sr.updated_at DESC, sr.id DESC
-           ) AS rn
-         FROM sim_runs sr
-         JOIN ${simTables.itemWinners} siw ON siw.${simTables.winnerRunFk} = sr.id
-         WHERE sr.status = 'finished'
-           AND siw.best_blizzard_char_id = ?
-           AND sr.updated_at >= ?
-       ) latest
-       WHERE latest.rn = 1
-       ORDER BY latest.updated_at DESC, latest.id DESC`
+         DISTINCT sr.id,
+         sr.run_id,
+         sr.site_team_id,
+         sr.difficulty,
+         sr.finished_at_utc,
+         sr.updated_at
+       FROM sim_runs sr
+       JOIN ${simTables.itemWinners} siw ON siw.${simTables.winnerRunFk} = sr.id
+       WHERE sr.status = 'finished'
+         AND siw.best_blizzard_char_id = ?
+         AND sr.updated_at >= ?
+       ORDER BY COALESCE(sr.finished_at_utc, '') DESC, sr.updated_at DESC, sr.id DESC`
     )
     .bind(charId, cutoff)
     .all<{
@@ -999,7 +1010,6 @@ export async function getLatestSimsForRaiderByDifficulty(
       difficulty: string;
       finished_at_utc: string | null;
       updated_at: number;
-      normalized_difficulty: SimDifficulty;
     }>();
 
   const runRows = (runRowsResult.results ?? []) as Array<{
@@ -1009,7 +1019,6 @@ export async function getLatestSimsForRaiderByDifficulty(
     difficulty: string;
     finished_at_utc: string | null;
     updated_at: number;
-    normalized_difficulty: SimDifficulty;
   }>;
   if (runRows.length === 0) return [];
 
@@ -1050,30 +1059,50 @@ export async function getLatestSimsForRaiderByDifficulty(
     winnersByRunId.set(winner.sim_run_id, existing);
   }
 
-  const recommendations = runRows.map((runRow) => {
-    const merged = new Map<string, RaiderSimWinner>();
+  const recommendationsByDifficulty = new Map<'heroic' | 'mythic', RaiderSimRecommendations>();
+  for (const runRow of runRows) {
+    const groupedWinners = new Map<'heroic' | 'mythic', RaiderSimWinner[]>();
     for (const winner of winnersByRunId.get(runRow.id) ?? []) {
-      const key = winnerMergeKey(winner);
-      if (merged.has(key)) continue;
-      merged.set(key, winner);
+      const sourceDifficulty = inferWinnerSourceDifficulty(winner);
+      if (sourceDifficulty !== 'heroic' && sourceDifficulty !== 'mythic') continue;
+      const existing = groupedWinners.get(sourceDifficulty) ?? [];
+      existing.push(winner);
+      groupedWinners.set(sourceDifficulty, existing);
     }
 
-    const winners = [...merged.values()].sort((a, b) => {
-      const da = Number(a.delta_dps ?? Number.NEGATIVE_INFINITY);
-      const dbv = Number(b.delta_dps ?? Number.NEGATIVE_INFINITY);
-      if (dbv !== da) return dbv - da;
-      return String(a.slot ?? '').localeCompare(String(b.slot ?? ''));
-    });
+    for (const [difficulty, difficultyWinners] of groupedWinners.entries()) {
+      if (recommendationsByDifficulty.has(difficulty)) continue;
 
-    return {
-      run_id: runRow.run_id,
-      site_team_id: runRow.site_team_id,
-      difficulty: normalizeDifficulty(runRow.difficulty),
-      finished_at_utc: runRow.finished_at_utc,
-      updated_at: runRow.updated_at,
-      winners,
-    } satisfies RaiderSimRecommendations;
-  });
+      const merged = new Map<string, RaiderSimWinner>();
+      for (const winner of difficultyWinners) {
+        const key = winnerMergeKey(winner);
+        if (merged.has(key)) continue;
+        merged.set(key, winner);
+      }
+
+      const winners = [...merged.values()].sort((a, b) => {
+        const da = Number(a.delta_dps ?? Number.NEGATIVE_INFINITY);
+        const dbv = Number(b.delta_dps ?? Number.NEGATIVE_INFINITY);
+        if (dbv !== da) return dbv - da;
+        return String(a.slot ?? '').localeCompare(String(b.slot ?? ''));
+      });
+
+      recommendationsByDifficulty.set(difficulty, {
+        run_id: runRow.run_id,
+        site_team_id: runRow.site_team_id,
+        difficulty,
+        finished_at_utc: runRow.finished_at_utc,
+        updated_at: runRow.updated_at,
+        winners,
+      });
+    }
+
+    if (recommendationsByDifficulty.has('heroic') && recommendationsByDifficulty.has('mythic')) {
+      break;
+    }
+  }
+
+  const recommendations = [...recommendationsByDifficulty.values()];
 
   recommendations.sort((a, b) => {
     const difficultyDelta = difficultySortOrder(a.difficulty) - difficultySortOrder(b.difficulty);
