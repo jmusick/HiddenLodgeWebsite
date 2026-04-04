@@ -825,7 +825,11 @@ const getRaidMembers = (raidKey: string): DaySummarySignupRow[] => {
                                         <input type="hidden" name="occurrence_start_utc" value={raidOccurrenceStartUtc} />
                                         <input type="hidden" name="blizzard_char_id" value={row.blizzard_char_id!} />
                                         <input type="hidden" name="bench_action" value={isBench ? 'clear' : 'set'} />
-                                        <button type="submit" class:list={['btn-mini', { 'btn-bench-active': isBench }]}>
+                                        <button
+                                          type="submit"
+                                          class:list={['btn-mini', { 'btn-bench-active': isBench }]}
+                                          onclick={isBench ? "return confirm('Clear bench override for this raider on this raid night?');" : undefined}
+                                        >
                                           {isBench ? 'Bench On' : 'Bench'}
                                         </button>
                                       </form>
