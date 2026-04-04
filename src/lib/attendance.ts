@@ -64,6 +64,26 @@ interface AttendanceOverrideRow {
   blizzard_char_id: number;
 }
 
+interface AttendanceCharacterRow {
+  blizzard_char_id: number;
+  name: string;
+  realm: string;
+  user_id: number | null;
+}
+
+interface AttendanceRaiderLookupRow {
+  blizzard_char_id: number;
+  name: string;
+  realm_slug: string;
+}
+
+interface AttendanceOwnershipData {
+  raiderCharIds: number[];
+  charLookup: Map<string, number>;
+  ownerKeyByCharId: Map<number, string>;
+  charIdsByOwnerKey: Map<string, number[]>;
+}
+
 interface AttendanceOccurrence {
   raid_ref_key: string;
   raid_kind: 'primary' | 'adhoc';
@@ -204,6 +224,88 @@ function normalizeRealmSlug(realm: string | null | undefined): string {
     .replace(/'/g, '')
     .replace(/\s+/g, '-')
     .replace(/-+/g, '-');
+}
+
+function attendanceOwnerKey(userId: number | null | undefined, blizzardCharId: number): string {
+  return Number.isInteger(userId) && (userId ?? 0) > 0 ? `user:${userId}` : `char:${blizzardCharId}`;
+}
+
+function addCharIdToOwnerMap(charIdsByOwnerKey: Map<string, Set<number>>, ownerKey: string, blizzardCharId: number): void {
+  let ownedCharIds = charIdsByOwnerKey.get(ownerKey);
+  if (!ownedCharIds) {
+    ownedCharIds = new Set<number>();
+    charIdsByOwnerKey.set(ownerKey, ownedCharIds);
+  }
+  ownedCharIds.add(blizzardCharId);
+}
+
+async function loadAttendanceOwnership(db: D1Database): Promise<AttendanceOwnershipData> {
+  const [characterRowsResult, raiderRowsResult] = await Promise.all([
+    db
+      .prepare(
+        `SELECT
+           blizzard_char_id,
+           name,
+           realm,
+           user_id
+         FROM characters
+         WHERE blizzard_char_id IS NOT NULL`
+      )
+      .all<AttendanceCharacterRow>(),
+    db
+      .prepare(
+        `SELECT
+           blizzard_char_id,
+           name,
+           realm_slug
+         FROM raider_metrics_cache`
+      )
+      .all<AttendanceRaiderLookupRow>(),
+  ]);
+
+  const charLookup = new Map<string, number>();
+  const ownerKeyByCharId = new Map<number, string>();
+  const charIdsByOwnerKeyMutable = new Map<string, Set<number>>();
+
+  for (const row of characterRowsResult.results ?? []) {
+    const blizzardCharId = Number(row.blizzard_char_id);
+    if (!Number.isInteger(blizzardCharId) || blizzardCharId <= 0) continue;
+
+    const ownerKey = attendanceOwnerKey(row.user_id, blizzardCharId);
+    ownerKeyByCharId.set(blizzardCharId, ownerKey);
+    addCharIdToOwnerMap(charIdsByOwnerKeyMutable, ownerKey, blizzardCharId);
+
+    const lookupKey = `${normalizeName(row.name)}::${normalizeRealmSlug(row.realm)}`;
+    if (!lookupKey.startsWith('::')) {
+      charLookup.set(lookupKey, blizzardCharId);
+    }
+  }
+
+  const raiderCharIds: number[] = [];
+  for (const row of raiderRowsResult.results ?? []) {
+    const blizzardCharId = Number(row.blizzard_char_id);
+    if (!Number.isInteger(blizzardCharId) || blizzardCharId <= 0) continue;
+
+    raiderCharIds.push(blizzardCharId);
+
+    const existingOwnerKey = ownerKeyByCharId.get(blizzardCharId) ?? attendanceOwnerKey(null, blizzardCharId);
+    ownerKeyByCharId.set(blizzardCharId, existingOwnerKey);
+    addCharIdToOwnerMap(charIdsByOwnerKeyMutable, existingOwnerKey, blizzardCharId);
+
+    const lookupKey = `${normalizeName(row.name)}::${normalizeRealmSlug(row.realm_slug)}`;
+    if (!lookupKey.startsWith('::') && !charLookup.has(lookupKey)) {
+      charLookup.set(lookupKey, blizzardCharId);
+    }
+  }
+
+  return {
+    raiderCharIds,
+    charLookup,
+    ownerKeyByCharId,
+    charIdsByOwnerKey: new Map(
+      [...charIdsByOwnerKeyMutable.entries()].map(([ownerKey, charIds]) => [ownerKey, [...charIds].sort((a, b) => a - b)])
+    ),
+  };
 }
 
 function getWclAuthConfig(): WclAuthConfig | null {
@@ -373,7 +475,7 @@ async function listCandidateReportsForOccurrence(
 async function fetchFightParticipantsByCharId(
   accessToken: string,
   reportCode: string,
-  charLookup: Map<string, number>
+  ownership: AttendanceOwnershipData
 ): Promise<{
   totalBossKills: number;
   totalBossWipes: number;
@@ -447,15 +549,18 @@ async function fetchFightParticipantsByCharId(
     };
   }
 
-  const actorsById = new Map<number, number>();
+  const actorsById = new Map<number, string>();
   for (const actor of report.masterData?.actors ?? []) {
     const actorId = Number(actor.id ?? 0);
     const name = normalizeName(actor.name);
     const realmSlug = normalizeRealmSlug(actor.server);
     if (!actorId || !name || !realmSlug) continue;
 
-    const charId = charLookup.get(`${name}::${realmSlug}`);
-    if (charId) actorsById.set(actorId, charId);
+    const charId = ownership.charLookup.get(`${name}::${realmSlug}`);
+    if (!charId) continue;
+
+    const ownerKey = ownership.ownerKeyByCharId.get(charId) ?? attendanceOwnerKey(null, charId);
+    actorsById.set(actorId, ownerKey);
   }
 
   const fightIds = new Set(fights.map((fight) => Number(fight.id)));
@@ -475,7 +580,7 @@ async function fetchFightParticipantsByCharId(
   const minFightStart = fights.reduce((min, fight) => Math.min(min, Number(fight.startTime ?? Number.MAX_SAFE_INTEGER)), Number.MAX_SAFE_INTEGER);
   const maxFightEnd = fights.reduce((max, fight) => Math.max(max, Number(fight.endTime ?? 0)), 0);
 
-  const participantsByFight = new Map<number, Set<number>>();
+  const participantsByFight = new Map<number, Set<string>>();
   let nextStart = Number.isFinite(minFightStart) ? minFightStart : 0;
   const absoluteEnd = Math.max(nextStart, maxFightEnd);
 
@@ -517,15 +622,15 @@ async function fetchFightParticipantsByCharId(
       if (!fightIds.has(fightId)) continue;
 
       const sourceActorId = Number(event.sourceID ?? 0);
-      const blizzardCharId = actorsById.get(sourceActorId);
-      if (!blizzardCharId) continue;
+      const ownerKey = actorsById.get(sourceActorId);
+      if (!ownerKey) continue;
 
       let fightSet = participantsByFight.get(fightId);
       if (!fightSet) {
-        fightSet = new Set<number>();
+        fightSet = new Set<string>();
         participantsByFight.set(fightId, fightSet);
       }
-      fightSet.add(blizzardCharId);
+      fightSet.add(ownerKey);
     }
 
     const nextPage = Number(page?.reportData?.report?.events?.nextPageTimestamp ?? 0);
@@ -535,8 +640,8 @@ async function fetchFightParticipantsByCharId(
     nextStart = nextPage;
   }
 
-  const encounterParticipationByCharId = new Map<number, Set<number>>();
-  const killParticipationByCharId = new Map<number, Set<number>>();
+  const encounterParticipationByOwnerKey = new Map<string, Set<number>>();
+  const killParticipationByOwnerKey = new Map<string, Set<number>>();
   for (const fightId of fightIds) {
     const participants = participantsByFight.get(fightId);
     if (!participants) continue;
@@ -545,19 +650,19 @@ async function fetchFightParticipantsByCharId(
     if (!encounterId || encounterId <= 0) continue;
     const isKillFight = killEncounterIds.has(encounterId);
 
-    for (const blizzardCharId of participants) {
-      let encounters = encounterParticipationByCharId.get(blizzardCharId);
+    for (const ownerKey of participants) {
+      let encounters = encounterParticipationByOwnerKey.get(ownerKey);
       if (!encounters) {
         encounters = new Set<number>();
-        encounterParticipationByCharId.set(blizzardCharId, encounters);
+        encounterParticipationByOwnerKey.set(ownerKey, encounters);
       }
       encounters.add(encounterId);
 
       if (isKillFight) {
-        let killEncounters = killParticipationByCharId.get(blizzardCharId);
+        let killEncounters = killParticipationByOwnerKey.get(ownerKey);
         if (!killEncounters) {
           killEncounters = new Set<number>();
-          killParticipationByCharId.set(blizzardCharId, killEncounters);
+          killParticipationByOwnerKey.set(ownerKey, killEncounters);
         }
         killEncounters.add(encounterId);
       }
@@ -565,13 +670,19 @@ async function fetchFightParticipantsByCharId(
   }
 
   const bossesByCharId = new Map<number, number>();
-  for (const [blizzardCharId, encounters] of encounterParticipationByCharId.entries()) {
-    bossesByCharId.set(blizzardCharId, encounters.size);
+  for (const [ownerKey, encounters] of encounterParticipationByOwnerKey.entries()) {
+    const ownedCharIds = ownership.charIdsByOwnerKey.get(ownerKey) ?? [];
+    for (const blizzardCharId of ownedCharIds) {
+      bossesByCharId.set(blizzardCharId, encounters.size);
+    }
   }
 
   const bossKillsByCharId = new Map<number, number>();
-  for (const [blizzardCharId, encounters] of killParticipationByCharId.entries()) {
-    bossKillsByCharId.set(blizzardCharId, encounters.size);
+  for (const [ownerKey, encounters] of killParticipationByOwnerKey.entries()) {
+    const ownedCharIds = ownership.charIdsByOwnerKey.get(ownerKey) ?? [];
+    for (const blizzardCharId of ownedCharIds) {
+      bossKillsByCharId.set(blizzardCharId, encounters.size);
+    }
   }
 
   return {
@@ -690,7 +801,7 @@ async function syncAttendanceOccurrence(
   db: D1Database,
   accessToken: string,
   occurrence: AttendanceOccurrence,
-  charLookup: Map<string, number>
+  ownership: AttendanceOwnershipData
 ): Promise<void> {
   const candidates = await listCandidateReportsForOccurrence(accessToken, occurrence.occurrence_start_utc);
   if (candidates.length === 0) {
@@ -698,7 +809,7 @@ async function syncAttendanceOccurrence(
   }
 
   for (const candidate of candidates.slice(0, 3)) {
-    const details = await fetchFightParticipantsByCharId(accessToken, candidate.code, charLookup);
+    const details = await fetchFightParticipantsByCharId(accessToken, candidate.code, ownership);
     if ((details.totalBossKills + details.totalBossWipes) <= 0) continue;
 
     await upsertAttendanceReport(db, occurrence, {
@@ -758,23 +869,7 @@ export async function importAttendanceFromReportCode(
     throw new Error('Failed to get WCL access token.');
   }
 
-  const charRows = await db
-    .prepare(
-      `SELECT
-         blizzard_char_id,
-         name,
-         realm_slug
-       FROM raider_metrics_cache`
-    )
-    .all<{ blizzard_char_id: number; name: string; realm_slug: string }>();
-
-  const charLookup = new Map<string, number>();
-  for (const row of charRows.results ?? []) {
-    const key = `${normalizeName(row.name)}::${normalizeRealmSlug(row.realm_slug)}`;
-    if (!key.startsWith('::') && row.blizzard_char_id > 0) {
-      charLookup.set(key, row.blizzard_char_id);
-    }
-  }
+  const ownership = await loadAttendanceOwnership(db);
 
   let details: {
     totalBossKills: number;
@@ -786,7 +881,7 @@ export async function importAttendanceFromReportCode(
     reportEndUtc: number | null;
   };
   try {
-    details = await fetchFightParticipantsByCharId(accessToken, code, charLookup);
+    details = await fetchFightParticipantsByCharId(accessToken, code, ownership);
     await clearWclBackoff(db);
   } catch (error) {
     if (error instanceof WclRateLimitError) {
@@ -849,28 +944,12 @@ async function syncAttendanceFromWcl(db: D1Database): Promise<void> {
   const occurrences = await listUnsignedRaidOccurrencesNeedingSync(db, staleCutoff, nowEpoch, zeroResultCutoff);
   if (occurrences.length === 0) return;
 
-  const charRows = await db
-    .prepare(
-      `SELECT
-         blizzard_char_id,
-         name,
-         realm_slug
-       FROM raider_metrics_cache`
-    )
-    .all<{ blizzard_char_id: number; name: string; realm_slug: string }>();
-
-  const charLookup = new Map<string, number>();
-  for (const row of charRows.results ?? []) {
-    const key = `${normalizeName(row.name)}::${normalizeRealmSlug(row.realm_slug)}`;
-    if (!key.startsWith('::') && row.blizzard_char_id > 0) {
-      charLookup.set(key, row.blizzard_char_id);
-    }
-  }
+  const ownership = await loadAttendanceOwnership(db);
 
   let hitRateLimit = false;
   for (const occurrence of occurrences) {
     try {
-      await syncAttendanceOccurrence(db, accessToken, occurrence, charLookup);
+      await syncAttendanceOccurrence(db, accessToken, occurrence, ownership);
     } catch (error) {
       if (error instanceof WclRateLimitError) {
         const backoffSeconds = Math.min(
@@ -990,11 +1069,9 @@ export async function getAttendanceSummaryMap(
   }
 
   const includeBreakdownFor = new Set((options?.includeBreakdownFor ?? []).filter((id) => Number.isFinite(id) && id > 0));
+  const ownership = await loadAttendanceOwnership(db);
 
-  const [raidersResult, reportsResult, participantsResult, signupsResult, overridesResult] = await Promise.all([
-    db
-      .prepare('SELECT blizzard_char_id FROM raider_metrics_cache ORDER BY blizzard_char_id ASC')
-      .all<{ blizzard_char_id: number }>(),
+  const [reportsResult, participantsResult, signupsResult, overridesResult] = await Promise.all([
     db
       .prepare(
         `SELECT
@@ -1061,7 +1138,10 @@ export async function getAttendanceSummaryMap(
       .all<AttendanceOverrideRow>(),
   ]);
 
-  const raiderIds = (raidersResult.results ?? []).map((row) => Number(row.blizzard_char_id)).filter((id) => Number.isFinite(id) && id > 0);
+  const targetCharIds = [...new Set([
+    ...ownership.raiderCharIds,
+    ...[...includeBreakdownFor],
+  ].filter((id) => Number.isFinite(id) && id > 0))];
 
   const reports = reportsResult.results ?? [];
   const canonicalByNightKey = new Map<string, AttendanceReportRow>();
@@ -1094,23 +1174,24 @@ export async function getAttendanceSummaryMap(
     reportKeyByRaid.set(`${report.raid_ref_key}|${report.occurrence_start_utc}`, canonical);
   }
 
-  const participantsByReportAndChar = new Map<string, number>();
-  const bossKillsPresentByReportAndChar = new Map<string, number>();
+  const participantsByReportAndOwner = new Map<string, number>();
+  const bossKillsPresentByReportAndOwner = new Map<string, number>();
   for (const row of participantsResult.results ?? []) {
     const canonical = canonicalReportByOriginalId.get(row.report_id);
     if (!canonical) continue;
 
-    const key = `${canonical.id}|${row.blizzard_char_id}`;
+    const ownerKey = ownership.ownerKeyByCharId.get(row.blizzard_char_id) ?? attendanceOwnerKey(null, row.blizzard_char_id);
+    const key = `${canonical.id}|${ownerKey}`;
     const bossesPresent = Math.max(0, Math.floor(row.bosses_present));
-    const existing = participantsByReportAndChar.get(key) ?? 0;
-    participantsByReportAndChar.set(key, Math.max(existing, bossesPresent));
+    const existing = participantsByReportAndOwner.get(key) ?? 0;
+    participantsByReportAndOwner.set(key, existing + bossesPresent);
 
     const bossKillsPresent = Math.max(0, Math.floor(row.boss_kills_present ?? 0));
-    const existingKillsPresent = bossKillsPresentByReportAndChar.get(key) ?? 0;
-    bossKillsPresentByReportAndChar.set(key, Math.max(existingKillsPresent, bossKillsPresent));
+    const existingKillsPresent = bossKillsPresentByReportAndOwner.get(key) ?? 0;
+    bossKillsPresentByReportAndOwner.set(key, existingKillsPresent + bossKillsPresent);
   }
 
-  const signupByRaidAndChar = new Map<string, AttendanceSignupStatus>();
+  const signupByRaidAndOwner = new Map<string, AttendanceSignupStatus>();
   for (const row of signupsResult.results ?? []) {
     const report = reportKeyByRaid.get(`${row.raid_ref_key}|${row.occurrence_start_utc}`);
     if (!report) continue;
@@ -1118,22 +1199,27 @@ export async function getAttendanceSummaryMap(
     const status = row.signup_status;
     if (status !== 'coming' && status !== 'tentative' && status !== 'late' && status !== 'absent') continue;
 
-    const key = `${report.id}|${row.blizzard_char_id}`;
-    const existing = signupByRaidAndChar.get(key) ?? 'unsigned';
+    const ownerKey = ownership.ownerKeyByCharId.get(row.blizzard_char_id) ?? attendanceOwnerKey(null, row.blizzard_char_id);
+    const key = `${report.id}|${ownerKey}`;
+    const existing = signupByRaidAndOwner.get(key) ?? 'unsigned';
     if (signupStatusRank(status) >= signupStatusRank(existing)) {
-      signupByRaidAndChar.set(key, status);
+      signupByRaidAndOwner.set(key, status);
     }
   }
 
-  const benchByRaidAndChar = new Set<string>();
+  const benchByRaidAndOwner = new Set<string>();
   for (const row of overridesResult.results ?? []) {
     const report = reportKeyByRaid.get(`${row.raid_ref_key}|${row.occurrence_start_utc}`);
     if (!report) continue;
-    benchByRaidAndChar.add(`${report.id}|${row.blizzard_char_id}`);
+    const ownerKey = ownership.ownerKeyByCharId.get(row.blizzard_char_id) ?? attendanceOwnerKey(null, row.blizzard_char_id);
+    benchByRaidAndOwner.add(`${report.id}|${ownerKey}`);
   }
 
   const summaryMap = new Map<number, AttendanceSummary>();
-  for (const blizzardCharId of raiderIds) {
+  const targetOwnerKeys = [...new Set(targetCharIds.map((blizzardCharId) => ownership.ownerKeyByCharId.get(blizzardCharId) ?? attendanceOwnerKey(null, blizzardCharId)))];
+  const includeBreakdownForOwners = new Set([...includeBreakdownFor].map((blizzardCharId) => ownership.ownerKeyByCharId.get(blizzardCharId) ?? attendanceOwnerKey(null, blizzardCharId)));
+
+  for (const ownerKey of targetOwnerKeys) {
     let pointsEarnedTotal = 0;
     let pointsPossibleTotal = 0;
     let benchBonusTotal = 0;
@@ -1141,16 +1227,17 @@ export async function getAttendanceSummaryMap(
     const breakdown: AttendanceRaidBreakdown[] = [];
 
     for (const report of reportsById.values()) {
-      const lookupKey = `${report.id}|${blizzardCharId}`;
-      const bossesPresent = Math.max(0, Math.floor(participantsByReportAndChar.get(lookupKey) ?? 0));
-      const bossKillsPresent = Math.max(0, Math.floor(bossKillsPresentByReportAndChar.get(lookupKey) ?? 0));
-      const signupStatus = signupByRaidAndChar.get(lookupKey) ?? 'unsigned';
-      const isBench = benchByRaidAndChar.has(lookupKey);
+      const lookupKey = `${report.id}|${ownerKey}`;
+      const totalBosses = reportTotalBosses(report);
+      const bossesPresent = Math.min(totalBosses, Math.max(0, Math.floor(participantsByReportAndOwner.get(lookupKey) ?? 0)));
+      const bossKillsPresent = Math.min(Math.max(0, report.total_boss_kills), Math.max(0, Math.floor(bossKillsPresentByReportAndOwner.get(lookupKey) ?? 0)));
+      const signupStatus = signupByRaidAndOwner.get(lookupKey) ?? 'unsigned';
+      const isBench = benchByRaidAndOwner.has(lookupKey);
 
       const score = buildScoreForRaid({
         signupStatus,
         bossesPresent,
-        totalBosses: reportTotalBosses(report),
+        totalBosses,
         isBench,
       });
 
@@ -1161,9 +1248,7 @@ export async function getAttendanceSummaryMap(
       pointsPossibleTotal += score.pointsPossible;
       benchBonusTotal += score.benchBonusPoints;
 
-      const totalBosses = reportTotalBosses(report);
-
-      if (includeBreakdownFor.has(blizzardCharId)) {
+      if (includeBreakdownForOwners.has(ownerKey)) {
         breakdown.push({
           raidRefKey: report.raid_ref_key,
           raidKind: report.raid_kind,
@@ -1191,14 +1276,18 @@ export async function getAttendanceSummaryMap(
       ? roundupOneDecimal((pointsEarnedTotal / pointsPossibleTotal) * 100)
       : 0;
 
-    summaryMap.set(blizzardCharId, {
+    const summary: AttendanceSummary = {
       scorePercent,
       totalPointsEarned: roundupOneDecimal(pointsEarnedTotal),
       totalPointsPossible: roundupOneDecimal(pointsPossibleTotal),
       totalBenchBonusPoints: roundupOneDecimal(benchBonusTotal),
       scoredRaidCount,
       breakdown,
-    });
+    };
+
+    for (const blizzardCharId of ownership.charIdsByOwnerKey.get(ownerKey) ?? []) {
+      summaryMap.set(blizzardCharId, summary);
+    }
   }
 
   return summaryMap;
