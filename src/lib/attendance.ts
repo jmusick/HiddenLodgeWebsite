@@ -80,6 +80,7 @@ interface AttendanceRaiderLookupRow {
 interface AttendanceOwnershipData {
   raiderCharIds: number[];
   charLookup: Map<string, number>;
+  nameOnlyLookup: Map<string, number>;
   ownerKeyByCharId: Map<number, string>;
   charIdsByOwnerKey: Map<string, number[]>;
 }
@@ -240,6 +241,21 @@ function addCharIdToOwnerMap(charIdsByOwnerKey: Map<string, Set<number>>, ownerK
   ownedCharIds.add(blizzardCharId);
 }
 
+function addUniqueNameLookup(nameLookup: Map<string, number | null>, normalizedName: string, blizzardCharId: number): void {
+  if (!normalizedName) return;
+
+  const existing = nameLookup.get(normalizedName);
+  if (existing === undefined) {
+    nameLookup.set(normalizedName, blizzardCharId);
+    return;
+  }
+
+  if (existing !== blizzardCharId) {
+    // Only keep name-only fallback when the name uniquely identifies one character.
+    nameLookup.set(normalizedName, null);
+  }
+}
+
 async function loadAttendanceOwnership(db: D1Database): Promise<AttendanceOwnershipData> {
   const [characterRowsResult, raiderRowsResult] = await Promise.all([
     db
@@ -265,6 +281,7 @@ async function loadAttendanceOwnership(db: D1Database): Promise<AttendanceOwners
   ]);
 
   const charLookup = new Map<string, number>();
+  const nameOnlyLookupMutable = new Map<string, number | null>();
   const ownerKeyByCharId = new Map<number, string>();
   const charIdsByOwnerKeyMutable = new Map<string, Set<number>>();
 
@@ -275,6 +292,8 @@ async function loadAttendanceOwnership(db: D1Database): Promise<AttendanceOwners
     const ownerKey = attendanceOwnerKey(row.user_id, blizzardCharId);
     ownerKeyByCharId.set(blizzardCharId, ownerKey);
     addCharIdToOwnerMap(charIdsByOwnerKeyMutable, ownerKey, blizzardCharId);
+
+    addUniqueNameLookup(nameOnlyLookupMutable, normalizeName(row.name), blizzardCharId);
 
     const lookupKey = `${normalizeName(row.name)}::${normalizeRealmSlug(row.realm)}`;
     if (!lookupKey.startsWith('::')) {
@@ -293,6 +312,8 @@ async function loadAttendanceOwnership(db: D1Database): Promise<AttendanceOwners
     ownerKeyByCharId.set(blizzardCharId, existingOwnerKey);
     addCharIdToOwnerMap(charIdsByOwnerKeyMutable, existingOwnerKey, blizzardCharId);
 
+    addUniqueNameLookup(nameOnlyLookupMutable, normalizeName(row.name), blizzardCharId);
+
     const lookupKey = `${normalizeName(row.name)}::${normalizeRealmSlug(row.realm_slug)}`;
     if (!lookupKey.startsWith('::') && !charLookup.has(lookupKey)) {
       charLookup.set(lookupKey, blizzardCharId);
@@ -302,6 +323,10 @@ async function loadAttendanceOwnership(db: D1Database): Promise<AttendanceOwners
   return {
     raiderCharIds,
     charLookup,
+    nameOnlyLookup: new Map(
+      [...nameOnlyLookupMutable.entries()]
+        .filter((entry): entry is [string, number] => Number.isInteger(entry[1]) && (entry[1] as number) > 0)
+    ),
     ownerKeyByCharId,
     charIdsByOwnerKey: new Map(
       [...charIdsByOwnerKeyMutable.entries()].map(([ownerKey, charIds]) => [ownerKey, [...charIds].sort((a, b) => a - b)])
@@ -555,9 +580,9 @@ async function fetchFightParticipantsByCharId(
     const actorId = Number(actor.id ?? 0);
     const name = normalizeName(actor.name);
     const realmSlug = normalizeRealmSlug(actor.server);
-    if (!actorId || !name || !realmSlug) continue;
+    if (!actorId || !name) continue;
 
-    const charId = ownership.charLookup.get(`${name}::${realmSlug}`);
+    const charId = ownership.charLookup.get(`${name}::${realmSlug}`) ?? ownership.nameOnlyLookup.get(name);
     if (!charId) continue;
 
     const ownerKey = ownership.ownerKeyByCharId.get(charId) ?? attendanceOwnerKey(null, charId);
