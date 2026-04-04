@@ -1,0 +1,1 @@
+ALTER TABLE raid_attendance_reports ADD COLUMN total_wipe_pulls INTEGER;

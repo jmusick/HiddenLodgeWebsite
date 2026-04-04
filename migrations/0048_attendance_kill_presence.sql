@@ -1,0 +1,1 @@
+ALTER TABLE raid_attendance_participants ADD COLUMN boss_kills_present INTEGER;

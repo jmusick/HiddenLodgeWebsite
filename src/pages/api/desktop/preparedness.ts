@@ -3,6 +3,7 @@ export const prerender = false;
 import type { APIContext } from 'astro';
 import { env } from 'cloudflare:workers';
 import { isAuthorizedDesktopRequest } from '../../../lib/desktop-auth';
+import { getAttendanceSummaryMap } from '../../../lib/attendance';
 import { getVaultHistory } from '../../../lib/raiders';
 
 const US_WEEKLY_RESET_HOUR_EASTERN = 10;
@@ -219,6 +220,7 @@ export async function GET(context: APIContext): Promise<Response> {
 	`).all<CharRow>();
 
 	const vaultHistoryByCharId = new Map<number, Awaited<ReturnType<typeof getVaultHistory>>[number] | null>();
+	const attendanceSummaryByCharId = await getAttendanceSummaryMap(env.DB);
 	await Promise.all((result.results ?? []).map(async (char) => {
 		const history = await getVaultHistory(char.blizzard_char_id, env.DB);
 		const targetRow = isPostResetThisCalendarWeek(now)
@@ -254,6 +256,7 @@ export async function GET(context: APIContext): Promise<Response> {
 			realm: char.realm,
 			preparednessTier: preparednessTier(char),
 			greatVaultScore: greatVaultScore(effective),
+			attendanceScore: attendanceSummaryByCharId.get(char.blizzard_char_id)?.scorePercent ?? null,
 		};
 	});
 

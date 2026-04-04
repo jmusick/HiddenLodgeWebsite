@@ -81,6 +81,12 @@ interface MainCharacterRow {
   main_character_name: string;
 }
 
+interface BenchOverrideRow {
+  raid_ref_key: string;
+  occurrence_start_utc: number;
+  blizzard_char_id: number;
+}
+
 const ROLE_OPTIONS: Array<{ value: AssignedRole; label: string }> = [
   { value: 'tank', label: 'Tank' },
   { value: 'healer', label: 'Healer' },
@@ -179,7 +185,8 @@ const characters = (charsResult.results ?? []) as CharacterRow[];
 const primarySchedules = (schedulesResult.results ?? []) as PrimarySchedule[];
 const adHocRaids = (adHocResult.results ?? []) as AdHocRaid[];
 const signupRows = (signupsResult.results ?? []) as SignupRow[];
-const canOverrideAnyRole = isAdmin || Boolean(officerResult.results?.[0]);
+const isOfficer = Boolean(officerResult.results?.[0]);
+const canOverrideAnyRole = isAdmin || isOfficer;
 
 const defaultCharacterId = characters.find((c) => c.is_main === 1)?.id ?? characters[0]?.id ?? null;
 
@@ -408,13 +415,14 @@ const selectedDayRaids = (selectedDayDisplayRaids.length > 0
 let selectedDaySummaryRows: DaySummarySignupRow[] = [];
 let allRosterMembers: RosterMemberRow[] = [];
 const mainCharacterNameByUserId = new Map<number, string>();
+const benchOverrideKeySet = new Set<string>();
 if (selectedDayCell) {
   const selectedDayStart = Math.floor(new Date(`${selectedDayCell.isoDate}T00:00:00.000Z`).getTime() / 1000);
   const selectedDayEnd = selectedDayStart + 86400;
   const summaryWindowStart = selectedDayStart - 86400;
   const summaryWindowEnd = selectedDayEnd + 86400;
 
-  const [result, rosterResult, mainsResult] = await env.DB.batch([
+  const [result, rosterResult, mainsResult, benchResult] = await env.DB.batch([
     env.DB.prepare(
       `SELECT
         rs.id,
@@ -477,6 +485,13 @@ if (selectedDayCell) {
        FROM characters
        WHERE is_main = 1`
     ),
+    env.DB.prepare(
+      `SELECT raid_ref_key, occurrence_start_utc, blizzard_char_id
+       FROM raid_attendance_overrides
+       WHERE override_kind = 'bench'
+         AND occurrence_start_utc >= ?
+         AND occurrence_start_utc < ?`
+    ).bind(summaryWindowStart, summaryWindowEnd),
   ]);
 
   selectedDaySummaryRows = (result.results ?? []) as any[];
@@ -485,6 +500,10 @@ if (selectedDayCell) {
   const mainRows = (mainsResult.results ?? []) as MainCharacterRow[];
   for (const row of mainRows) {
     mainCharacterNameByUserId.set(row.user_id, row.main_character_name);
+  }
+  const benchRows = (benchResult.results ?? []) as BenchOverrideRow[];
+  for (const row of benchRows) {
+    benchOverrideKeySet.add(`${row.raid_ref_key}|${row.occurrence_start_utc}|${row.blizzard_char_id}`);
   }
 }
 
@@ -584,6 +603,8 @@ const getRaidMembers = (raidKey: string): DaySummarySignupRow[] => {
     {statusParam === 'signed' && <p class="flash flash-ok">Signup saved.</p>}
     {statusParam === 'canceled' && <p class="flash flash-ok">Signup removed.</p>}
     {statusParam === 'signup-role-updated' && <p class="flash flash-ok">Signup role updated.</p>}
+    {statusParam === 'bench-updated' && <p class="flash flash-ok">Bench override saved.</p>}
+    {statusParam === 'bench-cleared' && <p class="flash flash-ok">Bench override removed.</p>}
     {statusParam === 'note-updated' && <p class="flash flash-ok">Note updated.</p>}
     {statusParam === 'error' && <p class="flash flash-error">Could not save signup. Please try again.</p>}
 
@@ -596,6 +617,8 @@ const getRaidMembers = (raidKey: string): DaySummarySignupRow[] => {
           <div class="summary-raid-list">
             {selectedDayRaids.map((raid) => {
               const allMembers = getRaidMembers(raid.key);
+              const raidRefKey = raid.kind === 'primary' ? `primary:${raid.primaryScheduleId}` : `adhoc:${raid.adHocRaidId}`;
+              const raidOccurrenceStartUtc = raid.kind === 'primary' ? raid.startsAtUtc : raid.startsAtUtc;
               const signedMembers = allMembers.filter((m) => m.isSigned);
               const summary = computeTeamSummary(
                 signedMembers.map((row) => ({ className: row.class_name, assignedRole: row.signup_role }))
@@ -677,6 +700,7 @@ const getRaidMembers = (raidKey: string): DaySummarySignupRow[] => {
                               <th><button type="button" class="sort-btn" data-sort-col="4">Status</button></th>
                               <th><button type="button" class="sort-btn" data-sort-col="5">Selected At</button></th>
                               <th><button type="button" class="sort-btn" data-sort-col="6">Notes</button></th>
+                              <th><button type="button" class="sort-btn" data-sort-col="7">Bench</button></th>
                             </tr>
                             <tr class="filter-row">
                               <th><input type="text" class="col-filter" data-filter-col="0" placeholder="Filter" /></th>
@@ -720,6 +744,7 @@ const getRaidMembers = (raidKey: string): DaySummarySignupRow[] => {
                               </th>
                               <th><input type="text" class="col-filter" data-filter-col="5" placeholder="Filter" /></th>
                               <th><input type="text" class="col-filter" data-filter-col="6" placeholder="Filter" /></th>
+                              <th><input type="text" class="col-filter" data-filter-col="7" placeholder="Filter" /></th>
                             </tr>
                           </thead>
                           <tbody>
@@ -733,6 +758,8 @@ const getRaidMembers = (raidKey: string): DaySummarySignupRow[] => {
                               const classIconUrl = fallbackClassIconUrl(row.class_name);
                               const unknownClass = row.class_name.trim().toLowerCase() === 'unknown';
                               const canEditRole = row.isSigned && (canOverrideAnyRole || row.user_id === user.id);
+                              const benchKey = `${raidRefKey}|${raidOccurrenceStartUtc}|${row.blizzard_char_id ?? 0}`;
+                              const isBench = (row.blizzard_char_id ?? 0) > 0 && benchOverrideKeySet.has(benchKey);
 
                               return (
                                 <tr class={`status-${row.isSigned ? row.signup_status : 'unsigned'}`}>
@@ -785,6 +812,27 @@ const getRaidMembers = (raidKey: string): DaySummarySignupRow[] => {
                                   </td>
                                   <td class="col-selected-at" data-value={row.isSigned ? String(row.signed_up_at) : ''}>{selectedAtText}</td>
                                   <td class="col-notes" data-value={notesText.toLowerCase()}>{notesText}</td>
+                                  <td class="col-bench" data-value={isBench ? 'bench' : ''}>
+                                    {canOverrideAnyRole && (row.blizzard_char_id ?? 0) > 0 ? (
+                                      <form method="POST" action="/api/admin/attendance/toggle-bench" class="bench-admin-form">
+                                        <input type="hidden" name="return_to" value={Astro.url.pathname + Astro.url.search} />
+                                        <input type="hidden" name="raid_kind" value={raid.kind} />
+                                        {raid.kind === 'primary' ? (
+                                          <input type="hidden" name="primary_schedule_id" value={raid.primaryScheduleId!} />
+                                        ) : (
+                                          <input type="hidden" name="ad_hoc_raid_id" value={raid.adHocRaidId!} />
+                                        )}
+                                        <input type="hidden" name="occurrence_start_utc" value={raidOccurrenceStartUtc} />
+                                        <input type="hidden" name="blizzard_char_id" value={row.blizzard_char_id!} />
+                                        <input type="hidden" name="bench_action" value={isBench ? 'clear' : 'set'} />
+                                        <button type="submit" class:list={['btn-mini', { 'btn-bench-active': isBench }]}>
+                                          {isBench ? 'Bench On' : 'Bench'}
+                                        </button>
+                                      </form>
+                                    ) : (
+                                      isBench ? 'Bench' : '—'
+                                    )}
+                                  </td>
                                 </tr>
                               );
                             })}
@@ -2188,6 +2236,23 @@ const getRaidMembers = (raidKey: string): DaySummarySignupRow[] => {
     padding: 0 0.45rem;
     height: 1.85rem;
     font-size: 0.82rem;
+  }
+
+  .bench-admin-form {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .btn-bench-active {
+    background: rgba(30, 255, 0, 0.12);
+    border-color: rgba(30, 255, 0, 0.45);
+    color: #9cff87;
+  }
+
+  .btn-bench-active:hover {
+    background: rgba(30, 255, 0, 0.2);
+    border-color: rgba(30, 255, 0, 0.65);
   }
 
   .class-icon {

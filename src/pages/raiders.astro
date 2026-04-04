@@ -224,6 +224,15 @@ function greatVaultScoreForRaider(raider: (typeof sortedRaiders)[number]): { sco
   return { score, color: '#ffffff' };
 }
 
+function attendanceColor(score: number | null): string {
+  if (score === null) return '#8ea4b2';
+  if (score >= 100) return '#ff8000';
+  if (score >= 90) return '#a335ee';
+  if (score >= 80) return '#0070dd';
+  if (score >= 65) return '#1eff00';
+  return '#ffffff';
+}
+
 const topItemLevel = sortedRaiders.reduce((best, raider) =>
   (raider.equippedItemLevel ?? -1) > (best?.equippedItemLevel ?? -1) ? raider : best,
   null as (typeof sortedRaiders)[number] | null
@@ -417,6 +426,7 @@ const mplusWinnerData = {
         <button id="raiders-next-page" type="button">Next</button>
         <p id="raiders-count" class="results-count" aria-live="polite">Showing {sortedRaiders.length} raiders</p>
       </div>
+      <div class="raiders-table-scroll">
       <table class="raiders-table" id="raiders-table">
         <thead>
           <tr>
@@ -427,19 +437,18 @@ const mplusWinnerData = {
             <th><button class="sort-btn" type="button" data-sort-key="mythicScore">M+ Score</button></th>
             <th>
               <div class="metric-header">
-                <button class="sort-btn" type="button" data-sort-key="mplusMetric" data-tooltip="M+ metric column. Use the selector to switch between Total, This Week, and Last Week values; sorting follows the selected metric." aria-label="M plus metric column with selector for total, this week, and last week. Sorting follows the selected metric.">M+ <Icon name="lucide:info" class="col-help-icon" aria-hidden="true" /></button>
                 <select id="mplus-metric-select" class="metric-select" aria-label="Select which M plus metric to display">
-                  <option value="total">Total</option>
-                  <option value="current" selected>This Week</option>
-                  <option value="last">Last Week</option>
+                  <option value="total">M+ Total</option>
+                  <option value="current" selected>M+ This Week</option>
+                  <option value="last">M+ Last Week</option>
                 </select>
+                <button class="sort-btn metric-info-btn" type="button" data-sort-key="mplusMetric" data-tooltip="M+ metric column. Use the selector to switch between Total, This Week, and Last Week values; sorting follows the selected metric." aria-label="M plus metric column with selector for total, this week, and last week. Sorting follows the selected metric."><Icon name="lucide:info" class="col-help-icon" aria-hidden="true" /></button>
               </div>
             </th>
-            <th><button class="sort-btn" type="button" data-sort-key="vaultScore" data-tooltip="Great Vault Score TL;DR: weighted weekly vault completion normalized to 100. It factors raid rewards, dungeon rewards, and world progress with emphasis on stronger slot outcomes. Click a raider name or score for the full formula details on their profile." aria-label="Great Vault Score. Weighted weekly vault completion normalized to 100. Click a raider name or score for full formula details on their profile.">Vault Score <Icon name="lucide:info" class="col-help-icon" aria-hidden="true" /></button></th>
-            <th><button class="sort-btn" type="button" data-sort-key="tierPiecesEquipped">Tier</button></th>
+            <th><button class="sort-btn" type="button" data-sort-key="vaultScore" data-tooltip="Great Vault Score TL;DR: weighted weekly vault completion normalized to 100. It factors raid rewards, dungeon rewards, and world progress with emphasis on stronger slot outcomes. Click a raider name or score for the full formula details on their profile." aria-label="Great Vault Score. Weighted weekly vault completion normalized to 100. Click a raider name or score for full formula details on their profile.">Vault <Icon name="lucide:info" class="col-help-icon" aria-hidden="true" /></button></th>
             <th><button class="sort-btn" type="button" data-sort-key="crestSort" data-tooltip="Total crests across all types (Adventurer + Veteran + Champion + Hero + Myth). Hover a crest total in the table to see the color-coded type breakdown." aria-label="Crests total across all crest types. Hover a crest total in the table to see the color-coded type breakdown.">Crests <Icon name="lucide:info" class="col-help-icon" aria-hidden="true" /></button></th>
-            <th><button class="sort-btn" type="button" data-sort-key="totalUpgradesMissing">Missing Upgrades</button></th>
             <th><button class="sort-btn" type="button" data-sort-key="preparednessScore" data-tooltip="Preparedness = 2-week rolling average of (Socketed Gems + Enchanted Slots) / (Total Sockets + Enchantable Slots). Falls back to current snapshot until history accumulates. Tiers: S = 100%, A >= 85%, B >= 70%, C >= 40%, D < 40%." aria-label="Preparedness. Based on a 2-week rolling average of gem and enchant coverage. Formula: (Socketed Gems + Enchanted Slots) / (Total Sockets + Enchantable Slots). Tiers: S equals 100 percent, A 85 percent or higher, B 70 percent or higher, C 40 percent or higher, D below 40 percent.">Preparedness <Icon name="lucide:info" class="col-help-icon" aria-hidden="true" /></button></th>
+            <th class="tooltip-priority-col"><button class="sort-btn" type="button" data-sort-key="attendanceScore" data-tooltip="Attendance score starts on 2026-04-02 and is based on signup intent versus Warcraft Logs boss participation. Bench grants full credit plus bonus." data-tooltip-dir="right" aria-label="Attendance score since April second 2026 from signup intent and Warcraft Logs boss participation. Bench grants full credit plus bonus.">Attendance <Icon name="lucide:info" class="col-help-icon" aria-hidden="true" /></button></th>
           </tr>
         </thead>
         <tbody>
@@ -458,6 +467,7 @@ const mplusWinnerData = {
                 data-equipped-item-level={String(raider.equippedItemLevel ?? -1)}
                 data-raid-progress-kills={String(raider.raidProgressKills ?? -1)}
                 data-mythic-score={String(raider.mythicScore ?? -1)}
+                data-attendance-score={String(raider.attendanceScorePercent ?? -1)}
                 data-mythic-plus-run-count={String(raider.mythicPlusRunCount ?? -1)}
                 data-mythic-plus-weekly-runs={String(raider.mythicPlusWeeklyRuns ?? -1)}
                 data-mythic-plus-prev-weekly-runs={String(raider.mythicPlusPrevWeeklyRuns ?? -1)}
@@ -511,7 +521,6 @@ const mplusWinnerData = {
                     <span class="score-val" style={`color: ${vaultScore.color}`}>{vaultScore.score}</span>
                   </a>
                 </td>
-                <td>{raider.tierPiecesEquipped ?? '—'}</td>
                 <td>
                   {crestTotalValue(raider) !== null ? (
                     <span
@@ -531,13 +540,26 @@ const mplusWinnerData = {
                     '—'
                   )}
                 </td>
-                <td>{raider.totalUpgradesMissing ?? '—'}</td>
                 <td><span class="score-val" style={`color: ${preparednessTier.color}`}>{preparednessTier.label}</span></td>
+                <td>
+                  {raider.attendanceScorePercent !== null ? (
+                    <span
+                      class="score-val"
+                      style={`color: ${attendanceColor(raider.attendanceScorePercent)}`}
+                      title={`${raider.attendanceScoredRaids} scored raids since 2026-04-02${raider.attendanceBenchBonusPoints > 0 ? `, bench bonus +${raider.attendanceBenchBonusPoints.toFixed(1)} points` : ''}`}
+                    >
+                      {raider.attendanceScorePercent.toFixed(1)}
+                    </span>
+                  ) : (
+                    '—'
+                  )}
+                </td>
               </tr>
             );
           })}
         </tbody>
       </table>
+      </div>
     </div>
     <p class="mplus-metric-note">
       M+ values are best-effort estimates from Blizzard and Raider.IO APIs. Weekly values can undercount when profile run history is capped.
@@ -646,7 +668,7 @@ const mplusWinnerData = {
       return matchesSearch && matchesClass && matchesTeam;
     });
 
-    const numericKeys = new Set(['equippedItemLevel', 'raidProgressKills', 'mythicScore', 'singleTargetDps', 'vaultScore', 'tierPiecesEquipped', 'crestSort', 'totalUpgradesMissing', 'preparednessScore']);
+    const numericKeys = new Set(['equippedItemLevel', 'raidProgressKills', 'mythicScore', 'attendanceScore', 'singleTargetDps', 'vaultScore', 'crestSort', 'preparednessScore']);
 
     visibleRows.sort((rowA, rowB) => {
       if (sortKey === 'mplusMetric') {
@@ -975,10 +997,15 @@ const mplusWinnerData = {
 
   .table-wrap {
     margin-top: 0.85rem;
-    overflow-x: auto;
+    overflow: visible;
     border: 1px solid rgba(214, 176, 106, 0.24);
     border-radius: 0.65rem;
     background: rgba(5, 10, 16, 0.55);
+  }
+
+  .raiders-table-scroll {
+    overflow-x: auto;
+    border-radius: 0 0 0.65rem 0.65rem;
   }
 
   .mplus-metric-note {
@@ -1065,6 +1092,10 @@ const mplusWinnerData = {
     z-index: 1;
   }
 
+  .raiders-table thead th.tooltip-priority-col {
+    z-index: 3;
+  }
+
   .raiders-table tbody tr:hover {
     background: rgba(214, 176, 106, 0.08);
   }
@@ -1089,13 +1120,21 @@ const mplusWinnerData = {
   }
 
   .metric-header {
-    display: flex;
+    display: inline-flex;
+    flex-direction: row;
     align-items: center;
-    gap: 0.45rem;
+    gap: 0.35rem;
   }
 
   .metric-header .sort-btn {
     width: auto;
+  }
+
+  .metric-info-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 1rem;
   }
 
   .metric-select {
@@ -1103,11 +1142,12 @@ const mplusWinnerData = {
     border-radius: 0.42rem;
     background: rgba(7, 14, 22, 0.92);
     color: #d8e2e8;
-    padding: 0.16rem 0.35rem;
-    font-size: 0.72rem;
+    padding: 0.14rem 0.3rem;
+    font-size: 0.68rem;
     font-weight: 600;
     letter-spacing: 0.02em;
-    text-transform: uppercase;
+    text-transform: none;
+    max-width: 8.4rem;
   }
 
   .col-help-icon {

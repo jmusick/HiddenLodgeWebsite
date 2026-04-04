@@ -8,6 +8,7 @@ import { classColor } from '../../lib/wow';
 import { getRaiderByCharId, getRaiderGear, getRaiderMedia, getPreparednessHistory, getProgressionHistory, getVaultHistory } from '../../lib/raiders';
 import { isCharacterOwner } from '../../lib/auth';
 import { getLatestSingleTargetForRaiders, getLatestSimsForRaiderByDifficulty } from '../../lib/sim-api';
+import { attendanceScoringStartUtc, attendanceStatusLabel, getAttendanceSummaryMap } from '../../lib/attendance';
 import { RAID_PROGRESS_TARGET_GROUPS } from '../../data/raidProgressTargets';
 import RaiderSimTools from '../../components/RaiderSimTools.astro';
 
@@ -36,6 +37,15 @@ const [singleTargetMap, droptimizerSnapshots] = await Promise.all([
   getLatestSimsForRaiderByDifficulty((env as any).DB, id, { maxAgeSeconds: 14 * 24 * 60 * 60 }),
 ]);
 const singleTargetSnapshot = singleTargetMap.get(id) ?? null;
+
+const attendanceSummaryMap = await getAttendanceSummaryMap((env as any).DB, { includeBreakdownFor: [id] });
+const attendanceSummary = attendanceSummaryMap.get(id) ?? null;
+const attendanceBreakdown = attendanceSummary?.breakdown ?? [];
+const attendanceStartLabel = new Date(attendanceScoringStartUtc() * 1000).toLocaleDateString(undefined, {
+  month: 'short',
+  day: 'numeric',
+  year: 'numeric',
+});
 
 function authLabel(state: string): string {
   if (state === 'ready') return 'Loaded';
@@ -89,6 +99,15 @@ function crestShortLabel(label: string): string {
   if (label === 'Hero') return 'Hero';
   if (label === 'Myth') return 'Myth';
   return label;
+}
+
+function attendanceColor(score: number | null): string {
+  if (score === null) return '#8ea4b2';
+  if (score >= 100) return '#ff8000';
+  if (score >= 90) return '#a335ee';
+  if (score >= 80) return '#0070dd';
+  if (score >= 65) return '#1eff00';
+  return '#ffffff';
 }
 
 type VaultTrack = 'Mythic' | 'Heroic' | 'Champion' | 'Veteran' | 'Normal' | 'Raid Finder' | null;
@@ -959,6 +978,16 @@ function gemAffixState(item: (typeof gear)[number] | undefined): { missing: bool
 
         <div class="stat-card">
           <div class="stat-label">
+            <Icon name="lucide:calendar-check-2" class="stat-icon" aria-hidden="true" />
+            Attendance
+          </div>
+          <div class="stat-value" style={`color: ${attendanceColor(attendanceSummary?.scorePercent ?? null)}`}>
+            {attendanceSummary ? `${attendanceSummary.scorePercent.toFixed(1)}` : '—'}
+          </div>
+        </div>
+
+        <div class="stat-card">
+          <div class="stat-label">
             <Icon name="lucide:hash" class="stat-icon" aria-hidden="true" />
             M+ Total
           </div>
@@ -1042,6 +1071,95 @@ function gemAffixState(item: (typeof gear)[number] | undefined): { missing: bool
           ))}
         </div>
       </section>
+
+      <details class="preparedness-history-panel panel" open>
+        <summary class="prep-history-summary" aria-label="Attendance breakdown">
+          <Icon name="lucide:user-check" class="raid-progress-icon" aria-hidden="true" />
+          Attendance Breakdown
+          <span class="history-subtitle">(since {attendanceStartLabel})</span>
+          <Icon name="lucide:chevron-down" class="collapse-chevron" aria-hidden="true" />
+        </summary>
+        {attendanceSummary && attendanceSummary.scoredRaidCount > 0 ? (
+          <>
+            <p class="history-note">
+              Score: <strong style={`color: ${attendanceColor(attendanceSummary.scorePercent)}`}>{attendanceSummary.scorePercent.toFixed(1)}</strong>
+              {' '}from {attendanceSummary.scoredRaidCount} scored raids.
+              {attendanceSummary.totalBenchBonusPoints > 0 && (
+                <>
+                  {' '}Bench bonus: <strong>+{attendanceSummary.totalBenchBonusPoints.toFixed(1)}</strong> points.
+                </>
+              )}
+            </p>
+
+            <div class="prep-history-table-wrap">
+              <table class="prep-history-table">
+                <thead>
+                  <tr>
+                    <th>Date</th>
+                    <th>Signup</th>
+                    <th>Bosses</th>
+                    <th>Bench</th>
+                    <th>Points</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {attendanceBreakdown.map((row) => (
+                    <tr>
+                      <td class="date-col">{new Date(row.occurrenceStartUtc * 1000).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}</td>
+                      <td>{attendanceStatusLabel(row.signupStatus)}</td>
+                      <td>
+                        <span class="attendance-boss-summary">{row.bossKillsPresent}/{row.bossKills}</span>
+                        <span class="attendance-result-pills" aria-label={`Raid result: ${row.bossWipes} wipes`}>
+                          <span class="attendance-result-pill attendance-result-pill-wipe">{row.bossWipes}W</span>
+                        </span>
+                      </td>
+                      <td>{row.isBench ? 'Yes' : '—'}</td>
+                      <td>
+                        {row.pointsEarned.toFixed(1)} / {row.pointsPossible}
+                        {row.benchBonusPoints > 0 && <small class="history-subtext"> (+{row.benchBonusPoints.toFixed(1)})</small>}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            <details class="vault-score-formula attendance-score-formula">
+              <summary class="vault-score-formula-toggle">
+                <span class="vault-score-formula-label-wrap">
+                  <Icon name="lucide:calculator" class="vault-score-formula-icon" aria-hidden="true" />
+                  <span>Score Formula</span>
+                  <span class="vault-score-formula-subtitle">(how attendance score is calculated)</span>
+                </span>
+                <span class="vault-score-formula-chevron" aria-hidden="true">▼</span>
+              </summary>
+              <div class="vault-score-formula-body">
+                <p>Attendance score is normalized to 100 points per raid and then averaged across scored raids.</p>
+                <p>Per raid points = 100 * signupWeight * participationRatio, unless marked bench.</p>
+                <p>participationRatio = bossesPresent / totalBossEncounters (kills + unique wipe bosses).</p>
+                <p>Bench override awards full 100 points and adds +12 bonus points for that raid.</p>
+                <div class="vault-formula-table-wrap">
+                  <table class="vault-formula-table" aria-label="Attendance status weights">
+                    <thead>
+                      <tr>
+                        <th>Signup Status</th>
+                        <th>Weight</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <tr><td>Coming</td><td>1.00</td></tr>
+                      <tr><td>Absent</td><td>0.80</td></tr>
+                      <tr><td>Unsigned</td><td>0.30</td></tr>
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </details>
+          </>
+        ) : (
+          <p class="raid-progress-empty">No scored attendance raids yet. Attendance starts at {attendanceStartLabel} after logs are parsed.</p>
+        )}
+      </details>
 
       <details class="preparedness-history-panel panel preparedness-history-panel-two-week">
         <summary class="prep-history-summary" aria-label="Preparedness history">
@@ -2091,6 +2209,10 @@ function gemAffixState(item: (typeof gear)[number] | undefined): { missing: bool
     overflow: hidden;
   }
 
+  .attendance-score-formula {
+    margin: 0.72rem 1.1rem 0.95rem;
+  }
+
   .vault-score-formula-toggle {
     list-style: none;
     cursor: pointer;
@@ -2295,6 +2417,40 @@ function gemAffixState(item: (typeof gear)[number] | undefined): { missing: bool
     background: rgba(214, 176, 106, 0.06);
   }
 
+  .attendance-boss-summary {
+    display: inline-block;
+    margin-right: 0.45rem;
+    font-weight: 600;
+  }
+
+  .attendance-result-pills {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    flex-wrap: wrap;
+    vertical-align: middle;
+  }
+
+  .attendance-result-pill {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 2.4rem;
+    padding: 0.12rem 0.45rem;
+    border-radius: 999px;
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    font-size: 0.72rem;
+    font-weight: 700;
+    line-height: 1;
+    letter-spacing: 0.03em;
+  }
+
+  .attendance-result-pill-wipe {
+    color: #f0c07f;
+    background: rgba(173, 96, 31, 0.16);
+    border-color: rgba(240, 192, 127, 0.3);
+  }
+
   details.preparedness-history-panel[open] .prep-history-summary {
     border-bottom: 1px solid rgba(214, 176, 106, 0.18);
     border-radius: 0.75rem 0.75rem 0 0;
@@ -2325,6 +2481,18 @@ function gemAffixState(item: (typeof gear)[number] | undefined): { missing: bool
     letter-spacing: 0.02em;
     text-transform: none;
     margin-left: 0.25rem;
+  }
+
+  .history-note {
+    margin: 0;
+    padding: 0.75rem 1.1rem 0;
+    color: #d8e2e8;
+    font-size: 0.88rem;
+    line-height: 1.4;
+  }
+
+  .history-note + .prep-history-table-wrap {
+    padding-top: 0.45rem;
   }
 
   .history-subtext {

@@ -3,6 +3,7 @@ import { env } from 'cloudflare:workers';
 import { resolveRaidProgressTier } from '../data/raidProgressTargets';
 import { fallbackClassIconUrl } from './class-icons';
 import { getLatestDroptimizerForRaiders, getLatestSingleTargetForRaiders } from './sim-api';
+import { getAttendanceSummaryMap } from './attendance';
 import { getBlizzardAppAccessToken as getSharedBlizzardAppAccessToken } from './blizzard-app-token';
 import { fetchBlizzardJsonWithRetry } from './blizzard-fetch';
 import { getCharacterMythicPlusRunCounts, fetchStatisticsWeeklyTotal, type KeystoneRun } from './raider-io';
@@ -591,6 +592,9 @@ export interface RaiderRecord {
   singleTargetDps: number | null;
   singleTargetUpdatedAt: number | null;
   droptimizerUpdatedAt: number | null;
+  attendanceScorePercent: number | null;
+  attendanceScoredRaids: number;
+  attendanceBenchBonusPoints: number;
 }
 
 export interface RaidersCacheStatus {
@@ -970,6 +974,9 @@ async function enrichRaider(row: RaiderSourceRow, now: number, raidProgressTarge
     singleTargetDps: null,
     singleTargetUpdatedAt: null,
     droptimizerUpdatedAt: null,
+    attendanceScorePercent: null,
+    attendanceScoredRaids: 0,
+    attendanceBenchBonusPoints: 0,
   };
 
   const accessToken = await getBlizzardAppAccessToken();
@@ -1187,6 +1194,9 @@ async function listCachedRaiders(db: D1Database): Promise<RaiderRecord[]> {
     singleTargetDps: null,
     singleTargetUpdatedAt: null,
     droptimizerUpdatedAt: null,
+    attendanceScorePercent: null,
+    attendanceScoredRaids: 0,
+    attendanceBenchBonusPoints: 0,
   }));
 }
 
@@ -2106,6 +2116,9 @@ export async function getRaiderByCharId(charId: number, dbInput?: D1Database): P
     singleTargetDps: null,
     singleTargetUpdatedAt: null,
     droptimizerUpdatedAt: null,
+    attendanceScorePercent: null,
+    attendanceScoredRaids: 0,
+    attendanceBenchBonusPoints: 0,
   };
 }
 
@@ -2352,6 +2365,23 @@ export async function loadRaidersViewData(dbInput?: D1Database): Promise<Raiders
   } catch (error) {
     if (!errorMessage) {
       errorMessage = error instanceof Error ? error.message : 'Unable to load single-target snapshots.';
+    }
+  }
+
+  try {
+    const attendanceMap = await getAttendanceSummaryMap(db);
+    raiders = raiders.map((raider) => {
+      const attendance = attendanceMap.get(raider.blizzardCharId);
+      return {
+        ...raider,
+        attendanceScorePercent: attendance?.scorePercent ?? null,
+        attendanceScoredRaids: attendance?.scoredRaidCount ?? 0,
+        attendanceBenchBonusPoints: attendance?.totalBenchBonusPoints ?? 0,
+      };
+    });
+  } catch (error) {
+    if (!errorMessage) {
+      errorMessage = error instanceof Error ? error.message : 'Unable to load attendance data.';
     }
   }
 
