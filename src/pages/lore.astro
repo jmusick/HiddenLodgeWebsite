@@ -9,7 +9,10 @@ type StoryInlineImage = {
   caption?: string;
 };
 
-type StoryBlock = { type: 'paragraph'; paragraph: string } | { type: 'image'; image: StoryInlineImage };
+type StoryBlock =
+  | { type: 'paragraph'; paragraph: string; isIncidentHeading?: boolean }
+  | { type: 'list'; items: string[] }
+  | { type: 'image'; image: StoryInlineImage };
 
 const stories = [
   {
@@ -165,6 +168,37 @@ const stories = [
     ]
   },
   {
+    id: 'mike-should-have-stopped-this',
+    title: 'Mike Should Have Stopped This',
+    lead: "On Belo'ren pull night, every preventable disaster happened anyway, and the raid reached one unanimous conclusion: this was somehow Mike's fault.",
+    imageSrc: '/images/lore/mike-should-have-stopped-this.png',
+    imageAlt: "Mike in rat form, helmetless and exhausted, stands at the front of a chaotic Belo'ren pull as the raid collapses around him.",
+    characters: ['Mike', 'Rhox', 'Sam', 'Kivara', 'Terran', "Belo'ren"],
+    incidentHeadingParagraphs: [2, 4, 6, 8, 14, 17],
+    bulletListParagraphs: [10, 11, 12],
+    paragraphs: [
+      'There are forces in Azeroth that cannot be controlled: ancient gods, chaotic magic, and-most dangerously-The Hidden Lodge on pull. And yet, somehow... Mike is still expected to.',
+      "On the night of the Belo'ren encounter, morale was high, buffs were applied, and at least half the raid claimed to understand the fight. Mike, in his now-canon rat form (helmetless, emotionally exposed, and visibly tired), stood at the front like a tiny, squeaky general preparing to lead an army of absolute liabilities. \"Alright, let's just have a clean pull,\" Mike said. This was his first mistake.",
+      "The Pull (Mike's Fault Begins)",
+      "Rhox heroically initiated combat... by taunting instead of charging. Belo'ren immediately responded with a majestic, full-cone frontal that erased half the raid in a single, beautiful moment of consequence. Bodies hit the floor. Spirits left their vessels. Someone audibly sighed. Mike, who had not physically grabbed Rhox's mouse and corrected the input, was noted as the root cause.",
+      "The Sequel (Still Mike's Fault)",
+      "Sam, refusing to be outdone, attempted to taunt an add into position. Instead, he taunted the boss. Another frontal. Another half the raid gone. At this point, Belo'ren was less a boss and more a rotating lawn sprinkler of death. Mike, who had not pre-installed \"Correct Decisions.exe\" into Sam's brain, was once again responsible.",
+      "The Early Bird Special (Also Mike's Fault)",
+      "Kivara, seeing an opportunity for greatness, pressed The Hunt before the pull had even spiritually begun. She flew across the arena, arrived first, made eye contact with Belo'ren, and was instantly vaporized. Mike had not issued a legally binding contract stating \"DO NOT SEND IT,\" which, in hindsight, was negligent leadership.",
+      "The Technological Betrayal (Definitely Mike's Fault)",
+      'Sam, in a shocking twist, was alt-tabbed out of the game by a rogue update mid-mechanic. His character stood motionless, contemplating life choices, before being turned into ash. Mike had failed to:',
+      'Patch Windows',
+      'Disable updates',
+      'Monitor Sam\'s desktop environment in real-time',
+      'This was considered a major oversight.',
+      "The Blessing Incident (Unforgivable Mike Behavior)",
+      'Just when things couldn\'t possibly get worse... Terran stepped in to help. With divine confidence, he cast Blessing of Protection... on the tank. The boss, now legally unable to interact with its intended target, did what any reasonable phoenix would do-it turned and obliterated the rest of the raid. Silence fell over Discord. Someone whispered, "Mike..."',
+      'Why hadn\'t he inspected Terran\'s bars? Why hadn\'t he anticipated betrayal from the Light itself? Why hadn\'t he simply stopped this?',
+      'The Aftermath',
+      'Amidst the ashes, potions, and shattered dreams, Mike sat quietly in his rat form. Small. Helmetless. Blamed. He looked at the raid-at Rhox, at Sam, at Kivara, at Terran-and nodded. "It\'s my fault," he said. Because deep down, everyone knew the truth. Not that mistakes were made. Not that chaos reigned. But that Mike could have stopped it... and chose not to.'
+    ]
+  },
+  {
     id: 'the-hidden-lodge-a-safe-space-away-from-the-floor',
     title: 'The Hidden Lodge: A Safe Space Away From the Floor',
     lead: 'Some guilds are forged in conquest. This one was forged in survival, shared disbelief, and one unforgettable horizontal shot-caller.',
@@ -276,7 +310,7 @@ const stories = [
 
 const featuredStoryId = 'the-hidden-lodge-a-safe-space-away-from-the-floor';
 const beforeLastStoryId = 'blinky-the-misunderstood';
-const lastStoryId = 'the-frostytip';
+const lastStoryId = 'mike-should-have-stopped-this';
 const orderedStories = [...stories].sort((a, b) => {
   if (a.id === featuredStoryId) return -1;
   if (b.id === featuredStoryId) return 1;
@@ -292,15 +326,34 @@ const selectedStory = stories.find((story) => story.id === selectedStoryId);
 const selectedStoryImageLayout = selectedStory?.imageLayout ?? (selectedStory?.id === featuredStoryId ? 'aside' : 'top');
 const usesAsideStoryImage = Boolean(selectedStory) && selectedStoryImageLayout === 'aside';
 const usesTopStoryImage = Boolean(selectedStory) && selectedStoryImageLayout === 'top';
+const incidentHeadingParagraphs = new Set(selectedStory?.incidentHeadingParagraphs ?? []);
+const bulletListParagraphs = new Set(selectedStory?.bulletListParagraphs ?? []);
 const selectedStoryBlocks: StoryBlock[] = selectedStory
-  ? selectedStory.paragraphs.flatMap((paragraph, index) => {
+  ? selectedStory.paragraphs.reduce<StoryBlock[]>((blocks, paragraph, index) => {
       const inlineImages = (selectedStory.inlineImages ?? []).filter((image) => image.afterParagraph === index);
 
-      return [
-        { type: 'paragraph' as const, paragraph },
-        ...inlineImages.map((image) => ({ type: 'image' as const, image }))
-      ];
-    })
+      if (bulletListParagraphs.has(index)) {
+        const previousWasBullet = bulletListParagraphs.has(index - 1);
+
+        if (!previousWasBullet) {
+          blocks.push({ type: 'list', items: [paragraph] });
+        } else {
+          const lastBlock = blocks[blocks.length - 1];
+
+          if (lastBlock?.type === 'list') {
+            lastBlock.items.push(paragraph);
+          } else {
+            blocks.push({ type: 'list', items: [paragraph] });
+          }
+        }
+      } else {
+        blocks.push({ type: 'paragraph', paragraph, isIncidentHeading: incidentHeadingParagraphs.has(index) });
+      }
+
+      blocks.push(...inlineImages.map((image) => ({ type: 'image' as const, image })));
+
+      return blocks;
+    }, [])
   : [];
 ---
 
@@ -437,8 +490,14 @@ const selectedStoryBlocks: StoryBlock[] = selectedStory
             }
             {
               selectedStoryBlocks.map((block) =>
-                block.type === 'paragraph' ? (
+                block.type === 'paragraph' && block.isIncidentHeading ? (
+                  <h3 class="story-incident-heading">{block.paragraph}</h3>
+                ) : block.type === 'paragraph' ? (
                   <p>{block.paragraph}</p>
+                ) : block.type === 'list' ? (
+                  <ul class="story-inline-list">
+                    {block.items.map((item) => <li>{item}</li>)}
+                  </ul>
                 ) : (
                   <figure class="story-inline-figure">
                     <button
@@ -871,11 +930,36 @@ const selectedStoryBlocks: StoryBlock[] = selectedStory
     grid-column: 2;
   }
 
+  .story-body--with-aside-image .story-inline-list {
+    grid-column: 2;
+  }
+
   .story-body p {
     margin: 0;
     line-height: 1.65;
     font-size: 1.02rem;
     color: #d4dfe6;
+  }
+
+  .story-inline-list {
+    margin: 0.1rem 0 0.15rem;
+    padding-left: 1.35rem;
+    color: #d4dfe6;
+  }
+
+  .story-inline-list li {
+    margin: 0.2rem 0;
+    line-height: 1.6;
+    font-size: 1.02rem;
+  }
+
+  .story-incident-heading {
+    margin: 0.5rem 0 0.1rem;
+    font-size: 0.95rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: #e7c88d;
+    font-weight: 800;
   }
 
   .story-inline-figure {
