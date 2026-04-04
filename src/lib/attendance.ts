@@ -120,10 +120,11 @@ interface WclActorRow {
 const ATTENDANCE_SCORING_START_UTC = Math.floor(Date.UTC(2026, 3, 2, 0, 0, 0, 0) / 1000);
 const ATTENDANCE_BASE_POINTS = 100;
 const ATTENDANCE_BENCH_BONUS_POINTS = 12;
+const ATTENDANCE_COMING_NO_SHOW_PENALTY_POINTS = 30;
 const ATTENDANCE_STATUS_WEIGHT: Record<Exclude<AttendanceSignupStatus, 'unsigned'>, number> = {
   coming: 1.0,
-  tentative: 1.0,
-  late: 1.0,
+  tentative: 0.9,
+  late: 0.9,
   absent: 0.8,
 };
 const ATTENDANCE_UNSIGNED_WEIGHT = 0.3;
@@ -996,6 +997,14 @@ function buildScoreForRaid(options: {
       pointsEarned: ATTENDANCE_BASE_POINTS + ATTENDANCE_BENCH_BONUS_POINTS,
       pointsPossible: ATTENDANCE_BASE_POINTS,
       benchBonusPoints: ATTENDANCE_BENCH_BONUS_POINTS,
+    };
+  }
+
+  if (options.signupStatus === 'coming' && options.bossesPresent <= 0) {
+    return {
+      pointsEarned: -ATTENDANCE_COMING_NO_SHOW_PENALTY_POINTS,
+      pointsPossible: ATTENDANCE_BASE_POINTS,
+      benchBonusPoints: 0,
     };
   }
 
