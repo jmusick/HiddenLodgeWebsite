@@ -1028,6 +1028,7 @@ async function syncAttendanceFromWcl(db: D1Database): Promise<void> {
 function buildScoreForRaid(options: {
   signupStatus: AttendanceSignupStatus;
   bossesPresent: number;
+  participationBossesPresent: number;
   totalBosses: number;
   isBench: boolean;
   canApplyNoShowPenalty: boolean;
@@ -1045,7 +1046,7 @@ function buildScoreForRaid(options: {
     };
   }
 
-  if (options.signupStatus === 'coming' && options.bossesPresent <= 0 && options.canApplyNoShowPenalty) {
+  if (options.signupStatus === 'coming' && options.participationBossesPresent <= 0 && options.canApplyNoShowPenalty) {
     return {
       pointsEarned: -ATTENDANCE_COMING_NO_SHOW_PENALTY_POINTS,
       pointsPossible: ATTENDANCE_BASE_POINTS,
@@ -1072,6 +1073,10 @@ function roundupOneDecimal(value: number): number {
 
 function reportTotalBosses(report: Pick<AttendanceReportRow, 'total_boss_kills' | 'total_boss_wipes'>): number {
   return Math.max(0, report.total_boss_kills) + Math.max(0, report.total_boss_wipes ?? 0);
+}
+
+function reportScorableBosses(report: Pick<AttendanceReportRow, 'total_boss_kills'>): number {
+  return Math.max(0, report.total_boss_kills);
 }
 
 function attendanceRaidNightKey(raidRefKey: string, occurrenceStartUtc: number): string {
@@ -1285,8 +1290,9 @@ export async function getAttendanceSummaryMap(
 
     for (const report of reportsById.values()) {
       const lookupKey = `${report.id}|${ownerKey}`;
-      const totalBosses = reportTotalBosses(report);
-      const bossesPresent = Math.min(totalBosses, Math.max(0, Math.floor(participantsByReportAndOwner.get(lookupKey) ?? 0)));
+      const totalBosses = reportScorableBosses(report);
+      const participationTotalBosses = reportTotalBosses(report);
+      const bossesPresent = Math.min(participationTotalBosses, Math.max(0, Math.floor(participantsByReportAndOwner.get(lookupKey) ?? 0)));
       const bossKillsPresent = Math.min(Math.max(0, report.total_boss_kills), Math.max(0, Math.floor(bossKillsPresentByReportAndOwner.get(lookupKey) ?? 0)));
       const signupStatus = signupByRaidAndOwner.get(lookupKey) ?? 'unsigned';
       const isBench = benchByRaidAndOwner.has(lookupKey);
@@ -1294,7 +1300,8 @@ export async function getAttendanceSummaryMap(
 
       const score = buildScoreForRaid({
         signupStatus,
-        bossesPresent,
+        bossesPresent: bossKillsPresent,
+        participationBossesPresent: bossesPresent,
         totalBosses,
         isBench,
         canApplyNoShowPenalty,
@@ -1318,8 +1325,8 @@ export async function getAttendanceSummaryMap(
           bossKills: Math.max(0, report.total_boss_kills),
           bossWipes: Math.max(0, report.total_wipe_pulls ?? 0),
           totalBosses,
-          bossesPresent,
-          bossesMissed: Math.max(0, totalBosses - bossesPresent),
+          bossesPresent: bossKillsPresent,
+          bossesMissed: Math.max(0, totalBosses - bossKillsPresent),
           signupStatus,
           isBench,
           pointsEarned: roundupOneDecimal(score.pointsEarned),

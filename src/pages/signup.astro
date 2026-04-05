@@ -360,6 +360,11 @@ for (const [key, raids] of raidsByUtcDay.entries()) {
 }
 
 const nowEpoch = Math.floor(Date.now() / 1000);
+
+function hasRaidStarted(startsAtUtc: number): boolean {
+  return startsAtUtc <= nowEpoch;
+}
+
 const nextPrimaryRaidKeys = new Set(
   allRaids
     .filter((raid) => raid.kind === 'primary' && raid.startsAtUtc >= nowEpoch)
@@ -602,6 +607,7 @@ const getRaidMembers = (raidKey: string): DaySummarySignupRow[] => {
 
     {statusParam === 'signed' && <p class="flash flash-ok">Signup saved.</p>}
     {statusParam === 'canceled' && <p class="flash flash-ok">Signup removed.</p>}
+    {statusParam === 'locked' && <p class="flash flash-error">Signup status and notes are locked after raid start.</p>}
     {statusParam === 'signup-role-updated' && <p class="flash flash-ok">Signup role updated.</p>}
     {statusParam === 'bench-updated' && <p class="flash flash-ok">Bench override saved.</p>}
     {statusParam === 'bench-cleared' && <p class="flash flash-ok">Bench override removed.</p>}
@@ -881,6 +887,7 @@ const getRaidMembers = (raidKey: string): DaySummarySignupRow[] => {
               ) : (
                 cell.raids.map((raid) => {
                   const signup = signupsByRaidKey.get(raid.key) ?? null;
+                  const raidStarted = hasRaidStarted(raid.startsAtUtc);
                   const localTime = formatEpochInTimeZone(raid.displayStartsAtUtc, userTimeZone);
                   const localDay = dayKeyInTimeZone(raid.displayStartsAtUtc, userTimeZone);
 
@@ -903,131 +910,144 @@ const getRaidMembers = (raidKey: string): DaySummarySignupRow[] => {
                           <p class="signed-as">
                             {signup.signup_status === 'coming' ? 'Signed up' : signup.signup_status === 'tentative' ? 'Tentative' : signup.signup_status === 'late' ? 'Late' : 'Absent'} as <strong>{signup.character_name}</strong>
                           </p>
-                          <form method="POST" action="/api/signup/create" class="status-toggle-form">
-                            <input type="hidden" name="raid_kind" value={raid.kind} />
-                            {raid.kind === 'primary' ? (
-                              <>
-                                <input type="hidden" name="primary_schedule_id" value={raid.primaryScheduleId!} />
-                                <input type="hidden" name="occurrence_start_utc" value={raid.startsAtUtc} />
-                              </>
-                            ) : (
-                              <input type="hidden" name="ad_hoc_raid_id" value={raid.adHocRaidId!} />
-                            )}
-                            <input type="hidden" name="character_id" value={signup.character_id} />
-                            <input type="hidden" name="signup_role" value={signup.signup_role} />
-                            <input type="hidden" name="return_to" value={Astro.url.pathname + Astro.url.search} />
-                            {signup.signup_status !== 'coming' && (
-                              <button
-                                type="submit"
-                                name="attendance_status"
-                                value="coming"
-                                class:list={['btn', 'btn-sign']}
-                              >
-                                Signup
-                              </button>
-                            )}
-                            {signup.signup_status !== 'tentative' && (
-                              <button
-                                type="submit"
-                                name="attendance_status"
-                                value="tentative"
-                                class:list={['btn', 'btn-tentative']}
-                              >
-                                Tentative
-                              </button>
-                            )}
-                            {signup.signup_status !== 'late' && (
-                              <button
-                                type="submit"
-                                name="attendance_status"
-                                value="late"
-                                class:list={['btn', 'btn-late']}
-                                onclick="return validateLateSignup(this.form)"
-                                title="If you're marked as late, please indicate when you expect to arrive."
-                              >
-                                Late
-                              </button>
-                            )}
-                            {signup.signup_status !== 'absent' && (
-                              <button
-                                type="submit"
-                                name="attendance_status"
-                                value="absent"
-                                class:list={['btn', 'btn-absent']}
-                              >
-                                Absent
-                              </button>
-                            )}
-                          </form>
-                          <form method="POST" action="/api/signup/update-note" class="signup-notes-form">
-                            <input type="hidden" name="signup_id" value={signup.id} />
-                            <input type="hidden" name="return_to" value={Astro.url.pathname + Astro.url.search} />
-                            <label class="signup-notes-small">
-                              <span class="sr-only">Notes</span>
-                              <textarea 
-                                name="signup_notes" 
-                                class="signup-notes-inline" 
-                                rows="1"
-                              >{signup.signup_notes ?? ''}</textarea>
-                            </label>
-                            <button type="submit" class="btn btn-compact">Update Note</button>
-                          </form>
-                          <form method="POST" action="/api/signup/cancel" class="cancel-form">
-                            <input type="hidden" name="raid_kind" value={raid.kind} />
-                            {raid.kind === 'primary' ? (
-                              <>
-                                <input type="hidden" name="primary_schedule_id" value={raid.primaryScheduleId!} />
-                                <input type="hidden" name="occurrence_start_utc" value={raid.startsAtUtc} />
-                              </>
-                            ) : (
-                              <input type="hidden" name="ad_hoc_raid_id" value={raid.adHocRaidId!} />
-                            )}
-                            <input type="hidden" name="return_to" value={Astro.url.pathname + Astro.url.search} />
-                            <button type="submit" class="btn btn-cancel">Cancel</button>
-                          </form>
+                          {!raidStarted && (
+                            <form method="POST" action="/api/signup/create" class="status-toggle-form">
+                              <input type="hidden" name="raid_kind" value={raid.kind} />
+                              {raid.kind === 'primary' ? (
+                                <>
+                                  <input type="hidden" name="primary_schedule_id" value={raid.primaryScheduleId!} />
+                                  <input type="hidden" name="occurrence_start_utc" value={raid.startsAtUtc} />
+                                </>
+                              ) : (
+                                <input type="hidden" name="ad_hoc_raid_id" value={raid.adHocRaidId!} />
+                              )}
+                              <input type="hidden" name="character_id" value={signup.character_id} />
+                              <input type="hidden" name="signup_role" value={signup.signup_role} />
+                              <input type="hidden" name="return_to" value={Astro.url.pathname + Astro.url.search} />
+                              {signup.signup_status !== 'coming' && (
+                                <button
+                                  type="submit"
+                                  name="attendance_status"
+                                  value="coming"
+                                  class:list={['btn', 'btn-sign']}
+                                >
+                                  Signup
+                                </button>
+                              )}
+                              {signup.signup_status !== 'tentative' && (
+                                <button
+                                  type="submit"
+                                  name="attendance_status"
+                                  value="tentative"
+                                  class:list={['btn', 'btn-tentative']}
+                                >
+                                  Tentative
+                                </button>
+                              )}
+                              {signup.signup_status !== 'late' && (
+                                <button
+                                  type="submit"
+                                  name="attendance_status"
+                                  value="late"
+                                  class:list={['btn', 'btn-late']}
+                                  onclick="return validateLateSignup(this.form)"
+                                  title="If you're marked as late, please indicate when you expect to arrive."
+                                >
+                                  Late
+                                </button>
+                              )}
+                              {signup.signup_status !== 'absent' && (
+                                <button
+                                  type="submit"
+                                  name="attendance_status"
+                                  value="absent"
+                                  class:list={['btn', 'btn-absent']}
+                                >
+                                  Absent
+                                </button>
+                              )}
+                            </form>
+                          )}
+                          {raidStarted && <p class="signup-locked-note">Signup status and notes are locked after raid start.</p>}
+                          {!raidStarted && (
+                            <form method="POST" action="/api/signup/update-note" class="signup-notes-form">
+                              <input type="hidden" name="signup_id" value={signup.id} />
+                              <input type="hidden" name="return_to" value={Astro.url.pathname + Astro.url.search} />
+                              <label class="signup-notes-small">
+                                <span class="sr-only">Notes</span>
+                                <textarea 
+                                  name="signup_notes" 
+                                  class="signup-notes-inline" 
+                                  rows="1"
+                                >{signup.signup_notes ?? ''}</textarea>
+                              </label>
+                              <button type="submit" class="btn btn-compact">Update Note</button>
+                            </form>
+                          )}
+                          {!raidStarted && (
+                            <form method="POST" action="/api/signup/cancel" class="cancel-form">
+                              <input type="hidden" name="raid_kind" value={raid.kind} />
+                              {raid.kind === 'primary' ? (
+                                <>
+                                  <input type="hidden" name="primary_schedule_id" value={raid.primaryScheduleId!} />
+                                  <input type="hidden" name="occurrence_start_utc" value={raid.startsAtUtc} />
+                                </>
+                              ) : (
+                                <input type="hidden" name="ad_hoc_raid_id" value={raid.adHocRaidId!} />
+                              )}
+                              <input type="hidden" name="return_to" value={Astro.url.pathname + Astro.url.search} />
+                              <button type="submit" class="btn btn-cancel">Cancel</button>
+                            </form>
+                          )}
                         </div>
                       ) : (
-                        <form method="POST" action="/api/signup/create" class="signup-form">
-                          <input type="hidden" name="raid_kind" value={raid.kind} />
-                          {raid.kind === 'primary' ? (
-                            <>
-                              <input type="hidden" name="primary_schedule_id" value={raid.primaryScheduleId!} />
-                              <input type="hidden" name="occurrence_start_utc" value={raid.startsAtUtc} />
-                            </>
+                        <>
+                          {raidStarted ? (
+                            <p class="signup-locked-note">Signup status and notes are locked after raid start.</p>
                           ) : (
-                            <input type="hidden" name="ad_hoc_raid_id" value={raid.adHocRaidId!} />
-                          )}
-                          <input type="hidden" name="return_to" value={Astro.url.pathname + Astro.url.search} />
+                            <form method="POST" action="/api/signup/create" class="signup-form">
+                              <input type="hidden" name="raid_kind" value={raid.kind} />
+                              {raid.kind === 'primary' ? (
+                                <>
+                                  <input type="hidden" name="primary_schedule_id" value={raid.primaryScheduleId!} />
+                                  <input type="hidden" name="occurrence_start_utc" value={raid.startsAtUtc} />
+                                </>
+                              ) : (
+                                <input type="hidden" name="ad_hoc_raid_id" value={raid.adHocRaidId!} />
+                              )}
+                              <input type="hidden" name="return_to" value={Astro.url.pathname + Astro.url.search} />
 
-                          <label>
-                            <span class="sr-only">Character</span>
-                            <select name="character_id" required>
-                              {characters.map((char) => (
-                                <option value={char.id} selected={char.id === defaultCharacterId}>
-                                  {char.name} ({char.class_name})
-                                </option>
-                              ))}
-                            </select>
-                          </label>
-                          <label>
-                            <span class="sr-only">Role</span>
-                            <select name="signup_role" required>
-                              {ROLE_OPTIONS.map((role) => (
-                                <option value={role.value} selected={role.value === userPreferredRole}>{role.label}</option>
-                              ))}
-                            </select>
-                          </label>
-                          <div class="status-toggle-form">
-                            <button type="submit" name="attendance_status" value="coming" class="btn btn-sign">Signup</button>
-                            <button type="submit" name="attendance_status" value="tentative" class="btn btn-tentative">Tentative</button>
-                            <button type="submit" name="attendance_status" value="late" class="btn btn-late" onclick="return validateLateSignup(this.form)" title="If you're marked as late, please indicate when you expect to arrive.">Late</button>
-                            <button type="submit" name="attendance_status" value="absent" class="btn btn-absent">Absent</button>
-                          </div>
-                          <label>
-                            <span class="signup-notes-label">Notes</span>
-                            <textarea name="signup_notes" class="signup-notes-field" rows="2"></textarea>
-                          </label>
-                        </form>
+                              <label>
+                                <span class="sr-only">Character</span>
+                                <select name="character_id" required>
+                                  {characters.map((char) => (
+                                    <option value={char.id} selected={char.id === defaultCharacterId}>
+                                      {char.name} ({char.class_name})
+                                    </option>
+                                  ))}
+                                </select>
+                              </label>
+                              <label>
+                                <span class="sr-only">Role</span>
+                                <select name="signup_role" required>
+                                  {ROLE_OPTIONS.map((role) => (
+                                    <option value={role.value} selected={role.value === userPreferredRole}>{role.label}</option>
+                                  ))}
+                                </select>
+                              </label>
+                              <div class="status-toggle-form">
+                                <button type="submit" name="attendance_status" value="coming" class="btn btn-sign">Signup</button>
+                                <button type="submit" name="attendance_status" value="tentative" class="btn btn-tentative">Tentative</button>
+                                <button type="submit" name="attendance_status" value="late" class="btn btn-late" onclick="return validateLateSignup(this.form)" title="If you're marked as late, please indicate when you expect to arrive.">Late</button>
+                                <button type="submit" name="attendance_status" value="absent" class="btn btn-absent">Absent</button>
+                              </div>
+                              <label>
+                                <span class="signup-notes-label">Notes</span>
+                                <textarea name="signup_notes" class="signup-notes-field" rows="2"></textarea>
+                              </label>
+                            </form>
+                          )}
+                        </>
                       )}
                     </article>
                   );
@@ -1461,6 +1481,12 @@ const getRaidMembers = (raidKey: string): DaySummarySignupRow[] => {
   .signed-as {
     font-size: 0.8rem;
     color: #9fd0aa;
+  }
+
+  .signup-locked-note {
+    margin: 0;
+    font-size: 0.78rem;
+    color: #f4aaaa;
   }
 
   .day-summary {

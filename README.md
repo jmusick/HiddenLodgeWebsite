@@ -6,69 +6,6 @@ Official guild website for The Hidden Lodge, a semi-hardcore AOTC/Mythic raiding
 
 The site combines public guild information, Blizzard-authenticated member profiles, cached roster and raider analytics views, curated resource links, a lore archive, and a guild officer admin area for day-to-day operations.
 
-## Latest Release
-
-### v1.8.0
-
-- Added Great Vault score to the desktop sync API payload so downstream tools can consume the same website scoring model.
-- Desktop sync endpoint now returns preparedness tiers and Great Vault score in one authorized response.
-
-### v1.7.1
-
-- Fixed Great Vault world-content weekly objective bootstrapping so current-week delve progress is not zeroed when tracking starts mid-week.
-- Restores world-vault slot population for raiders who already completed delves before the new tracking baseline was established.
-
-### v1.7.0
-
-- Added weekly Great Vault history snapshots with migration `0043_vault_history.sql`.
-- Added Great Vault score views across raider pages:
-	- Live score card on the Raider detail Great Vault panel
-	- Score column in Great Vault History (replacing Tier display)
-	- New Vault Score column on `/raiders` with sorting support
-- Added an expandable Score Formula panel on Raider detail pages with transparent calculation tables and full weighting math.
-- Added Vault Score header help text on `/raiders` with profile deep-link guidance for full formula details.
-
-### v1.6.0
-
-- Great Vault rows now use live slot-state sources for Raiders detail pages:
-	- Raid slots from weekly per-boss raid encounter timestamps
-	- Dungeon slots from Raider.IO weekly key data
-	- World unlocks from weekly delve objective tracking
-- Fixed Raider.IO parsing to support `mythic_level` responses so Dungeon vault slot ilvls populate correctly.
-- Updated raid vault reward mapping to match in-game values (Heroic now displays 266 where applicable).
-- Added migration `0042_world_vault_weekly_snapshot.sql` for world vault weekly objective and snapshot columns.
-
-### v1.5.24
-
-- Switched Raiders M+ weekly sourcing to Raider.IO's live character statistics API path used by the stats page.
-- Eliminates one-by-one corrections by enabling accurate bulk refresh behavior for all members each cache cycle.
-
-### v1.5.23
-
-- Fixed a week-one undercount path where capped Raider.IO initialization could lock in an overly high snapshot baseline.
-- Added snapshot recovery logic so affected rows re-anchor and converge closer to Raider.IO totals during Season 1 week one.
-
-### v1.5.22
-
-- Tightened the Raider.IO-calibrated Week 1 Mythic+ weekly cap to reduce inflated totals for outlier legacy snapshot rows.
-- Improves convergence for characters that were still over-reporting weekly/total runs compared to Raider.IO.
-
-### v1.5.21
-
-- Hotfixed Raider M+ weekly totals to use a conservative Raider.IO-calibrated envelope, reducing Blizzard snapshot outliers while preserving high-volume runners.
-- Kept all data sources on Raider.IO published API endpoints and avoided undocumented internal endpoints.
-
-### v1.5.20
-
-- Hotfixed Raiders Mythic+ totals so displayed M+ Total now reflects current-season runs instead of the raw lifetime-style Blizzard stat.
-- Fixed week-one cache bootstrap behavior so existing raider rows converge on correct this-week totals after the Midnight Season 1 launch.
-
-### v1.5.19
-
-- Expanded Raiders analytics with improved Mythic+ metrics (total/this week/last week) and configurable table display.
-- Added new winner spotlight cards (M+ leader, most crests, fewest missing upgrades) and improved tooltip/help text.
-- Updated raider detail layout with table-order stat cards, crest total/deep-linking, and relocated Raid Progress under the character model.
-
 ## Quick Navigation
 
 - [Quick Start](#quick-start)
@@ -95,6 +32,7 @@ The site combines public guild information, Blizzard-authenticated member profil
 - **Progression history:** Item Level, Mythic+ Score, and Crests/Upgrades history panels (4-week rolling window) on each raider profile
 - Authenticated profile with Battle.net login, character sync, main selection, and timezone preferences
 - Guild-member raid signup calendar with recurring and ad-hoc raid support
+- Raid signup status and note changes lock automatically after each raid start time
 
 ### Admin Features
 
@@ -186,6 +124,7 @@ http://localhost:4321
 | `/api/profile/update-timezone` | POST | Sets the authenticated user's preferred timezone |
 | `/api/signup/create` | POST | Creates or updates a member signup for a raid |
 | `/api/signup/cancel` | POST | Cancels a member signup for a raid |
+| `/api/signup/update-note` | POST | Updates notes on an existing member signup (before raid start) |
 | `/api/apply` | POST | Submit a guild application from the Raiding page |
 | `/api/application/status` | GET | Returns current application status for the logged-in user |
 
@@ -298,6 +237,7 @@ curl -sS \
 | Endpoint | Method | Description |
 |---|---|---|
 | `/api/cron/refresh-roster` | GET | Refreshes both roster and raiders caches; requires `X-Cron-Secret` |
+| `/api/cron/refresh-attendance` | GET | Refreshes Warcraft Logs attendance report cache and participant scoring data; requires `X-Cron-Secret` |
 
 ### Local Dev Cron Refresher
 
@@ -395,7 +335,7 @@ These handlers remain in the codebase as retired stubs and currently return HTTP
 
 ### Key Folders
 
-- **`migrations/`** — D1 SQL migrations ordered by creation date (0001–0040)
+- **`migrations/`** — D1 SQL migrations ordered by creation date (currently 0001–0048 plus helper seed SQL)
 - **`public/`** — Static assets: images for leadership and lore pages, Cloudflare routing config
 - **`scripts/`** — Build and deployment helper scripts
 - **`src/components/`** — Reusable Astro components (cards, layouts, sections)
@@ -439,11 +379,7 @@ npm run db:setup:prod
 
 Migrations are stored in `migrations/` and should be applied in order.
 
-For existing production databases, apply only newly introduced migrations instead of replaying the full chain. Example for this release:
-
-```sh
-wrangler d1 execute hidden-lodge-db --remote --file=migrations/0043_vault_history.sql
-```
+For existing production databases, apply only newly introduced migrations instead of replaying the full chain.
 
 ## Environment Variables
 

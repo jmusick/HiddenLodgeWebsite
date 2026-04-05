@@ -15,6 +15,13 @@ function safeReturnPath(value: FormDataEntryValue | null): string {
   return value;
 }
 
+function redirectWithStatus(returnTo: string, status: string): Response {
+  return new Response(null, {
+    status: 302,
+    headers: { Location: `${returnTo}${returnTo.includes('?') ? '&' : '?'}status=${status}` },
+  });
+}
+
 export async function POST(context: APIContext): Promise<Response> {
   const user = context.locals.user;
   if (!user) return new Response('Unauthorized', { status: 401 });
@@ -26,19 +33,44 @@ export async function POST(context: APIContext): Promise<Response> {
   const returnTo = safeReturnPath(formData.get('return_to'));
 
   if (!signupId) {
-    return new Response(null, { status: 302, headers: { Location: `${returnTo}${returnTo.includes('?') ? '&' : '?'}status=error` } });
+    return redirectWithStatus(returnTo, 'error');
   }
 
   try {
     // Verify user owns this signup
     const signup = await env.DB.prepare(
-      'SELECT user_id FROM raid_signups WHERE id = ?'
+      `SELECT user_id, raid_kind, occurrence_start_utc, ad_hoc_raid_id
+       FROM raid_signups
+       WHERE id = ?`
     )
       .bind(signupId)
-      .first();
+      .first<{
+        user_id: number;
+        raid_kind: 'primary' | 'adhoc';
+        occurrence_start_utc: number | null;
+        ad_hoc_raid_id: number | null;
+      }>();
 
     if (!signup || signup.user_id !== user.id) {
-      return new Response(null, { status: 302, headers: { Location: `${returnTo}${returnTo.includes('?') ? '&' : '?'}status=error` } });
+      return redirectWithStatus(returnTo, 'error');
+    }
+
+    const nowEpoch = Math.floor(Date.now() / 1000);
+    if (signup.raid_kind === 'primary' && signup.occurrence_start_utc && signup.occurrence_start_utc <= nowEpoch) {
+      return redirectWithStatus(returnTo, 'locked');
+    }
+    if (signup.raid_kind === 'adhoc' && signup.ad_hoc_raid_id) {
+      const raid = await env.DB.prepare('SELECT starts_at_utc FROM ad_hoc_raids WHERE id = ?')
+        .bind(signup.ad_hoc_raid_id)
+        .first<{ starts_at_utc: number }>();
+
+      if (!raid) {
+        return redirectWithStatus(returnTo, 'error');
+      }
+
+      if (raid.starts_at_utc <= nowEpoch) {
+        return redirectWithStatus(returnTo, 'locked');
+      }
     }
 
     // Update the note
@@ -48,8 +80,8 @@ export async function POST(context: APIContext): Promise<Response> {
       .bind(signupNotes, signupId)
       .run();
   } catch {
-    return new Response(null, { status: 302, headers: { Location: `${returnTo}${returnTo.includes('?') ? '&' : '?'}status=error` } });
+    return redirectWithStatus(returnTo, 'error');
   }
 
-  return new Response(null, { status: 302, headers: { Location: `${returnTo}${returnTo.includes('?') ? '&' : '?'}status=note-updated` } });
+  return redirectWithStatus(returnTo, 'note-updated');
 }

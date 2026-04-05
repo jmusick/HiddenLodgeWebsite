@@ -15,6 +15,13 @@ function safeReturnPath(value: FormDataEntryValue | null): string {
   return value;
 }
 
+function redirectWithStatus(returnTo: string, status: string): Response {
+  return new Response(null, {
+    status: 302,
+    headers: { Location: `${returnTo}${returnTo.includes('?') ? '&' : '?'}status=${status}` },
+  });
+}
+
 export async function POST(context: APIContext): Promise<Response> {
   const user = context.locals.user;
   if (!user) return new Response('Unauthorized', { status: 401 });
@@ -23,6 +30,7 @@ export async function POST(context: APIContext): Promise<Response> {
   const formData = await context.request.formData();
   const raidKind = (formData.get('raid_kind') as string | null) ?? '';
   const returnTo = safeReturnPath(formData.get('return_to'));
+  const nowEpoch = Math.floor(Date.now() / 1000);
 
   try {
     if (raidKind === 'primary') {
@@ -31,6 +39,11 @@ export async function POST(context: APIContext): Promise<Response> {
       if (!primaryScheduleId || !occurrenceStartUtc) {
         throw new Error('Invalid primary cancellation payload');
       }
+
+      if (occurrenceStartUtc <= nowEpoch) {
+        return redirectWithStatus(returnTo, 'locked');
+      }
+
       await env.DB.prepare(
         `DELETE FROM raid_signups
          WHERE user_id = ?
@@ -45,6 +58,18 @@ export async function POST(context: APIContext): Promise<Response> {
       if (!adHocRaidId) {
         throw new Error('Invalid ad-hoc cancellation payload');
       }
+
+      const raid = await env.DB.prepare('SELECT starts_at_utc FROM ad_hoc_raids WHERE id = ?')
+        .bind(adHocRaidId)
+        .first<{ starts_at_utc: number }>();
+      if (!raid) {
+        throw new Error('Raid not found');
+      }
+
+      if (raid.starts_at_utc <= nowEpoch) {
+        return redirectWithStatus(returnTo, 'locked');
+      }
+
       await env.DB.prepare(
         `DELETE FROM raid_signups
          WHERE user_id = ?
@@ -57,8 +82,8 @@ export async function POST(context: APIContext): Promise<Response> {
       throw new Error('Invalid raid kind');
     }
   } catch {
-    return new Response(null, { status: 302, headers: { Location: `${returnTo}${returnTo.includes('?') ? '&' : '?'}status=error` } });
+    return redirectWithStatus(returnTo, 'error');
   }
 
-  return new Response(null, { status: 302, headers: { Location: `${returnTo}${returnTo.includes('?') ? '&' : '?'}status=canceled` } });
+  return redirectWithStatus(returnTo, 'canceled');
 }

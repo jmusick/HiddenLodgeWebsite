@@ -18,6 +18,13 @@ function safeReturnPath(value: FormDataEntryValue | null): string {
 
 const VALID_ATTENDANCE_STATUSES = new Set(['coming', 'tentative', 'late', 'absent']);
 
+function redirectWithStatus(returnTo: string, status: string): Response {
+  return new Response(null, {
+    status: 302,
+    headers: { Location: `${returnTo}${returnTo.includes('?') ? '&' : '?'}status=${status}` },
+  });
+}
+
 export async function POST(context: APIContext): Promise<Response> {
   const user = context.locals.user;
   if (!user) return new Response('Unauthorized', { status: 401 });
@@ -37,12 +44,12 @@ export async function POST(context: APIContext): Promise<Response> {
     !VALID_ATTENDANCE_STATUSES.has(attendanceStatus) ||
     !signupRole
   ) {
-    return new Response(null, { status: 302, headers: { Location: `${returnTo}${returnTo.includes('?') ? '&' : '?'}status=error` } });
+    return redirectWithStatus(returnTo, 'error');
   }
 
   // Late status requires a note
   if (attendanceStatus === 'late' && !signupNotes) {
-    return new Response(null, { status: 302, headers: { Location: `${returnTo}${returnTo.includes('?') ? '&' : '?'}status=error` } });
+    return redirectWithStatus(returnTo, 'error');
   }
 
   const ownsCharacter = await env.DB.prepare('SELECT 1 FROM characters WHERE id = ? AND user_id = ?')
@@ -50,8 +57,10 @@ export async function POST(context: APIContext): Promise<Response> {
     .first();
 
   if (!ownsCharacter) {
-    return new Response(null, { status: 302, headers: { Location: `${returnTo}${returnTo.includes('?') ? '&' : '?'}status=error` } });
+    return redirectWithStatus(returnTo, 'error');
   }
+
+  const nowEpoch = Math.floor(Date.now() / 1000);
 
   try {
     if (raidKind === 'primary') {
@@ -59,6 +68,10 @@ export async function POST(context: APIContext): Promise<Response> {
       const occurrenceStartUtc = parsePositiveInt(formData.get('occurrence_start_utc'));
       if (!primaryScheduleId || !occurrenceStartUtc) {
         throw new Error('Invalid primary signup payload');
+      }
+
+      if (occurrenceStartUtc <= nowEpoch) {
+        return redirectWithStatus(returnTo, 'locked');
       }
 
       const schedule = await env.DB.prepare('SELECT id FROM primary_raid_schedules WHERE id = ? AND is_active = 1')
@@ -87,11 +100,15 @@ export async function POST(context: APIContext): Promise<Response> {
         throw new Error('Invalid ad-hoc signup payload');
       }
 
-      const raid = await env.DB.prepare('SELECT id FROM ad_hoc_raids WHERE id = ? AND is_active = 1')
+      const raid = await env.DB.prepare('SELECT id, starts_at_utc FROM ad_hoc_raids WHERE id = ? AND is_active = 1')
         .bind(adHocRaidId)
-        .first();
+        .first<{ id: number; starts_at_utc: number }>();
       if (!raid) {
         throw new Error('Raid not found');
+      }
+
+      if (raid.starts_at_utc <= nowEpoch) {
+        return redirectWithStatus(returnTo, 'locked');
       }
 
       await env.DB.batch([
@@ -104,8 +121,8 @@ export async function POST(context: APIContext): Promise<Response> {
       ]);
     }
   } catch {
-    return new Response(null, { status: 302, headers: { Location: `${returnTo}${returnTo.includes('?') ? '&' : '?'}status=error` } });
+    return redirectWithStatus(returnTo, 'error');
   }
 
-  return new Response(null, { status: 302, headers: { Location: `${returnTo}${returnTo.includes('?') ? '&' : '?'}status=signed` } });
+  return redirectWithStatus(returnTo, 'signed');
 }
