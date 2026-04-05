@@ -2,7 +2,7 @@ import { defineMiddleware } from 'astro:middleware';
 import { getSessionUser, isGuildAdmin, isGuildMember } from './lib/auth';
 import { env } from 'cloudflare:workers';
 
-const MEMBER_ONLY_PATHS = new Set(['/raiders', '/signup']);
+const MEMBER_ONLY_PATHS = new Set(['/raiders', '/signup', '/feedback']);
 
 function requireAuthenticatedGuildMember(
 	path: string,

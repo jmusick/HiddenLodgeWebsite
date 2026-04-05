@@ -1,0 +1,150 @@
+---
+export const prerender = false;
+
+import Layout from '../layouts/Layout.astro';
+import { Icon } from 'astro-icon/components';
+
+const user = Astro.locals.user;
+if (!user) {
+  return Astro.redirect('/auth/login');
+}
+
+if (!Astro.locals.isGuildMember) {
+  return new Response('Guild membership required.', { status: 403 });
+}
+
+const pageUrl = new URL(Astro.request.url);
+const statusParam = pageUrl.searchParams.get('status');
+---
+
+<Layout title="Guild Feedback | The Hidden Lodge" description="Submit anonymous feedback or concerns to guild leadership.">
+  <section class="feedback-panel">
+    <h1 class="title-row"><Icon name="lucide:message-square-warning" class="title-icon" aria-hidden="true" />Guild Feedback & Concerns</h1>
+    <p class="intro-copy">
+      Use this form to share concerns, suggestions, or guild feedback. Submissions are completely anonymous unless you choose to include your name.
+    </p>
+
+    {statusParam === 'ok' && (
+      <p class="flash flash-ok" role="status">Feedback submitted. Thank you for sharing this with leadership.</p>
+    )}
+    {statusParam === 'invalid' && (
+      <p class="flash flash-error" role="alert">Please include feedback (5 to 2000 characters).</p>
+    )}
+    {statusParam === 'error' && (
+      <p class="flash flash-error" role="alert">Unable to submit feedback right now. Please try again.</p>
+    )}
+
+    <form method="POST" action="/api/feedback/create" class="feedback-form">
+      <input type="hidden" name="return_to" value="/feedback" />
+
+      <label for="display_name">Name (optional)</label>
+      <input
+        id="display_name"
+        name="display_name"
+        type="text"
+        maxlength="80"
+        placeholder="Optional: include a name if you want follow-up"
+        autocomplete="off"
+      />
+
+      <label for="message">Feedback or concern</label>
+      <textarea
+        id="message"
+        name="message"
+        rows="8"
+        minlength="5"
+        maxlength="2000"
+        required
+        placeholder="Share what happened, what concern you have, or what we can improve."
+      ></textarea>
+
+      <button type="submit">Submit Feedback</button>
+    </form>
+  </section>
+</Layout>
+
+<style>
+  .feedback-panel {
+    margin-top: 1rem;
+    border: 1px solid rgba(214, 176, 106, 0.36);
+    border-radius: 0.75rem;
+    background:
+      linear-gradient(160deg, rgba(214, 176, 106, 0.08), transparent 45%),
+      rgba(10, 18, 28, 0.78);
+    padding: 1rem;
+  }
+
+  .intro-copy {
+    max-width: 72ch;
+    color: #d8e2e8;
+    margin-top: 0.35rem;
+  }
+
+  .flash {
+    margin-top: 0.8rem;
+    margin-bottom: 0.2rem;
+    padding: 0.55rem 0.7rem;
+    border-radius: 0.45rem;
+    border: 1px solid;
+    font-weight: 600;
+  }
+
+  .flash-ok {
+    border-color: rgba(45, 189, 126, 0.6);
+    background: rgba(45, 189, 126, 0.12);
+    color: #9cf0c5;
+  }
+
+  .flash-error {
+    border-color: rgba(220, 92, 92, 0.6);
+    background: rgba(220, 92, 92, 0.12);
+    color: #ffb7b7;
+  }
+
+  .feedback-form {
+    margin-top: 1rem;
+    display: grid;
+    gap: 0.5rem;
+    max-width: 48rem;
+  }
+
+  .feedback-form label {
+    color: #d7b973;
+    font-weight: 700;
+    font-size: 0.9rem;
+  }
+
+  .feedback-form input,
+  .feedback-form textarea {
+    width: 100%;
+    border: 1px solid rgba(214, 176, 106, 0.38);
+    border-radius: 0.45rem;
+    background: rgba(8, 16, 24, 0.86);
+    color: #ecf2f7;
+    font: inherit;
+    padding: 0.52rem 0.6rem;
+  }
+
+  .feedback-form textarea {
+    min-height: 10rem;
+    resize: vertical;
+  }
+
+  .feedback-form button {
+    justify-self: start;
+    border: 1px solid rgba(214, 176, 106, 0.45);
+    border-radius: 0.45rem;
+    background: rgba(214, 176, 106, 0.12);
+    color: #f0cc89;
+    font: inherit;
+    font-weight: 700;
+    padding: 0.42rem 0.9rem;
+    cursor: pointer;
+  }
+
+  .feedback-form button:hover,
+  .feedback-form button:focus-visible {
+    border-color: rgba(214, 176, 106, 0.7);
+    background: rgba(214, 176, 106, 0.22);
+  }
+</style>
