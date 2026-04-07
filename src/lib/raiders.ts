@@ -86,20 +86,30 @@ const SEASON_16_MYTHIC_DUNGEON_STAT_IDS = new Set([
 ]);
 
 function easternUtcOffsetMinutes(atUtc: Date): number {
-  const parts = new Intl.DateTimeFormat('en-US', {
+  // Derive the UTC offset by comparing the Eastern local time components to UTC.
+  // This avoids relying on `timeZoneName: 'shortOffset'` (an ES2021 addition that is not
+  // universally supported) and the regex dance that follows it.
+  const nyParts = new Intl.DateTimeFormat('en-US', {
     timeZone: 'America/New_York',
-    timeZoneName: 'shortOffset',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
     hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
   }).formatToParts(atUtc);
 
-  const offsetLabel = parts.find((part) => part.type === 'timeZoneName')?.value ?? 'GMT-5';
-  const match = offsetLabel.match(/GMT([+-])(\d{1,2})(?::?(\d{2}))?/i);
-  if (!match) return -300;
+  const nyYear   = Number(nyParts.find((p) => p.type === 'year')?.value   ?? '1970');
+  const nyMonth  = Number(nyParts.find((p) => p.type === 'month')?.value  ?? '1');
+  const nyDay    = Number(nyParts.find((p) => p.type === 'day')?.value    ?? '1');
+  const nyHour   = Number(nyParts.find((p) => p.type === 'hour')?.value   ?? '0');
+  const nyMinute = Number(nyParts.find((p) => p.type === 'minute')?.value ?? '0');
+  const nySecond = Number(nyParts.find((p) => p.type === 'second')?.value ?? '0');
 
-  const sign = match[1] === '-' ? -1 : 1;
-  const hours = Number(match[2] ?? '0');
-  const minutes = Number(match[3] ?? '0');
-  return sign * (hours * 60 + minutes);
+  // Treat the Eastern wall-clock reading as if it were UTC, then subtract the true UTC ms.
+  const nyAsUtcMs = Date.UTC(nyYear, nyMonth - 1, nyDay, nyHour, nyMinute, nySecond);
+  return Math.round((nyAsUtcMs - atUtc.getTime()) / 60_000);
 }
 
 // US weekly reset bucket: Tuesday 10:00 AM America/New_York.
