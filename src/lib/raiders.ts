@@ -2377,19 +2377,43 @@ export async function getProgressionHistory(charId: number, dbInput?: D1Database
 
 async function getPrevWeekVaultScoreMap(db: D1Database, charIds: number[]): Promise<Map<number, number>> {
   if (charIds.length === 0) return new Map();
-  const prevWeekStart = getUsWeeklyResetTimestamp() - WEEK_SECONDS;
+  const currentWeekStart = getUsWeeklyResetTimestamp();
   const placeholders = charIds.map(() => '?').join(', ');
+  // Select the most recently completed week per raider (same keystone fallback pattern as getVaultHistory).
   const result = await db
     .prepare(
-      `SELECT blizzard_char_id,
-              raid_slot_1_ilvl, raid_slot_2_ilvl, raid_slot_3_ilvl,
-              dungeon_slot_1_ilvl, dungeon_slot_2_ilvl, dungeon_slot_3_ilvl,
-              world_weekly_objectives
-       FROM raider_vault_history
-       WHERE blizzard_char_id IN (${placeholders})
-         AND week_start_ts = ?`
+      `SELECT rvh.blizzard_char_id,
+              rvh.raid_slot_1_ilvl, rvh.raid_slot_2_ilvl, rvh.raid_slot_3_ilvl,
+              rvh.dungeon_slot_1_ilvl, rvh.dungeon_slot_2_ilvl, rvh.dungeon_slot_3_ilvl,
+              rvh.world_weekly_objectives,
+              (SELECT rk1.keystone_level FROM raider_keystones rk1
+               WHERE rk1.blizzard_char_id = rvh.blizzard_char_id
+                 AND rk1.completed_ts >= rvh.week_start_ts
+                 AND rk1.completed_ts < rvh.week_end_ts
+                 AND rk1.keystone_level IS NOT NULL
+               ORDER BY rk1.keystone_level DESC LIMIT 1 OFFSET 0) AS fallback_keystone_1,
+              (SELECT rk4.keystone_level FROM raider_keystones rk4
+               WHERE rk4.blizzard_char_id = rvh.blizzard_char_id
+                 AND rk4.completed_ts >= rvh.week_start_ts
+                 AND rk4.completed_ts < rvh.week_end_ts
+                 AND rk4.keystone_level IS NOT NULL
+               ORDER BY rk4.keystone_level DESC LIMIT 1 OFFSET 3) AS fallback_keystone_4,
+              (SELECT rk8.keystone_level FROM raider_keystones rk8
+               WHERE rk8.blizzard_char_id = rvh.blizzard_char_id
+                 AND rk8.completed_ts >= rvh.week_start_ts
+                 AND rk8.completed_ts < rvh.week_end_ts
+                 AND rk8.keystone_level IS NOT NULL
+               ORDER BY rk8.keystone_level DESC LIMIT 1 OFFSET 7) AS fallback_keystone_8
+       FROM raider_vault_history rvh
+       WHERE rvh.blizzard_char_id IN (${placeholders})
+         AND rvh.week_start_ts = (
+           SELECT MAX(rvh2.week_start_ts)
+           FROM raider_vault_history rvh2
+           WHERE rvh2.blizzard_char_id = rvh.blizzard_char_id
+             AND rvh2.week_start_ts < ?
+         )`
     )
-    .bind(...charIds, prevWeekStart)
+    .bind(...charIds, currentWeekStart)
     .all<{
       blizzard_char_id: number;
       raid_slot_1_ilvl: number | null;
@@ -2399,12 +2423,18 @@ async function getPrevWeekVaultScoreMap(db: D1Database, charIds: number[]): Prom
       dungeon_slot_2_ilvl: number | null;
       dungeon_slot_3_ilvl: number | null;
       world_weekly_objectives: number | null;
+      fallback_keystone_1: number | null;
+      fallback_keystone_4: number | null;
+      fallback_keystone_8: number | null;
     }>();
   const scoreMap = new Map<number, number>();
   for (const row of result.results ?? []) {
+    const dungeonSlot1 = pickBestVaultIlvl(row.dungeon_slot_1_ilvl, computeVaultIlvlFromLevel(row.fallback_keystone_1));
+    const dungeonSlot2 = pickBestVaultIlvl(row.dungeon_slot_2_ilvl, computeVaultIlvlFromLevel(row.fallback_keystone_4));
+    const dungeonSlot3 = pickBestVaultIlvl(row.dungeon_slot_3_ilvl, computeVaultIlvlFromLevel(row.fallback_keystone_8));
     const score = computeGreatVaultScore(
       [row.raid_slot_1_ilvl, row.raid_slot_2_ilvl, row.raid_slot_3_ilvl],
-      [row.dungeon_slot_1_ilvl, row.dungeon_slot_2_ilvl, row.dungeon_slot_3_ilvl],
+      [dungeonSlot1, dungeonSlot2, dungeonSlot3],
       Math.max(0, row.world_weekly_objectives ?? 0),
     );
     scoreMap.set(row.blizzard_char_id, score);
