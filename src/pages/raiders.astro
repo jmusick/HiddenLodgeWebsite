@@ -444,15 +444,23 @@ const mplusWinnerData = {
             <th><button class="sort-btn" type="button" data-sort-key="mythicScore">M+ Score</button></th>
             <th>
               <div class="metric-header">
+                <button class="sort-btn" type="button" data-sort-key="mplusMetric" data-tooltip="M+ metric column. Use the selector to switch between Total, This Week, and Last Week values; sorting follows the selected metric." aria-label="M plus metric column with selector for total, this week, and last week. Sorting follows the selected metric.">M+ <Icon name="lucide:info" class="col-help-icon" aria-hidden="true" /></button>
                 <select id="mplus-metric-select" class="metric-select" aria-label="Select which M plus metric to display">
-                  <option value="total">M+ Total</option>
-                  <option value="current" selected>M+ This Week</option>
-                  <option value="last">M+ Last Week</option>
+                  <option value="total">Total</option>
+                  <option value="current" selected>This Week</option>
+                  <option value="last">Last Week</option>
                 </select>
-                <button class="sort-btn metric-info-btn" type="button" data-sort-key="mplusMetric" data-tooltip="M+ metric column. Use the selector to switch between Total, This Week, and Last Week values; sorting follows the selected metric." aria-label="M plus metric column with selector for total, this week, and last week. Sorting follows the selected metric."><Icon name="lucide:info" class="col-help-icon" aria-hidden="true" /></button>
               </div>
             </th>
-            <th><button class="sort-btn" type="button" data-sort-key="vaultScore" data-tooltip="Great Vault Score TL;DR: weighted weekly vault completion normalized to 100. It factors raid rewards, dungeon rewards, and world progress with emphasis on stronger slot outcomes. Click a raider name or score for the full formula details on their profile." aria-label="Great Vault Score. Weighted weekly vault completion normalized to 100. Click a raider name or score for full formula details on their profile.">Vault <Icon name="lucide:info" class="col-help-icon" aria-hidden="true" /></button></th>
+            <th>
+              <div class="metric-header">
+                <button class="sort-btn" type="button" data-sort-key="vaultMetric" data-tooltip="Great Vault Score TL;DR: weighted weekly vault completion normalized to 100. It factors raid rewards, dungeon rewards, and world progress with emphasis on stronger slot outcomes. Click a raider name or score for the full formula details on their profile." aria-label="Great Vault Score. Weighted weekly vault completion normalized to 100. Click a raider name or score for full formula details on their profile.">Vault <Icon name="lucide:info" class="col-help-icon" aria-hidden="true" /></button>
+                <select id="vault-metric-select" class="metric-select" aria-label="Select which vault week to display">
+                  <option value="current">This Week</option>
+                  <option value="last" selected>Last Week</option>
+                </select>
+              </div>
+            </th>
             <th><button class="sort-btn" type="button" data-sort-key="crestSort" data-tooltip="Total crests across all types (Adventurer + Veteran + Champion + Hero + Myth). Hover a crest total in the table to see the color-coded type breakdown." aria-label="Crests total across all crest types. Hover a crest total in the table to see the color-coded type breakdown.">Crests <Icon name="lucide:info" class="col-help-icon" aria-hidden="true" /></button></th>
             <th><button class="sort-btn" type="button" data-sort-key="preparednessScore" data-tooltip="Preparedness = 2-week rolling average of (Socketed Gems + Enchanted Slots) / (Total Sockets + Enchantable Slots). Falls back to current snapshot until history accumulates. Tiers: S = 100%, A >= 85%, B >= 70%, C >= 40%, D < 40%." aria-label="Preparedness. Based on a 2-week rolling average of gem and enchant coverage. Formula: (Socketed Gems + Enchanted Slots) / (Total Sockets + Enchantable Slots). Tiers: S equals 100 percent, A 85 percent or higher, B 70 percent or higher, C 40 percent or higher, D below 40 percent.">Preparedness <Icon name="lucide:info" class="col-help-icon" aria-hidden="true" /></button></th>
             <th class="tooltip-priority-col"><button class="sort-btn" type="button" data-sort-key="attendanceScore" data-tooltip="Attendance score starts on 2026-04-02 and is based on signup intent versus Warcraft Logs boss kill participation, normalized per raid night (for example, 1 out of 1 and 6 out of 6 are both full credit). Wipes still count for no-show validation. Bench grants full credit plus bonus." data-tooltip-dir="right" aria-label="Attendance score since April second 2026 from signup intent and Warcraft Logs boss kill participation, normalized per raid night. One out of one and six out of six both grant full credit. Wipes still count for no-show validation. Bench grants full credit plus bonus.">Attendance <Icon name="lucide:info" class="col-help-icon" aria-hidden="true" /></button></th>
@@ -484,6 +492,7 @@ const mplusWinnerData = {
                 data-total-upgrades-missing={String(raider.totalUpgradesMissing ?? -1)}
                 data-preparedness-score={String(preparednessSortValue(raider))}
                 data-vault-score={String(vaultScore.score)}
+                data-vault-score-prev={String(raider.prevVaultScore ?? -1)}
                 data-href={`/raiders/${raider.blizzardCharId}`}
                 class="clickable-row"
               >
@@ -523,7 +532,7 @@ const mplusWinnerData = {
                 <td>{raider.singleTargetDps ? raider.singleTargetDps.toLocaleString(undefined, { maximumFractionDigits: 0 }) : '—'}</td>
                 <td>{raider.mythicScore ? raider.mythicScore.toLocaleString(undefined, { maximumFractionDigits: 0 }) : '—'}</td>
                 <td class="mplus-cell" data-mplus-cell>{raider.mythicPlusWeeklyRuns !== null ? raider.mythicPlusWeeklyRuns.toLocaleString() : '—'}</td>
-                <td>
+                <td data-vault-cell>
                   <a href={`/raiders/${raider.blizzardCharId}`} class="vault-score-link" title="View exact score formula and weighting details on profile">
                     <span class="score-val" style={`color: ${vaultScore.color}`}>{vaultScore.score}</span>
                   </a>
@@ -590,6 +599,7 @@ const mplusWinnerData = {
   const teamFilter = document.getElementById('raiders-team-filter') as unknown as HTMLSelectElement | null;
   const mplusMetricSelect = document.getElementById('mplus-metric-select') as unknown as HTMLSelectElement | null;
   const mplusWinnerSelect = document.getElementById('spotlight-mplus-select') as unknown as HTMLSelectElement | null;
+  const vaultMetricSelect = document.getElementById('vault-metric-select') as unknown as HTMLSelectElement | null;
   const mplusWinnerCard = document.getElementById('mplus-winner-card') as HTMLElement | null;
   const mplusWinnerValue = document.getElementById('mplus-winner-value') as HTMLParagraphElement | null;
   const mplusWinnerName = document.getElementById('mplus-winner-name') as HTMLParagraphElement | null;
@@ -601,6 +611,7 @@ const mplusWinnerData = {
   let sortKey = 'equippedItemLevel';
   let sortDirection = 'desc';
   let mplusMetric: 'total' | 'current' | 'last' = 'current';
+  let vaultMetric: 'current' | 'last' = 'last';
 
   const compareText = (a: string, b: string) => a.localeCompare(b, undefined, { sensitivity: 'base' });
 
@@ -612,6 +623,37 @@ const mplusWinnerData = {
 
   function formatMplusValue(value: number): string {
     return value >= 0 ? value.toLocaleString() : '—';
+  }
+
+  function getVaultDatasetKey(): 'vaultScore' | 'vaultScorePrev' {
+    return vaultMetric === 'last' ? 'vaultScorePrev' : 'vaultScore';
+  }
+
+  function vaultScoreColor(score: number): string {
+    if (score >= 95) return '#ff8000';
+    if (score >= 85) return '#a335ee';
+    if (score >= 70) return '#0070dd';
+    if (score >= 40) return '#1eff00';
+    return '#ffffff';
+  }
+
+  function syncVaultCells() {
+    if (!tableBody) return;
+    const dataKey = getVaultDatasetKey();
+    [...tableBody.querySelectorAll('tr')].forEach((row) => {
+      const cell = row.querySelector<HTMLElement>('[data-vault-cell]');
+      if (!cell) return;
+      const score = Number((row as HTMLElement).dataset[dataKey] ?? -1);
+      const span = cell.querySelector<HTMLElement>('.score-val');
+      if (!span) return;
+      if (score >= 0) {
+        span.textContent = String(score);
+        span.style.color = vaultScoreColor(score);
+      } else {
+        span.textContent = '—';
+        span.style.color = '#ffffff';
+      }
+    });
   }
 
   function syncMplusWinnerCard() {
@@ -657,6 +699,7 @@ const mplusWinnerData = {
     if (!tableBody) return;
 
     syncMplusCells();
+    syncVaultCells();
 
     const query = searchInput?.value.trim().toLowerCase() ?? '';
     const selectedClass = classFilter?.value ?? 'all';
@@ -675,13 +718,21 @@ const mplusWinnerData = {
       return matchesSearch && matchesClass && matchesTeam;
     });
 
-    const numericKeys = new Set(['equippedItemLevel', 'raidProgressKills', 'mythicScore', 'attendanceScore', 'singleTargetDps', 'vaultScore', 'crestSort', 'preparednessScore']);
+    const numericKeys = new Set(['equippedItemLevel', 'raidProgressKills', 'mythicScore', 'attendanceScore', 'singleTargetDps', 'crestSort', 'preparednessScore']);
 
     visibleRows.sort((rowA, rowB) => {
       if (sortKey === 'mplusMetric') {
         const metricKey = getMplusDatasetKey();
         const valueA = Number(rowA.dataset[metricKey] ?? -1);
         const valueB = Number(rowB.dataset[metricKey] ?? -1);
+        const order = valueA - valueB;
+        return sortDirection === 'asc' ? order : order * -1;
+      }
+
+      if (sortKey === 'vaultMetric') {
+        const dataKey = getVaultDatasetKey();
+        const valueA = Number(rowA.dataset[dataKey] ?? -1);
+        const valueB = Number(rowB.dataset[dataKey] ?? -1);
         const order = valueA - valueB;
         return sortDirection === 'asc' ? order : order * -1;
       }
@@ -758,6 +809,12 @@ const mplusWinnerData = {
 
   mplusWinnerSelect?.addEventListener('change', () => {
     setMplusMetric(mplusWinnerSelect.value);
+  });
+
+  vaultMetricSelect?.addEventListener('change', () => {
+    vaultMetric = vaultMetricSelect.value === 'current' ? 'current' : 'last';
+    currentPage = 1;
+    applyFiltersAndSort();
   });
 
   sortButtons.forEach((button) => {

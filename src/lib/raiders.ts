@@ -153,6 +153,47 @@ function getUsWeeklyResetTimestamp(): number {
   return Math.floor(resetUtc.getTime() / 1000);
 }
 
+// Great Vault score formula (mirrors raiders.astro greatVaultScoreForRaider).
+const VAULT_SLOT_POSITION_WEIGHTS = [1, 1.35, 1.8] as const;
+
+function vaultRaidDifficultyWeight(itemLevel: number | null): number {
+  if (itemLevel === null) return 0;
+  if (itemLevel >= 272) return 1.45;
+  if (itemLevel >= 266) return 1.25;
+  if (itemLevel >= 259) return 1.0;
+  if (itemLevel >= 252) return 0.75;
+  return 0.6;
+}
+
+function vaultDungeonDifficultyWeight(itemLevel: number | null): number {
+  if (itemLevel === null) return 0;
+  if (itemLevel >= 272) return 1.45;
+  if (itemLevel >= 269) return 1.3;
+  if (itemLevel >= 266) return 1.15;
+  if (itemLevel >= 263) return 1.0;
+  if (itemLevel >= 259) return 0.85;
+  return 0.7;
+}
+
+function computeGreatVaultScore(
+  raidSlots: Array<number | null>,
+  dungeonSlots: Array<number | null>,
+  worldWeeklyObjectives: number,
+): number {
+  const worldSlotsFilled = [2, 4, 8].filter((required) => worldWeeklyObjectives >= required).length;
+  let points = 0;
+  let maxPoints = 0;
+  for (let i = 0; i < 3; i += 1) {
+    const slotWeight = VAULT_SLOT_POSITION_WEIGHTS[i];
+    points += vaultRaidDifficultyWeight(raidSlots[i] ?? null) * slotWeight;
+    points += vaultDungeonDifficultyWeight(dungeonSlots[i] ?? null) * slotWeight;
+    if (worldSlotsFilled > i) points += 0.35 * slotWeight;
+    maxPoints += (1.45 + 1.45 + 0.35) * slotWeight;
+  }
+  const pct = maxPoints > 0 ? Math.max(0, Math.min(1, points / maxPoints)) : 0;
+  return Math.round(pct * 100);
+}
+
 // Look up Great Vault ilvl for a keystone level at the given sorted-desc slot index.
 function computeVaultIlvl(sortedLevels: number[], slotIndex: 0 | 3 | 7): number | null {
   const level = sortedLevels[slotIndex];
@@ -605,6 +646,7 @@ export interface RaiderRecord {
   attendanceScorePercent: number | null;
   attendanceScoredRaids: number;
   attendanceBenchBonusPoints: number;
+  prevVaultScore: number | null;
 }
 
 export interface RaidersCacheStatus {
@@ -987,6 +1029,7 @@ async function enrichRaider(row: RaiderSourceRow, now: number, raidProgressTarge
     attendanceScorePercent: null,
     attendanceScoredRaids: 0,
     attendanceBenchBonusPoints: 0,
+    prevVaultScore: null,
   };
 
   const accessToken = await getBlizzardAppAccessToken();
@@ -1207,6 +1250,7 @@ async function listCachedRaiders(db: D1Database): Promise<RaiderRecord[]> {
     attendanceScorePercent: null,
     attendanceScoredRaids: 0,
     attendanceBenchBonusPoints: 0,
+    prevVaultScore: null,
   }));
 }
 
@@ -2129,6 +2173,7 @@ export async function getRaiderByCharId(charId: number, dbInput?: D1Database): P
     attendanceScorePercent: null,
     attendanceScoredRaids: 0,
     attendanceBenchBonusPoints: 0,
+    prevVaultScore: null,
   };
 }
 
@@ -2330,6 +2375,43 @@ export async function getProgressionHistory(charId: number, dbInput?: D1Database
   }));
 }
 
+async function getPrevWeekVaultScoreMap(db: D1Database, charIds: number[]): Promise<Map<number, number>> {
+  if (charIds.length === 0) return new Map();
+  const prevWeekStart = getUsWeeklyResetTimestamp() - WEEK_SECONDS;
+  const placeholders = charIds.map(() => '?').join(', ');
+  const result = await db
+    .prepare(
+      `SELECT blizzard_char_id,
+              raid_slot_1_ilvl, raid_slot_2_ilvl, raid_slot_3_ilvl,
+              dungeon_slot_1_ilvl, dungeon_slot_2_ilvl, dungeon_slot_3_ilvl,
+              world_weekly_objectives
+       FROM raider_vault_history
+       WHERE blizzard_char_id IN (${placeholders})
+         AND week_start_ts = ?`
+    )
+    .bind(...charIds, prevWeekStart)
+    .all<{
+      blizzard_char_id: number;
+      raid_slot_1_ilvl: number | null;
+      raid_slot_2_ilvl: number | null;
+      raid_slot_3_ilvl: number | null;
+      dungeon_slot_1_ilvl: number | null;
+      dungeon_slot_2_ilvl: number | null;
+      dungeon_slot_3_ilvl: number | null;
+      world_weekly_objectives: number | null;
+    }>();
+  const scoreMap = new Map<number, number>();
+  for (const row of result.results ?? []) {
+    const score = computeGreatVaultScore(
+      [row.raid_slot_1_ilvl, row.raid_slot_2_ilvl, row.raid_slot_3_ilvl],
+      [row.dungeon_slot_1_ilvl, row.dungeon_slot_2_ilvl, row.dungeon_slot_3_ilvl],
+      Math.max(0, row.world_weekly_objectives ?? 0),
+    );
+    scoreMap.set(row.blizzard_char_id, score);
+  }
+  return scoreMap;
+}
+
 export async function loadRaidersViewData(dbInput?: D1Database): Promise<RaidersViewData> {
   const db = getDatabase(dbInput);
   let errorMessage = '';
@@ -2392,6 +2474,21 @@ export async function loadRaidersViewData(dbInput?: D1Database): Promise<Raiders
   } catch (error) {
     if (!errorMessage) {
       errorMessage = error instanceof Error ? error.message : 'Unable to load attendance data.';
+    }
+  }
+
+  try {
+    const prevVaultMap = await getPrevWeekVaultScoreMap(
+      db,
+      raiders.map((raider) => raider.blizzardCharId),
+    );
+    raiders = raiders.map((raider) => ({
+      ...raider,
+      prevVaultScore: prevVaultMap.get(raider.blizzardCharId) ?? null,
+    }));
+  } catch (error) {
+    if (!errorMessage) {
+      errorMessage = error instanceof Error ? error.message : 'Unable to load previous week vault scores.';
     }
   }
 
