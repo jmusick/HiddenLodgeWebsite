@@ -31,3 +31,6 @@ pnpm-debug.log*
 
 # VS Code workspace settings
 .vscode/
+
+# local agent/assistant settings
+.claude/

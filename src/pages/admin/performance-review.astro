@@ -22,10 +22,18 @@ const lastSyncedLabel = review.lastSyncedAt
 const syncCoveragePercent =
   review.totalBossFights > 0 ? (review.syncedBossFights / review.totalBossFights) * 100 : 0;
 const WEEKDAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+const statusParam = new URL(Astro.request.url).searchParams.get('status');
 ---
 
 <AdminLayout title="Performance Review | Admin | The Hidden Lodge">
   <div class="performance-review-page">
+    {statusParam === 'sync-ok' && (
+      <div class="flash flash-ok" role="status">Attendance sync batch triggered. Rankings will update as reports are processed.</div>
+    )}
+    {statusParam === 'sync-error' && (
+      <div class="flash flash-error" role="alert">Attendance sync failed. Check server logs.</div>
+    )}
+
     <div class="page-header">
       <div>
         <h1>Performance Review</h1>
@@ -37,6 +45,9 @@ const WEEKDAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
           Officer-facing review tools for raid performance signals. The first metric tracks excessive deaths from Thursday and Friday primary main raids by weighting early deaths in each logged boss pull.
         </p>
       </div>
+      <form method="POST" action="/api/admin/attendance/refresh" class="sync-form">
+        <button type="submit" class="sync-btn">Sync Attendance</button>
+      </form>
     </div>
 
     <section class="overview-grid" aria-label="Performance review summary">
@@ -595,6 +606,42 @@ const WEEKDAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
   .empty-state {
     margin: 0;
     color: var(--muted);
+  }
+
+  .sync-form {
+    flex-shrink: 0;
+    align-self: flex-start;
+  }
+
+  .sync-btn {
+    border: 1px solid rgba(214, 176, 106, 0.55);
+    border-radius: 0.45rem;
+    background: rgba(214, 176, 106, 0.12);
+    color: #f3e2be;
+    padding: 0.45rem 0.8rem;
+    font-size: 0.9rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: border-color 160ms ease, background 160ms ease;
+    white-space: nowrap;
+  }
+
+  .sync-btn:hover,
+  .sync-btn:focus-visible {
+    border-color: rgba(214, 176, 106, 0.8);
+    background: rgba(214, 176, 106, 0.2);
+  }
+
+  .flash-ok {
+    background: rgba(48, 186, 123, 0.1);
+    border-color: rgba(48, 186, 123, 0.35);
+    color: #7cf6bc;
+  }
+
+  .flash-error {
+    background: rgba(196, 30, 58, 0.1);
+    border-color: rgba(196, 30, 58, 0.35);
+    color: #f87171;
   }
 
   @media (max-width: 720px) {
