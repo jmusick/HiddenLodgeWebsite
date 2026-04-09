@@ -22,6 +22,7 @@ const lastSyncedLabel = review.lastSyncedAt
 const syncCoveragePercent =
   review.totalBossFights > 0 ? (review.syncedBossFights / review.totalBossFights) * 100 : 0;
 const WEEKDAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+const guildRankingsUrl = 'https://www.warcraftlogs.com/guild/rankings/781707/latest?difficulty=4&playerdisplay=median&recent=true';
 const statusParam = new URL(Astro.request.url).searchParams.get('status');
 ---
 
@@ -45,9 +46,14 @@ const statusParam = new URL(Astro.request.url).searchParams.get('status');
           Officer-facing review tools for raid performance signals. The first metric tracks excessive deaths from Thursday and Friday primary main raids by weighting early deaths in each logged boss pull.
         </p>
       </div>
-      <form method="POST" action="/api/admin/attendance/refresh" class="sync-form">
-        <button type="submit" class="sync-btn">Sync Attendance</button>
-      </form>
+      <div class="header-actions">
+        <a href={guildRankingsUrl} target="_blank" rel="noopener noreferrer" class="rankings-cta">
+          View WCL Guild Rankings
+        </a>
+        <form method="POST" action="/api/admin/attendance/refresh" class="sync-form">
+          <button type="submit" class="sync-btn">Sync Attendance</button>
+        </form>
+      </div>
     </div>
 
     <section class="overview-grid" aria-label="Performance review summary">
@@ -400,6 +406,40 @@ const statusParam = new URL(Astro.request.url).searchParams.get('status');
     letter-spacing: 0.03em;
   }
 
+  .header-actions {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    flex-shrink: 0;
+  }
+
+  .rankings-cta {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.4rem;
+    border: 1px solid rgba(244, 194, 92, 0.7);
+    border-radius: 0.55rem;
+    background: linear-gradient(180deg, rgba(244, 194, 92, 0.24), rgba(214, 176, 106, 0.2));
+    color: #ffe7b1;
+    padding: 0.5rem 0.95rem;
+    font-size: 0.9rem;
+    font-weight: 700;
+    letter-spacing: 0.01em;
+    text-decoration: none;
+    white-space: nowrap;
+    box-shadow: 0 10px 20px rgba(0, 0, 0, 0.2);
+    transition: transform 160ms ease, border-color 160ms ease, background 160ms ease;
+  }
+
+  .rankings-cta:hover,
+  .rankings-cta:focus-visible {
+    transform: translateY(-1px);
+    border-color: rgba(255, 213, 125, 0.95);
+    background: linear-gradient(180deg, rgba(255, 213, 125, 0.28), rgba(224, 186, 112, 0.25));
+    text-decoration: none;
+  }
+
   .overview-grid {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr));
@@ -645,6 +685,17 @@ const statusParam = new URL(Astro.request.url).searchParams.get('status');
   }
 
   @media (max-width: 720px) {
+    .page-header {
+      flex-direction: column;
+      align-items: stretch;
+    }
+
+    .header-actions {
+      width: 100%;
+      justify-content: flex-start;
+      flex-wrap: wrap;
+    }
+
     .admin-section {
       padding: 1rem;
     }
