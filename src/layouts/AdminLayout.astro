@@ -16,6 +16,7 @@ const adminModules = [
 	{ href: '/admin/raid-signups', label: 'Raid Signups', icon: 'lucide:calendar-plus' },
 	{ href: '/admin/applications', label: 'Applications', icon: 'lucide:clipboard-list' },
 	{ href: '/admin/feedback', label: 'Feedback', icon: 'lucide:message-square-warning' },
+	{ href: '/admin/performance-review', label: 'Performance Review', icon: 'lucide:chart-no-axes-column-increasing' },
 	{ href: '/admin/raiding', label: 'Raiding Content', icon: 'lucide:swords' },
 	{ href: '/admin/links', label: 'Links', icon: 'lucide:link' },
 	{ href: '/admin/settings', label: 'Settings', icon: 'lucide:settings' },
@@ -31,7 +32,7 @@ const currentAdminModule =
 			<div class="admin-header-inner">
 				<div class="admin-title-group">
 					<Icon name="lucide:shield" class="admin-icon" aria-hidden="true" />
-					<span class="admin-title">Guild Administration</span>
+					<span class="admin-title">Admin</span>
 				</div>
 				<nav class="admin-subnav" aria-label="Admin modules">
 					<ul>
@@ -97,7 +98,7 @@ const currentAdminModule =
 		align-items: center;
 		gap: 1.5rem;
 		padding: 0.75rem 1rem;
-		flex-wrap: wrap;
+		flex-wrap: nowrap;
 	}
 
 	.admin-title-group {
@@ -118,6 +119,11 @@ const currentAdminModule =
 		height: 1.1rem;
 	}
 
+	.admin-subnav {
+		min-width: 0;
+		flex: 1;
+	}
+
 	.admin-subnav ul {
 		display: flex;
 		align-items: center;
@@ -125,6 +131,7 @@ const currentAdminModule =
 		list-style: none;
 		padding: 0;
 		margin: 0;
+		flex-wrap: nowrap;
 	}
 
 	.admin-subnav-menu {

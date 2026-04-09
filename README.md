@@ -41,6 +41,7 @@ The site combines public guild information, Blizzard-authenticated member profil
 - Raid Signups module for schedule creation and signup management
 - Links Management for useful links curation
 - Settings module with raid-progress configuration and cache health
+- Performance Review module for officer-facing raid performance metrics, starting with excessive-death rankings derived from cached Warcraft Logs pulls
 - Export module for addon-friendly JSON generation
 - Interactive sim tools for droptimizer and single-target analysis
 - **Raiding Content editor** for managing the schedule, raid expectations, required addons, and open recruitment needs displayed on the public Raiding page
@@ -100,6 +101,7 @@ http://localhost:4321
 | `/admin/raid-signups` | Yes + Admin | Manage primary schedules and ad-hoc raids |
 | `/admin/roster-teams` | Yes + Admin | Multi-team raid roster builder and analysis |
 | `/admin/mains` | Yes + Admin | Member overview, main/alt visibility, and nickname management |
+| `/admin/performance-review` | Yes + Admin | Officer review tables for excessive deaths and future performance metrics |
 | `/admin/settings` | Yes + Admin | Raid-progress target settings and cache health controls |
 | `/admin/cache` | Yes + Admin | Backward-compatible redirect to `/admin/settings` |
 | `/admin/links` | Yes + Admin | Public links category/link management |

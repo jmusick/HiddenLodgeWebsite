@@ -1,0 +1,609 @@
+---
+export const prerender = false;
+
+import AdminLayout from '../../layouts/AdminLayout.astro';
+import { Icon } from 'astro-icon/components';
+import { getExcessiveDeathReviewSummary } from '../../lib/performance-review';
+import { classColor } from '../../lib/wow';
+
+if (!Astro.locals.isAdmin) {
+  return Astro.redirect('/');
+}
+
+const review = await getExcessiveDeathReviewSummary();
+const startLabel = new Date(review.startUtc * 1000).toLocaleDateString(undefined, {
+  year: 'numeric',
+  month: 'short',
+  day: 'numeric',
+});
+const lastSyncedLabel = review.lastSyncedAt
+  ? new Date(review.lastSyncedAt * 1000).toLocaleString()
+  : 'Not synced yet';
+const syncCoveragePercent =
+  review.totalBossFights > 0 ? (review.syncedBossFights / review.totalBossFights) * 100 : 0;
+const WEEKDAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+---
+
+<AdminLayout title="Performance Review | Admin | The Hidden Lodge">
+  <div class="performance-review-page">
+    <div class="page-header">
+      <div>
+        <h1>Performance Review</h1>
+        <div class="scope-badges" aria-label="Current review scope">
+          <span class="scope-badge">Scope: Main Raids (Thu/Fri)</span>
+          <span class="scope-badge">Season: Midnight S1</span>
+        </div>
+        <p class="page-desc">
+          Officer-facing review tools for raid performance signals. The first metric tracks excessive deaths from Thursday and Friday primary main raids by weighting early deaths in each logged boss pull.
+        </p>
+      </div>
+    </div>
+
+    <section class="overview-grid" aria-label="Performance review summary">
+      <article class="overview-card">
+        <span class="overview-label">Tracked Window</span>
+        <strong>{startLabel} to today</strong>
+        <p>Uses cached Warcraft Logs attendance reports from primary Thursday/Friday main raids in the attendance scoring window.</p>
+      </article>
+      <article class="overview-card">
+        <span class="overview-label">Death Sync Coverage</span>
+        <strong>{review.syncedBossFights.toLocaleString()} / {review.totalBossFights.toLocaleString()} pulls</strong>
+        <p>{review.totalReports.toLocaleString()} reports found, {review.syncedReports.toLocaleString()} synced. Coverage {syncCoveragePercent.toFixed(1)}%.</p>
+      </article>
+      <article class="overview-card">
+        <span class="overview-label">Qualified Raiders</span>
+        <strong>{review.qualifiedPlayers.toLocaleString()}</strong>
+        <p>Minimum sample: {review.minimumPulls} boss pulls. Average weighted score: {review.averageWeightedScore !== null ? review.averageWeightedScore.toFixed(2) : '—'}.</p>
+      </article>
+      <article class="overview-card">
+        <span class="overview-label">Last Death Sync</span>
+        <strong>{lastSyncedLabel}</strong>
+        <p>If this lags behind attendance refreshes, the death review backfill is still catching up.</p>
+      </article>
+    </section>
+
+    {review.syncedReports < review.totalReports && (
+      <div class="flash flash-warn" role="status">
+        Death metrics are still backfilling. Rankings below use only reports whose death events have been synced.
+      </div>
+    )}
+
+    <section class="admin-section">
+      <div class="section-heading-row">
+        <div>
+          <h2><Icon name="lucide:file-search" aria-hidden="true" />Included Logs</h2>
+          <p class="section-copy">
+            These are the primary Thu/Fri logs currently in scope for this report. Only rows marked Synced are included in excessive-death calculations.
+          </p>
+        </div>
+      </div>
+
+      {review.includedLogs.length === 0 ? (
+        <p class="empty-state">No in-scope logs found yet for the current review window.</p>
+      ) : (
+        <div class="table-wrap">
+          <table class="review-table sortable-table">
+            <thead>
+              <tr>
+                <th><button type="button" class="sort-btn" data-col-index="0" data-sort-type="number">Occurrence</button></th>
+                <th><button type="button" class="sort-btn" data-col-index="1" data-sort-type="text">Schedule</button></th>
+                <th><button type="button" class="sort-btn" data-col-index="2" data-sort-type="text">WCL Report</button></th>
+                <th><button type="button" class="sort-btn" data-col-index="3" data-sort-type="number">Boss Pulls</button></th>
+                <th><button type="button" class="sort-btn" data-col-index="4" data-sort-type="number">Kills</button></th>
+                <th><button type="button" class="sort-btn" data-col-index="5" data-sort-type="number">Wipe Pulls</button></th>
+                <th><button type="button" class="sort-btn" data-col-index="6" data-sort-type="number">Mapped Chars</button></th>
+                <th><button type="button" class="sort-btn" data-col-index="7" data-sort-type="number">Merged</button></th>
+                <th><button type="button" class="sort-btn" data-col-index="8" data-sort-type="number">Death Sync</button></th>
+              </tr>
+            </thead>
+            <tbody>
+              {review.includedLogs.map((log) => (
+                <tr>
+                  <td data-sort-value={String(log.occurrenceStartUtc)}>{new Date(log.occurrenceStartUtc * 1000).toLocaleString()}</td>
+                  <td data-sort-value={`${log.scheduleName.toLowerCase()}-${log.weekdayUtc ?? -1}`}>
+                    {log.scheduleName}
+                    {log.weekdayUtc !== null && (
+                      <small class="cell-subtext">{WEEKDAY_LABELS[log.weekdayUtc] ?? `Day ${log.weekdayUtc}`}</small>
+                    )}
+                  </td>
+                  <td data-sort-value={(log.reportCode ?? '').toLowerCase()}>
+                    {log.reportUrl ? (
+                      <a href={log.reportUrl} target="_blank" rel="noopener noreferrer" class="report-link">{log.reportCode}</a>
+                    ) : (
+                      <span class="cell-subtext">No report code</span>
+                    )}
+                  </td>
+                  <td data-sort-value={String(log.totalBossFights)}>{log.totalBossFights.toLocaleString()}</td>
+                  <td data-sort-value={String(log.totalBossKills)}>{log.totalBossKills.toLocaleString()}</td>
+                  <td data-sort-value={String(log.totalWipePulls)}>{log.totalWipePulls.toLocaleString()}</td>
+                  <td data-sort-value={String(log.mappedCharacters)}>{log.mappedCharacters.toLocaleString()}</td>
+                  <td data-sort-value={String(log.mergedOccurrences)}>{log.mergedOccurrences.toLocaleString()}</td>
+                  <td data-sort-value={String(log.deathStatsSyncedAt ?? 0)}>
+                    <span class:list={['sync-pill', log.isIncludedInCalculations ? 'sync-pill-ok' : 'sync-pill-pending']}>
+                      {log.isIncludedInCalculations ? 'Synced' : 'Pending'}
+                    </span>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </section>
+
+    <section class="admin-section formula-card">
+      <div class="section-heading-row">
+        <div>
+          <h2><Icon name="lucide:skull" aria-hidden="true" />Excessive Deaths</h2>
+          <p class="section-copy">
+            This is the web version of the old script, but with a corrected denominator: score is weighted by actual boss pulls attended, not only pulls where someone died.
+          </p>
+        </div>
+      </div>
+      <div class="formula-grid">
+        <div>
+          <span class="formula-label">Weighted score</span>
+          <p><strong>(4 × first deaths + 3 × second + 2 × third + 1 × fourth) / pulls attended</strong></p>
+        </div>
+        <div>
+          <span class="formula-label">Death rate</span>
+          <p><strong>counted deaths / pulls attended</strong></p>
+        </div>
+        <div>
+          <span class="formula-label">Filter</span>
+          <p><strong>{review.minimumPulls}+</strong> pulls required before a raider counts toward the average.</p>
+        </div>
+        <div>
+          <span class="formula-label">Death cap rule</span>
+          <p><strong>Only the first 4 deaths per pull are counted.</strong> Deaths after the fourth in the same pull are ignored.</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="admin-section">
+      <div class="section-heading-row">
+        <div>
+          <h2>Flagged Above Average</h2>
+          <p class="section-copy">
+            Raiders more than 25% above the current qualified-group average weighted score.
+          </p>
+        </div>
+      </div>
+
+      {review.flagged.length === 0 ? (
+        <p class="empty-state">No raiders are currently 25% above the qualified-group average.</p>
+      ) : (
+        <div class="table-wrap">
+          <table class="review-table sortable-table">
+            <thead>
+              <tr>
+                <th><button type="button" class="sort-btn" data-col-index="0" data-sort-type="text">Raider</button></th>
+                <th><button type="button" class="sort-btn" data-col-index="1" data-sort-type="number">Pulls</button></th>
+                <th><button type="button" class="sort-btn" data-col-index="2" data-sort-type="number">Deaths (capped)</button></th>
+                <th><button type="button" class="sort-btn" data-col-index="3" data-sort-type="number">1st</button></th>
+                <th><button type="button" class="sort-btn" data-col-index="4" data-sort-type="number">2nd</button></th>
+                <th><button type="button" class="sort-btn" data-col-index="5" data-sort-type="number">3rd</button></th>
+                <th><button type="button" class="sort-btn" data-col-index="6" data-sort-type="number">4th</button></th>
+                <th><button type="button" class="sort-btn" data-col-index="7" data-sort-type="number">Score</button></th>
+                <th><button type="button" class="sort-btn" data-col-index="8" data-sort-type="number">Above Avg</button></th>
+              </tr>
+            </thead>
+            <tbody>
+              {review.flagged.map((row) => (
+                <tr>
+                  <td data-sort-value={`${row.name.toLowerCase()} ${row.realm.toLowerCase()}`}>
+                    <div class="raider-cell">
+                      <strong style={`color: ${classColor(row.className)}`}>{row.name}</strong>
+                      <span>{row.realm}</span>
+                    </div>
+                  </td>
+                  <td data-sort-value={String(row.fightsPresent)}>{row.fightsPresent.toLocaleString()}</td>
+                  <td data-sort-value={String(row.totalDeaths)}>{row.totalDeaths.toLocaleString()}</td>
+                  <td data-sort-value={String(row.firstDeathCount)}>{row.firstDeathCount.toLocaleString()}</td>
+                  <td data-sort-value={String(row.secondDeathCount)}>{row.secondDeathCount.toLocaleString()}</td>
+                  <td data-sort-value={String(row.thirdDeathCount)}>{row.thirdDeathCount.toLocaleString()}</td>
+                  <td data-sort-value={String(row.fourthDeathCount)}>{row.fourthDeathCount.toLocaleString()}</td>
+                  <td data-sort-value={row.weightedScore.toFixed(4)}>{row.weightedScore.toFixed(2)}</td>
+                  <td data-sort-value={row.percentAboveAverage !== null ? row.percentAboveAverage.toFixed(4) : '-999999'}>{row.percentAboveAverage !== null ? `${row.percentAboveAverage.toFixed(1)}%` : '—'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </section>
+
+    <section class="admin-section">
+      <div class="section-heading-row">
+        <div>
+          <h2>All Raider Rankings</h2>
+          <p class="section-copy">
+            Sorted by weighted excessive-death score, then first-death count. Includes any mapped character surfaced by synced WCL main-raid reports.
+          </p>
+        </div>
+      </div>
+
+      {review.rankings.length === 0 ? (
+        <p class="empty-state">No synced death-review data yet. Run the attendance refresh cron or wait for the next scheduled refresh.</p>
+      ) : (
+        <div class="table-wrap">
+          <table class="review-table review-table-full sortable-table">
+            <thead>
+              <tr>
+                <th><button type="button" class="sort-btn" data-col-index="0" data-sort-type="text">Raider</button></th>
+                <th><button type="button" class="sort-btn" data-col-index="1" data-sort-type="number">Reports</button></th>
+                <th><button type="button" class="sort-btn" data-col-index="2" data-sort-type="number">Pulls</button></th>
+                <th><button type="button" class="sort-btn" data-col-index="3" data-sort-type="number">Deaths (capped)</button></th>
+                <th><button type="button" class="sort-btn" data-col-index="4" data-sort-type="number">Death Rate</button></th>
+                <th><button type="button" class="sort-btn" data-col-index="5" data-sort-type="number">1st</button></th>
+                <th><button type="button" class="sort-btn" data-col-index="6" data-sort-type="number">2nd</button></th>
+                <th><button type="button" class="sort-btn" data-col-index="7" data-sort-type="number">3rd</button></th>
+                <th><button type="button" class="sort-btn" data-col-index="8" data-sort-type="number">4th</button></th>
+                <th><button type="button" class="sort-btn" data-col-index="9" data-sort-type="number">Weighted Score</button></th>
+              </tr>
+            </thead>
+            <tbody>
+              {review.rankings.map((row) => (
+                <tr class:list={{ flagged: row.isSignificantlyAboveAverage }}>
+                  <td data-sort-value={`${row.name.toLowerCase()} ${row.realm.toLowerCase()}`}>
+                    <div class="raider-cell">
+                      <strong style={`color: ${classColor(row.className)}`}>{row.name}</strong>
+                      <span>{row.realm}</span>
+                    </div>
+                  </td>
+                  <td data-sort-value={String(row.reportCount)}>{row.reportCount.toLocaleString()}</td>
+                  <td data-sort-value={String(row.fightsPresent)}>{row.fightsPresent.toLocaleString()}</td>
+                  <td data-sort-value={String(row.totalDeaths)}>{row.totalDeaths.toLocaleString()}</td>
+                  <td data-sort-value={row.totalDeathRate.toFixed(6)}>{(row.totalDeathRate * 100).toFixed(1)}%</td>
+                  <td data-sort-value={String(row.firstDeathCount)}>{row.firstDeathCount.toLocaleString()}</td>
+                  <td data-sort-value={String(row.secondDeathCount)}>{row.secondDeathCount.toLocaleString()}</td>
+                  <td data-sort-value={String(row.thirdDeathCount)}>{row.thirdDeathCount.toLocaleString()}</td>
+                  <td data-sort-value={String(row.fourthDeathCount)}>{row.fourthDeathCount.toLocaleString()}</td>
+                  <td data-sort-value={row.weightedScore.toFixed(6)}>
+                    <span class="score-cell">{row.weightedScore.toFixed(2)}</span>
+                    {row.percentAboveAverage !== null && row.percentAboveAverage > 0 && (
+                      <small>{row.percentAboveAverage.toFixed(1)}% above avg</small>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </section>
+  </div>
+</AdminLayout>
+
+<script>
+  // @ts-nocheck
+  (() => {
+    const sortableTables = document.querySelectorAll('.sortable-table');
+
+    /**
+     * @param {Element | null} cell
+     * @param {'number' | 'text'} sortType
+     */
+    const readCellSortValue = (cell, sortType) => {
+      const raw = (cell?.getAttribute('data-sort-value') ?? cell?.textContent ?? '').trim();
+      if (sortType === 'number') {
+        const parsed = Number.parseFloat(raw);
+        return Number.isFinite(parsed) ? parsed : Number.NEGATIVE_INFINITY;
+      }
+      return raw.toLowerCase();
+    };
+
+    for (const table of sortableTables) {
+      const tbody = table.querySelector('tbody');
+      const buttons = table.querySelectorAll('thead .sort-btn');
+      if (!tbody || buttons.length === 0) continue;
+
+      for (const button of buttons) {
+        button.addEventListener('click', () => {
+          const colIndex = Number.parseInt(button.getAttribute('data-col-index') ?? '-1', 10);
+          if (!Number.isInteger(colIndex) || colIndex < 0) return;
+
+          /** @type {'number' | 'text'} */
+          const sortType = (button.getAttribute('data-sort-type') ?? 'text').toLowerCase() === 'number'
+            ? 'number'
+            : 'text';
+          const currentDir = button.getAttribute('data-sort-dir') === 'asc' ? 'asc' : 'desc';
+          const nextDir = currentDir === 'asc' ? 'desc' : 'asc';
+
+          for (const other of buttons) {
+            other.removeAttribute('data-sort-dir');
+          }
+          button.setAttribute('data-sort-dir', nextDir);
+
+          const rows = Array.from(tbody.querySelectorAll('tr'));
+          rows.sort((leftRow, rightRow) => {
+            const leftCell = leftRow.children.item(colIndex);
+            const rightCell = rightRow.children.item(colIndex);
+            const leftValue = readCellSortValue(leftCell, sortType);
+            const rightValue = readCellSortValue(rightCell, sortType);
+
+            let result = 0;
+            if (sortType === 'number') {
+              result = leftValue - rightValue;
+            } else {
+              result = String(leftValue).localeCompare(String(rightValue));
+            }
+
+            if (result === 0) {
+              const leftFallback = (leftRow.children.item(0)?.getAttribute('data-sort-value') ?? '').toLowerCase();
+              const rightFallback = (rightRow.children.item(0)?.getAttribute('data-sort-value') ?? '').toLowerCase();
+              result = leftFallback.localeCompare(rightFallback);
+            }
+
+            return nextDir === 'asc' ? result : -result;
+          });
+
+          for (const row of rows) {
+            tbody.appendChild(row);
+          }
+        });
+      }
+    }
+  })();
+</script>
+
+<style>
+  .performance-review-page {
+    display: flex;
+    flex-direction: column;
+    gap: 1.5rem;
+  }
+
+  .page-header {
+    display: flex;
+    justify-content: space-between;
+    gap: 1rem;
+    align-items: flex-start;
+  }
+
+  .page-desc {
+    max-width: 60rem;
+    color: var(--muted);
+    line-height: 1.6;
+    margin: 0.45rem 0 0;
+  }
+
+  .scope-badges {
+    display: flex;
+    align-items: center;
+    gap: 0.45rem;
+    flex-wrap: wrap;
+    margin-top: 0.45rem;
+  }
+
+  .scope-badge {
+    display: inline-flex;
+    align-items: center;
+    padding: 0.23rem 0.52rem;
+    border-radius: 999px;
+    border: 1px solid rgba(214, 176, 106, 0.4);
+    background: rgba(214, 176, 106, 0.12);
+    color: var(--gold-bright);
+    font-size: 0.76rem;
+    font-weight: 700;
+    letter-spacing: 0.03em;
+  }
+
+  .overview-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr));
+    gap: 1rem;
+  }
+
+  .overview-card,
+  .admin-section {
+    border: 1px solid rgba(214, 176, 106, 0.2);
+    border-radius: 0.9rem;
+    background: linear-gradient(180deg, rgba(19, 28, 40, 0.92), rgba(10, 17, 26, 0.96));
+    box-shadow: 0 18px 40px rgba(0, 0, 0, 0.18);
+  }
+
+  .overview-card {
+    padding: 1rem 1.05rem;
+  }
+
+  .overview-card strong {
+    display: block;
+    color: var(--gold-bright);
+    font-size: 1.05rem;
+    margin: 0.2rem 0 0.35rem;
+  }
+
+  .overview-card p,
+  .section-copy {
+    margin: 0;
+    color: var(--muted);
+    line-height: 1.55;
+  }
+
+  .overview-label,
+  .formula-label {
+    display: inline-block;
+    color: var(--gold);
+    font-size: 0.76rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    font-weight: 700;
+  }
+
+  .flash {
+    padding: 0.8rem 1rem;
+    border-radius: 0.75rem;
+    border: 1px solid transparent;
+  }
+
+  .flash-warn {
+    background: rgba(214, 176, 106, 0.1);
+    border-color: rgba(214, 176, 106, 0.3);
+    color: var(--gold-bright);
+  }
+
+  .admin-section {
+    padding: 1.15rem 1.2rem;
+  }
+
+  .section-heading-row {
+    display: flex;
+    justify-content: space-between;
+    gap: 1rem;
+    align-items: flex-start;
+    margin-bottom: 1rem;
+  }
+
+  .section-heading-row h2 {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin: 0 0 0.35rem;
+  }
+
+  .formula-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr));
+    gap: 0.9rem;
+  }
+
+  .formula-grid p {
+    margin: 0.35rem 0 0;
+    color: var(--text);
+    line-height: 1.55;
+  }
+
+  .table-wrap {
+    overflow-x: auto;
+  }
+
+  .review-table {
+    width: 100%;
+    border-collapse: collapse;
+    min-width: 58rem;
+  }
+
+  .review-table th,
+  .review-table td {
+    padding: 0.78rem 0.72rem;
+    border-top: 1px solid rgba(214, 176, 106, 0.12);
+    text-align: left;
+    vertical-align: top;
+  }
+
+  .review-table thead th {
+    border-top: none;
+    color: var(--gold-bright);
+    font-size: 0.78rem;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+  }
+
+  .sort-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.3rem;
+    border: none;
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    text-transform: inherit;
+    letter-spacing: inherit;
+    cursor: pointer;
+    padding: 0;
+  }
+
+  .sort-btn::after {
+    content: '↕';
+    font-size: 0.72rem;
+    opacity: 0.45;
+  }
+
+  .sort-btn[data-sort-dir='asc']::after {
+    content: '↑';
+    opacity: 0.95;
+  }
+
+  .sort-btn[data-sort-dir='desc']::after {
+    content: '↓';
+    opacity: 0.95;
+  }
+
+  .review-table tbody tr.flagged {
+    background: rgba(196, 30, 58, 0.08);
+  }
+
+  .raider-cell {
+    display: flex;
+    flex-direction: column;
+    gap: 0.12rem;
+  }
+
+  .raider-cell span,
+  .score-cell + small {
+    color: var(--muted);
+    font-size: 0.86rem;
+  }
+
+  .score-cell {
+    display: block;
+    font-weight: 700;
+    color: var(--gold-bright);
+  }
+
+  .report-link {
+    color: var(--gold-bright);
+    font-weight: 700;
+  }
+
+  .report-link:hover,
+  .report-link:focus-visible {
+    text-decoration: underline;
+  }
+
+  .cell-subtext {
+    display: block;
+    color: var(--muted);
+    font-size: 0.8rem;
+    margin-top: 0.15rem;
+  }
+
+  .sync-pill {
+    display: inline-flex;
+    align-items: center;
+    border-radius: 999px;
+    padding: 0.2rem 0.55rem;
+    font-size: 0.76rem;
+    font-weight: 700;
+    letter-spacing: 0.03em;
+    border: 1px solid transparent;
+  }
+
+  .sync-pill-ok {
+    color: #7cf6bc;
+    background: rgba(48, 186, 123, 0.16);
+    border-color: rgba(48, 186, 123, 0.45);
+  }
+
+  .sync-pill-pending {
+    color: var(--gold-bright);
+    background: rgba(214, 176, 106, 0.12);
+    border-color: rgba(214, 176, 106, 0.32);
+  }
+
+  .empty-state {
+    margin: 0;
+    color: var(--muted);
+  }
+
+  @media (max-width: 720px) {
+    .admin-section {
+      padding: 1rem;
+    }
+
+    .review-table {
+      min-width: 48rem;
+    }
+  }
+</style>

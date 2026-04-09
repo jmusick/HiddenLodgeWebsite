@@ -91,6 +91,16 @@ interface AttendanceOccurrence {
   primary_schedule_id: number | null;
   ad_hoc_raid_id: number | null;
   occurrence_start_utc: number;
+  scheduled_duration_minutes: number;
+}
+
+interface AttendanceDeathAggregate {
+  fightsPresent: number;
+  totalDeaths: number;
+  firstDeathCount: number;
+  secondDeathCount: number;
+  thirdDeathCount: number;
+  fourthDeathCount: number;
 }
 
 interface WclAuthConfig {
@@ -226,6 +236,17 @@ function normalizeRealmSlug(realm: string | null | undefined): string {
     .replace(/'/g, '')
     .replace(/\s+/g, '-')
     .replace(/-+/g, '-');
+}
+
+function createAttendanceDeathAggregate(): AttendanceDeathAggregate {
+  return {
+    fightsPresent: 0,
+    totalDeaths: 0,
+    firstDeathCount: 0,
+    secondDeathCount: 0,
+    thirdDeathCount: 0,
+    fourthDeathCount: 0,
+  };
 }
 
 function attendanceOwnerKey(userId: number | null | undefined, blizzardCharId: number): string {
@@ -406,8 +427,10 @@ async function listUnsignedRaidOccurrencesNeedingSync(
            rs.raid_kind,
            rs.primary_schedule_id,
            rs.ad_hoc_raid_id,
-           CASE WHEN rs.raid_kind = 'primary' THEN rs.occurrence_start_utc ELSE ah.starts_at_utc END AS occurrence_start_utc
+             CASE WHEN rs.raid_kind = 'primary' THEN rs.occurrence_start_utc ELSE ah.starts_at_utc END AS occurrence_start_utc,
+             CASE WHEN rs.raid_kind = 'primary' THEN COALESCE(prs.duration_minutes, 180) ELSE COALESCE(ah.duration_minutes, 180) END AS scheduled_duration_minutes
          FROM raid_signups rs
+           LEFT JOIN primary_raid_schedules prs ON prs.id = rs.primary_schedule_id
          LEFT JOIN ad_hoc_raids ah ON ah.id = rs.ad_hoc_raid_id
          WHERE (
            (rs.raid_kind = 'primary' AND rs.occurrence_start_utc IS NOT NULL)
@@ -415,7 +438,7 @@ async function listUnsignedRaidOccurrencesNeedingSync(
            (rs.raid_kind = 'adhoc' AND ah.starts_at_utc IS NOT NULL)
          )
        )
-       SELECT o.raid_ref_key, o.raid_kind, o.primary_schedule_id, o.ad_hoc_raid_id, o.occurrence_start_utc
+         SELECT o.raid_ref_key, o.raid_kind, o.primary_schedule_id, o.ad_hoc_raid_id, o.occurrence_start_utc, o.scheduled_duration_minutes
        FROM occurrences o
        LEFT JOIN raid_attendance_reports ar
          ON ar.raid_ref_key = o.raid_ref_key
@@ -426,6 +449,7 @@ async function listUnsignedRaidOccurrencesNeedingSync(
            ar.id IS NULL
            OR ar.total_boss_wipes IS NULL
            OR ar.total_wipe_pulls IS NULL
+           OR ar.death_stats_synced_at IS NULL
            OR EXISTS (
              SELECT 1
              FROM raid_attendance_participants ap
@@ -447,10 +471,18 @@ async function listUnsignedRaidOccurrencesNeedingSync(
 
 async function listCandidateReportsForOccurrence(
   accessToken: string,
-  occurrenceStartUtc: number
+  occurrenceStartUtc: number,
+  scheduledDurationMinutes: number
 ): Promise<WclReportSummary[]> {
-  const startTimeMs = (occurrenceStartUtc - 6 * 60 * 60) * 1000;
-  const endTimeMs = (occurrenceStartUtc + 6 * 60 * 60) * 1000;
+  const safeDurationMinutes = Number.isFinite(scheduledDurationMinutes) && scheduledDurationMinutes > 0
+    ? scheduledDurationMinutes
+    : 180;
+  const occurrenceEndUtc = occurrenceStartUtc + safeDurationMinutes * 60;
+  const targetEndTimeMs = occurrenceEndUtc * 1000;
+
+  // Raid logs are typically uploaded after the scheduled end, so search around end-time.
+  const startTimeMs = (occurrenceEndUtc - 8 * 60 * 60) * 1000;
+  const endTimeMs = (occurrenceEndUtc + 8 * 60 * 60) * 1000;
 
   const payload = await queryWcl<{
     reportData?: {
@@ -477,7 +509,7 @@ async function listCandidateReportsForOccurrence(
       guildID: WCL_GUILD_ID,
       startTime: startTimeMs,
       endTime: endTimeMs,
-      limit: 20,
+      limit: 30,
     }
   );
 
@@ -495,7 +527,11 @@ async function listCandidateReportsForOccurrence(
       } as WclReportSummary;
     })
     .filter((row): row is WclReportSummary => row !== null)
-    .sort((a, b) => Math.abs(a.startTime - occurrenceStartUtc * 1000) - Math.abs(b.startTime - occurrenceStartUtc * 1000));
+    .sort((a, b) => {
+      const endDelta = Math.abs(a.endTime - targetEndTimeMs) - Math.abs(b.endTime - targetEndTimeMs);
+      if (endDelta !== 0) return endDelta;
+      return Math.abs(a.startTime - occurrenceStartUtc * 1000) - Math.abs(b.startTime - occurrenceStartUtc * 1000);
+    });
 }
 
 async function fetchFightParticipantsByCharId(
@@ -506,8 +542,10 @@ async function fetchFightParticipantsByCharId(
   totalBossKills: number;
   totalBossWipes: number;
   totalWipePulls: number;
+  totalBossFights: number;
   bossesByCharId: Map<number, number>;
   bossKillsByCharId: Map<number, number>;
+  deathStatsByCharId: Map<number, AttendanceDeathAggregate>;
   reportStartUtc: number | null;
   reportEndUtc: number | null;
 }> {
@@ -568,15 +606,19 @@ async function fetchFightParticipantsByCharId(
       totalBossKills: 0,
       totalBossWipes: 0,
       totalWipePulls: 0,
+      totalBossFights: 0,
       bossesByCharId: new Map(),
       bossKillsByCharId: new Map(),
+      deathStatsByCharId: new Map(),
       reportStartUtc: reportStartMs > 0 ? Math.floor(reportStartMs / 1000) : null,
       reportEndUtc: reportEndMs > 0 ? Math.floor(reportEndMs / 1000) : null,
     };
   }
 
-  const actorsById = new Map<number, string>();
+  const actorOwnerKeyById = new Map<number, string>();
+  const actorCharIdById = new Map<number, number>();
   const reportOwnerKeys = new Set<string>();
+  const reportCharIds = new Set<number>();
   for (const actor of report.masterData?.actors ?? []) {
     const actorId = Number(actor.id ?? 0);
     const name = normalizeName(actor.name);
@@ -587,8 +629,10 @@ async function fetchFightParticipantsByCharId(
     if (!charId) continue;
 
     const ownerKey = ownership.ownerKeyByCharId.get(charId) ?? attendanceOwnerKey(null, charId);
-    actorsById.set(actorId, ownerKey);
+    actorOwnerKeyById.set(actorId, ownerKey);
+    actorCharIdById.set(actorId, charId);
     reportOwnerKeys.add(ownerKey);
+    reportCharIds.add(charId);
   }
 
   const fightIds = new Set(fights.map((fight) => Number(fight.id)));
@@ -609,6 +653,7 @@ async function fetchFightParticipantsByCharId(
   const maxFightEnd = fights.reduce((max, fight) => Math.max(max, Number(fight.endTime ?? 0)), 0);
 
   const participantsByFight = new Map<number, Set<string>>();
+  const participantsByFightChar = new Map<number, Set<number>>();
   let nextStart = Number.isFinite(minFightStart) ? minFightStart : 0;
   const absoluteEnd = Math.max(nextStart, maxFightEnd);
 
@@ -650,8 +695,10 @@ async function fetchFightParticipantsByCharId(
       if (!fightIds.has(fightId)) continue;
 
       const sourceActorId = Number(event.sourceID ?? 0);
-      const ownerKey = actorsById.get(sourceActorId);
+      const ownerKey = actorOwnerKeyById.get(sourceActorId);
       if (!ownerKey) continue;
+      const sourceCharId = actorCharIdById.get(sourceActorId);
+      if (!sourceCharId) continue;
 
       let fightSet = participantsByFight.get(fightId);
       if (!fightSet) {
@@ -659,6 +706,83 @@ async function fetchFightParticipantsByCharId(
         participantsByFight.set(fightId, fightSet);
       }
       fightSet.add(ownerKey);
+
+      let fightCharSet = participantsByFightChar.get(fightId);
+      if (!fightCharSet) {
+        fightCharSet = new Set<number>();
+        participantsByFightChar.set(fightId, fightCharSet);
+      }
+      fightCharSet.add(sourceCharId);
+    }
+
+    const nextPage = Number(page?.reportData?.report?.events?.nextPageTimestamp ?? 0);
+    if (!Number.isFinite(nextPage) || nextPage <= 0 || nextPage <= nextStart) {
+      break;
+    }
+    nextStart = nextPage;
+  }
+
+  nextStart = Number.isFinite(minFightStart) ? minFightStart : 0;
+  const deathPositionByFight = new Map<number, number>();
+  const deathStatsByCharIdMutable = new Map<number, AttendanceDeathAggregate>();
+
+  while (nextStart <= absoluteEnd) {
+    const page = await queryWcl<{
+      reportData?: {
+        report?: {
+          events?: {
+            data?: Array<{ targetID?: number; fight?: number }>;
+            nextPageTimestamp?: number | null;
+          };
+        };
+      };
+    }>(
+      accessToken,
+      `
+        query AttendanceDeaths($code: String!, $startTime: Float!, $endTime: Float!) {
+          reportData {
+            report(code: $code) {
+              events(dataType: Deaths, startTime: $startTime, endTime: $endTime) {
+                data
+                nextPageTimestamp
+              }
+            }
+          }
+        }
+      `,
+      {
+        code: reportCode,
+        startTime: nextStart,
+        endTime: absoluteEnd,
+      }
+    );
+
+    const events = page?.reportData?.report?.events?.data ?? [];
+    for (const event of events) {
+      const fightId = Number(event.fight ?? 0);
+      if (!fightIds.has(fightId)) continue;
+
+      const targetActorId = Number(event.targetID ?? 0);
+      const targetCharId = actorCharIdById.get(targetActorId);
+      if (!targetCharId) continue;
+
+      const deathPosition = (deathPositionByFight.get(fightId) ?? 0) + 1;
+      deathPositionByFight.set(fightId, deathPosition);
+
+      // Ignore deaths after the first four in each fight for excessive-death scoring.
+      if (deathPosition > 4) {
+        continue;
+      }
+
+      const aggregate = deathStatsByCharIdMutable.get(targetCharId) ?? createAttendanceDeathAggregate();
+      aggregate.totalDeaths += 1;
+
+      if (deathPosition === 1) aggregate.firstDeathCount += 1;
+      else if (deathPosition === 2) aggregate.secondDeathCount += 1;
+      else if (deathPosition === 3) aggregate.thirdDeathCount += 1;
+      else if (deathPosition === 4) aggregate.fourthDeathCount += 1;
+
+      deathStatsByCharIdMutable.set(targetCharId, aggregate);
     }
 
     const nextPage = Number(page?.reportData?.report?.events?.nextPageTimestamp ?? 0);
@@ -697,6 +821,14 @@ async function fetchFightParticipantsByCharId(
     }
   }
 
+  for (const participants of participantsByFightChar.values()) {
+    for (const blizzardCharId of participants) {
+      const aggregate = deathStatsByCharIdMutable.get(blizzardCharId) ?? createAttendanceDeathAggregate();
+      aggregate.fightsPresent += 1;
+      deathStatsByCharIdMutable.set(blizzardCharId, aggregate);
+    }
+  }
+
   const firstAttemptedEncounterId = attemptedEncounterIds.values().next().value;
   const firstKillEncounterId = killEncounterIds.values().next().value;
 
@@ -711,6 +843,14 @@ async function fetchFightParticipantsByCharId(
       if (typeof firstKillEncounterId === 'number' && firstKillEncounterId > 0 && !killParticipationByOwnerKey.has(ownerKey)) {
         killParticipationByOwnerKey.set(ownerKey, new Set([firstKillEncounterId]));
       }
+    }
+
+    for (const blizzardCharId of reportCharIds) {
+      const aggregate = deathStatsByCharIdMutable.get(blizzardCharId) ?? createAttendanceDeathAggregate();
+      if (aggregate.fightsPresent <= 0) {
+        aggregate.fightsPresent = 1;
+      }
+      deathStatsByCharIdMutable.set(blizzardCharId, aggregate);
     }
   }
 
@@ -730,12 +870,26 @@ async function fetchFightParticipantsByCharId(
     }
   }
 
+  const deathStatsByCharId = new Map<number, AttendanceDeathAggregate>();
+  for (const [blizzardCharId, aggregate] of deathStatsByCharIdMutable.entries()) {
+    deathStatsByCharId.set(blizzardCharId, {
+      fightsPresent: aggregate.fightsPresent,
+      totalDeaths: aggregate.totalDeaths,
+      firstDeathCount: aggregate.firstDeathCount,
+      secondDeathCount: aggregate.secondDeathCount,
+      thirdDeathCount: aggregate.thirdDeathCount,
+      fourthDeathCount: aggregate.fourthDeathCount,
+    });
+  }
+
   return {
     totalBossKills: killEncounterIds.size,
     totalBossWipes: Math.max(0, attemptedEncounterIds.size - killEncounterIds.size),
     totalWipePulls,
+    totalBossFights: fights.length,
     bossesByCharId,
     bossKillsByCharId,
+    deathStatsByCharId,
     reportStartUtc: reportStartMs > 0 ? Math.floor(reportStartMs / 1000) : null,
     reportEndUtc: reportEndMs > 0 ? Math.floor(reportEndMs / 1000) : null,
   };
@@ -751,8 +905,10 @@ async function upsertAttendanceReport(
     totalBossKills: number;
     totalBossWipes: number;
     totalWipePulls: number;
+    totalBossFights: number;
     bossesByCharId: Map<number, number>;
     bossKillsByCharId: Map<number, number>;
+    deathStatsByCharId: Map<number, AttendanceDeathAggregate>;
   }
 ): Promise<void> {
   await db
@@ -769,10 +925,12 @@ async function upsertAttendanceReport(
          total_boss_kills,
          total_boss_wipes,
          total_wipe_pulls,
+         total_boss_fights,
+         death_stats_synced_at,
          synced_at,
          created_at,
          updated_at
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, unixepoch(), unixepoch(), unixepoch())
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, unixepoch(), unixepoch(), unixepoch(), unixepoch())
        ON CONFLICT(raid_ref_key, occurrence_start_utc) DO UPDATE SET
          report_code = excluded.report_code,
          report_start_utc = excluded.report_start_utc,
@@ -780,6 +938,8 @@ async function upsertAttendanceReport(
          total_boss_kills = excluded.total_boss_kills,
          total_boss_wipes = excluded.total_boss_wipes,
          total_wipe_pulls = excluded.total_wipe_pulls,
+         total_boss_fights = excluded.total_boss_fights,
+         death_stats_synced_at = excluded.death_stats_synced_at,
          synced_at = excluded.synced_at,
          updated_at = excluded.updated_at`
     )
@@ -794,7 +954,8 @@ async function upsertAttendanceReport(
       payload.reportEndUtc,
       Math.max(0, payload.totalBossKills),
       Math.max(0, payload.totalBossWipes),
-      Math.max(0, payload.totalWipePulls)
+      Math.max(0, payload.totalWipePulls),
+      Math.max(0, payload.totalBossFights)
     )
     .run();
 
@@ -814,6 +975,11 @@ async function upsertAttendanceReport(
 
   await db
     .prepare('DELETE FROM raid_attendance_participants WHERE report_id = ?')
+    .bind(reportId)
+    .run();
+
+  await db
+    .prepare('DELETE FROM raid_attendance_death_stats WHERE report_id = ?')
     .bind(reportId)
     .run();
 
@@ -840,6 +1006,38 @@ async function upsertAttendanceReport(
   if (inserts.length > 0) {
     await db.batch(inserts);
   }
+
+  const deathInserts = [...payload.deathStatsByCharId.entries()].map(([blizzardCharId, aggregate]) =>
+    db
+      .prepare(
+        `INSERT INTO raid_attendance_death_stats (
+           report_id,
+           blizzard_char_id,
+           fights_present,
+           total_deaths,
+           first_death_count,
+           second_death_count,
+           third_death_count,
+           fourth_death_count,
+           created_at,
+           updated_at
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, unixepoch(), unixepoch())`
+      )
+      .bind(
+        reportId,
+        blizzardCharId,
+        Math.max(0, Math.floor(aggregate.fightsPresent)),
+        Math.max(0, Math.floor(aggregate.totalDeaths)),
+        Math.max(0, Math.floor(aggregate.firstDeathCount)),
+        Math.max(0, Math.floor(aggregate.secondDeathCount)),
+        Math.max(0, Math.floor(aggregate.thirdDeathCount)),
+        Math.max(0, Math.floor(aggregate.fourthDeathCount))
+      )
+  );
+
+  if (deathInserts.length > 0) {
+    await db.batch(deathInserts);
+  }
 }
 
 async function syncAttendanceOccurrence(
@@ -848,7 +1046,11 @@ async function syncAttendanceOccurrence(
   occurrence: AttendanceOccurrence,
   ownership: AttendanceOwnershipData
 ): Promise<void> {
-  const candidates = await listCandidateReportsForOccurrence(accessToken, occurrence.occurrence_start_utc);
+  const candidates = await listCandidateReportsForOccurrence(
+    accessToken,
+    occurrence.occurrence_start_utc,
+    occurrence.scheduled_duration_minutes
+  );
   if (candidates.length === 0) {
     return;
   }
@@ -864,8 +1066,10 @@ async function syncAttendanceOccurrence(
       totalBossKills: details.totalBossKills,
       totalBossWipes: details.totalBossWipes,
       totalWipePulls: details.totalWipePulls,
+      totalBossFights: details.totalBossFights,
       bossesByCharId: details.bossesByCharId,
       bossKillsByCharId: details.bossKillsByCharId,
+      deathStatsByCharId: details.deathStatsByCharId,
     });
     return;
   }
@@ -877,8 +1081,10 @@ async function syncAttendanceOccurrence(
     totalBossKills: 0,
     totalBossWipes: 0,
     totalWipePulls: 0,
+    totalBossFights: 0,
     bossesByCharId: new Map(),
     bossKillsByCharId: new Map(),
+    deathStatsByCharId: new Map(),
   });
 }
 
@@ -920,8 +1126,10 @@ export async function importAttendanceFromReportCode(
     totalBossKills: number;
     totalBossWipes: number;
     totalWipePulls: number;
+    totalBossFights: number;
     bossesByCharId: Map<number, number>;
     bossKillsByCharId: Map<number, number>;
+    deathStatsByCharId: Map<number, AttendanceDeathAggregate>;
     reportStartUtc: number | null;
     reportEndUtc: number | null;
   };
@@ -949,6 +1157,7 @@ export async function importAttendanceFromReportCode(
       primary_schedule_id: occurrence.primaryScheduleId,
       ad_hoc_raid_id: occurrence.adHocRaidId,
       occurrence_start_utc: occurrence.occurrenceStartUtc,
+      scheduled_duration_minutes: 180,
     },
     {
       reportCode: code,
@@ -957,8 +1166,10 @@ export async function importAttendanceFromReportCode(
       totalBossKills: details.totalBossKills,
       totalBossWipes: details.totalBossWipes,
       totalWipePulls: details.totalWipePulls,
+      totalBossFights: details.totalBossFights,
       bossesByCharId: details.bossesByCharId,
       bossKillsByCharId: details.bossKillsByCharId,
+      deathStatsByCharId: details.deathStatsByCharId,
     }
   );
 
