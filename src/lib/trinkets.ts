@@ -4,7 +4,7 @@ import { env } from 'cloudflare:workers';
 const WCL_OAUTH_URL = 'https://www.warcraftlogs.com/oauth/token';
 const WCL_GRAPHQL_URL = 'https://www.warcraftlogs.com/api/v2/client';
 const CACHE_KEY_PREFIX = 'trinket_tier_data_v8';
-const CACHE_SCHEMA_VERSION = 6;
+const CACHE_SCHEMA_VERSION = 7;
 const CACHE_TTL_SECONDS = 6 * 60 * 60;
 const ZONE_CACHE_TTL_SECONDS = 24 * 60 * 60;
 const ZONE_CACHE_KEY = 'trinket_resolved_zone_v1';
@@ -1003,6 +1003,9 @@ async function readCached(
     if (parsed.zoneId <= 0 || parsed.zoneName === 'Unavailable') {
       return null;
     }
+    if (parsed.specs.length === 0) {
+      return null;
+    }
     if (parsed.specs.length > 0 && parsed.specs.every((spec) => spec.parseCount === 0)) {
       return null;
     }
@@ -1019,6 +1022,9 @@ async function readCached(
 
 async function writeCached(db: D1Database, payload: TrinketTierPageData, classFilterKey: string): Promise<void> {
   if (payload.zoneId <= 0 || payload.zoneName === 'Unavailable') {
+    return;
+  }
+  if (payload.specs.length === 0) {
     return;
   }
   if (payload.specs.length > 0 && payload.specs.every((spec) => spec.parseCount === 0)) {
@@ -1101,8 +1107,9 @@ async function loadTrinketTierPageDataInternal(options?: {
     : null;
 
   const normalizedClassFilterRaw = (options?.classNameFilter ?? '').trim();
-  const normalizedClassFilter = normalizedClassFilterRaw ? normalizeClassFilterValue(normalizedClassFilterRaw) : '';
-  const classFilterCacheKey = normalizedClassFilter || 'all';
+  const suppressSpecs = normalizedClassFilterRaw === '__none__';
+  const normalizedClassFilter = !suppressSpecs && normalizedClassFilterRaw ? normalizeClassFilterValue(normalizedClassFilterRaw) : '';
+  const classFilterCacheKey = suppressSpecs ? '__none__' : normalizedClassFilter || 'all';
 
   const cached = await readCached(db, selectedEncounter?.id ?? null, classFilterCacheKey);
   if (cached) {
@@ -1110,7 +1117,7 @@ async function loadTrinketTierPageDataInternal(options?: {
   }
 
   let specs = await listSpecsForZone(accessToken, zone.id);
-  if (normalizedClassFilter === '__none__') {
+  if (suppressSpecs) {
     specs = [];
   } else if (normalizedClassFilter) {
     specs = specs.filter((spec) => {
