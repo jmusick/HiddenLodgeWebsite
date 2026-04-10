@@ -11,7 +11,7 @@ const MAX_PARSE_SCAN_ROWS = 300;
 const INITIAL_RANKING_PAGES = 3;
 const EXTENDED_RANKING_PAGES = 8;
 
-const WCL_QUERY_RETRY_DELAYS_MS = [1500, 3000];
+const WCL_QUERY_RETRY_DELAYS_MS = [600, 2000];
 const WCL_AGGREGATE_INTER_ENCOUNTER_SLEEP_MS = 100;
 
 interface WclAuthConfig {
@@ -487,7 +487,7 @@ async function queryWclWithRetry<T>(
 }
 
 async function listCandidateZones(accessToken: string): Promise<WclZoneMeta[]> {
-  const expansionPayload = await queryWcl<{
+  const expansionPayload = await queryWclWithRetry<{
     worldData?: {
       expansions?: Array<{ id?: number }>;
     };
@@ -512,7 +512,7 @@ async function listCandidateZones(accessToken: string): Promise<WclZoneMeta[]> {
   const latestExpansionId = expansionIds[0] ?? null;
 
   async function fetchZonesForExpansion(expansionId: number | null): Promise<WclZoneMeta[]> {
-    const zonesPayload = await queryWcl<{
+    const zonesPayload = await queryWclWithRetry<{
       worldData?: {
         zones?: Array<{
           id?: number;
@@ -636,7 +636,7 @@ async function resolveCurrentContentZones(accessToken: string): Promise<{ raidZo
 }
 
 async function listSpecsForZone(accessToken: string, zoneId: number): Promise<WclSpecMeta[]> {
-  const payload = await queryWcl<{
+  const payload = await queryWclWithRetry<{
     gameData?: {
       classes?: Array<{
         name?: string;
