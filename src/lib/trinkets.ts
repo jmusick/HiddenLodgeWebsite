@@ -3,9 +3,12 @@ import { env } from 'cloudflare:workers';
 
 const WCL_OAUTH_URL = 'https://www.warcraftlogs.com/oauth/token';
 const WCL_GRAPHQL_URL = 'https://www.warcraftlogs.com/api/v2/client';
-const CACHE_KEY_PREFIX = 'trinket_tier_data_v8';
+const CACHE_KEY_PREFIX = 'trinket_tier_data_v9';
 const CACHE_TTL_SECONDS = 6 * 60 * 60;
 const MAX_PARSE_ROWS = 100;
+const MAX_PARSE_SCAN_ROWS = 300;
+const INITIAL_RANKING_PAGES = 3;
+const EXTENDED_RANKING_PAGES = 8;
 const MIN_DUNGEON_KEY_LEVEL = 10;
 
 const WCL_QUERY_RETRY_DELAYS_MS = [250, 600];
@@ -705,7 +708,9 @@ async function fetchTopRankingsForSpec(
   }): Promise<WclRawRankingRow[]> {
     const allRows: WclRawRankingRow[] = [];
 
-    for (const page of [1, 2, 3]) {
+    let page = 1;
+    let targetPages = INITIAL_RANKING_PAGES;
+    while (page <= targetPages) {
       const payload = await queryWclWithRetry<{
         worldData?: {
           encounter?: {
@@ -757,7 +762,18 @@ async function fetchTopRankingsForSpec(
       if (pageRows.length === 0) break;
 
       allRows.push(...pageRows);
-      if (allRows.length >= MAX_PARSE_ROWS) break;
+      const hasEnoughRows = allRows.length >= MAX_PARSE_ROWS;
+      const usableGearCount = countRankingsWithUsableGear(allRows);
+
+      // If first pages have no usable combatant gear data, scan deeper pages to recover trinket signal.
+      if (hasEnoughRows && usableGearCount === 0 && targetPages < EXTENDED_RANKING_PAGES) {
+        targetPages = EXTENDED_RANKING_PAGES;
+      }
+
+      if (allRows.length >= MAX_PARSE_SCAN_ROWS) break;
+      if (usableGearCount >= Math.min(15, allRows.length)) break;
+
+      page += 1;
     }
 
     const deduped = uniqueBy(allRows, (row) => {
@@ -767,7 +783,7 @@ async function fetchTopRankingsForSpec(
       return `${report}:${fightId}:${startTime}:${Math.round(toRankingAmount(row.amount ?? row.total))}`;
     });
 
-    return deduped.slice(0, MAX_PARSE_ROWS);
+    return deduped.slice(0, MAX_PARSE_SCAN_ROWS);
   }
 
   const attempts = [
