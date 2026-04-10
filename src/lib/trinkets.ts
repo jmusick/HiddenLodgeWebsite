@@ -4,14 +4,15 @@ import { env } from 'cloudflare:workers';
 const WCL_OAUTH_URL = 'https://www.warcraftlogs.com/oauth/token';
 const WCL_GRAPHQL_URL = 'https://www.warcraftlogs.com/api/v2/client';
 const CACHE_KEY_PREFIX = 'trinket_tier_data_v8';
-const CACHE_SCHEMA_VERSION = 3;
+const CACHE_SCHEMA_VERSION = 4;
 const CACHE_TTL_SECONDS = 6 * 60 * 60;
 const MAX_PARSE_ROWS = 100;
 const MAX_PARSE_SCAN_ROWS = 300;
 const INITIAL_RANKING_PAGES = 3;
 const EXTENDED_RANKING_PAGES = 8;
 
-const WCL_QUERY_RETRY_DELAYS_MS = [250, 600];
+const WCL_QUERY_RETRY_DELAYS_MS = [1500, 3000];
+const WCL_AGGREGATE_INTER_ENCOUNTER_SLEEP_MS = 400;
 
 interface WclAuthConfig {
   clientId: string;
@@ -1086,9 +1087,11 @@ async function loadTrinketTierPageDataInternal(options?: {
         ? [selectedEncounter.id]
         : zone.encounters.map((encounter) => encounter.id);
 
-      const rankingGroups = await mapWithConcurrency(encounterIds, encounterConcurrency, async (encounterId) =>
-        fetchTopRankingsForSpec(accessToken, encounterId, difficulty?.id ?? null, null, spec)
-      );
+      const rankingGroups: Awaited<ReturnType<typeof fetchTopRankingsForSpec>>[] = [];
+      for (const encounterId of encounterIds) {
+        if (rankingGroups.length > 0 && useAggregateMode) await sleep(WCL_AGGREGATE_INTER_ENCOUNTER_SLEEP_MS);
+        rankingGroups.push(await fetchTopRankingsForSpec(accessToken, encounterId, difficulty?.id ?? null, null, spec));
+      }
 
       const uniqueRankings = uniqueBy(rankingGroups.flat(), (row) => {
         const report = String(row.reportID ?? row.reportCode ?? row.report ?? 'unknown');
