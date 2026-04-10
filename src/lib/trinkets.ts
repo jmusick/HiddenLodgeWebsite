@@ -10,7 +10,6 @@ const MAX_PARSE_ROWS = 100;
 const MAX_PARSE_SCAN_ROWS = 300;
 const INITIAL_RANKING_PAGES = 3;
 const EXTENDED_RANKING_PAGES = 8;
-const MIN_DUNGEON_KEY_LEVEL = 10;
 
 const WCL_QUERY_RETRY_DELAYS_MS = [250, 600];
 
@@ -27,8 +26,6 @@ interface WclZoneMeta {
   partitions: Array<{ id: number; name?: string | null }>;
   brackets: Array<{ min: number; max: number; bucket: number; type?: string | null }>;
 }
-
-type TrinketSelectionMode = 'raid' | 'dungeons';
 
 interface WclSpecMeta {
   className: string;
@@ -75,7 +72,7 @@ export interface TrinketTierPageData {
   generatedAtEpoch: number;
   zoneId: number;
   zoneName: string;
-  selectedView: 'raid-all' | 'dungeon-all' | 'encounter';
+  selectedView: 'raid-all' | 'encounter';
   encounterId: number | null;
   encounterName: string;
   difficultyId: number | null;
@@ -83,8 +80,6 @@ export interface TrinketTierPageData {
   partitionId: number | null;
   partitionName: string | null;
   availableEncounters: Array<{ id: number; name: string }>;
-  hasDungeonAggregate: boolean;
-  dungeonZoneName: string | null;
   specs: SpecTrinketTierResult[];
   warning: string | null;
 }
@@ -909,22 +904,20 @@ function hasUsableGearData(row: WclRawRankingRow): boolean {
 }
 
 function cacheKeyForSelection(
-  selectionMode: TrinketSelectionMode,
   encounterId: number | null,
   classFilterKey: string
 ): string {
-  const selectionKey = selectionMode === 'dungeons' ? 'dungeons' : encounterId === null ? 'all' : String(encounterId);
+  const selectionKey = encounterId === null ? 'all' : String(encounterId);
   return `${CACHE_KEY_PREFIX}:${selectionKey}:class=${classFilterKey}`;
 }
 
 async function readCached(
   db: D1Database,
-  selectionMode: TrinketSelectionMode,
   encounterId: number | null,
   classFilterKey: string
 ): Promise<TrinketTierPageData | null> {
   try {
-    const key = cacheKeyForSelection(selectionMode, encounterId, classFilterKey);
+    const key = cacheKeyForSelection(encounterId, classFilterKey);
     const memoryCached = inMemoryCache.get(key);
     if (memoryCached && memoryCached.expiresAt > nowInSeconds()) {
       return memoryCached.payload;
@@ -975,7 +968,6 @@ async function writeCached(db: D1Database, payload: TrinketTierPageData, classFi
   }
 
   const key = cacheKeyForSelection(
-    payload.selectedView === 'dungeon-all' ? 'dungeons' : 'raid',
     payload.encounterId,
     classFilterKey
   );
@@ -1016,8 +1008,6 @@ function buildUnavailablePayload(message: string): TrinketTierPageData {
     partitionId: null,
     partitionName: null,
     availableEncounters: [],
-    hasDungeonAggregate: false,
-    dungeonZoneName: null,
     specs: [],
     warning: message,
   };
@@ -1026,7 +1016,6 @@ function buildUnavailablePayload(message: string): TrinketTierPageData {
 async function loadTrinketTierPageDataInternal(options?: {
   db?: D1Database;
   encounterId?: number | null;
-  selectionMode?: TrinketSelectionMode;
   classNameFilter?: string | null;
 }): Promise<TrinketTierPageData> {
   const db = getDatabase(options?.db);
@@ -1041,19 +1030,15 @@ async function loadTrinketTierPageDataInternal(options?: {
     return buildUnavailablePayload(authResult.error ?? 'Unable to authenticate to Warcraft Logs with configured credentials.');
   }
 
-  const { raidZone, dungeonZone } = await resolveCurrentContentZones(accessToken);
+  const { raidZone } = await resolveCurrentContentZones(accessToken);
   if (!raidZone || raidZone.encounters.length === 0) {
     return buildUnavailablePayload('Unable to resolve a current raid zone from Warcraft Logs.');
   }
 
-  const selectionMode = options?.selectionMode === 'dungeons' ? 'dungeons' : 'raid';
-  const zone = selectionMode === 'dungeons' ? dungeonZone : raidZone;
-  if (!zone || zone.encounters.length === 0) {
-    return buildUnavailablePayload('Unable to resolve a current dungeon zone from Warcraft Logs.');
-  }
+  const zone = raidZone;
 
   const requestedEncounterId = toPositiveInt(options?.encounterId ?? null);
-  const selectedEncounter = selectionMode === 'raid' && requestedEncounterId
+  const selectedEncounter = requestedEncounterId
     ? zone.encounters.find((encounter) => encounter.id === requestedEncounterId) ?? null
     : null;
 
@@ -1061,15 +1046,12 @@ async function loadTrinketTierPageDataInternal(options?: {
   const normalizedClassFilter = normalizedClassFilterRaw ? normalizeClassFilterValue(normalizedClassFilterRaw) : '';
   const classFilterCacheKey = normalizedClassFilter || 'all';
 
-  const cached = await readCached(db, selectionMode, selectedEncounter?.id ?? null, classFilterCacheKey);
+  const cached = await readCached(db, selectedEncounter?.id ?? null, classFilterCacheKey);
   if (cached) {
     return cached;
   }
 
   let specs = await listSpecsForZone(accessToken, zone.id);
-  if (specs.length === 0 && selectionMode === 'dungeons' && raidZone.id !== zone.id) {
-    specs = await listSpecsForZone(accessToken, raidZone.id);
-  }
   if (normalizedClassFilter === '__none__') {
     specs = [];
   } else if (normalizedClassFilter) {
@@ -1080,7 +1062,7 @@ async function loadTrinketTierPageDataInternal(options?: {
     });
   }
 
-  const preferredDifficultyIds = selectionMode === 'dungeons' ? [8] : [16, 15, 14, 17];
+  const preferredDifficultyIds = [16, 15, 14, 17];
   const difficulty =
     preferredDifficultyIds
       .map((id) => zone.difficulties.find((row) => row.id === id) ?? null)
@@ -1112,11 +1094,7 @@ async function loadTrinketTierPageDataInternal(options?: {
 
       const rankingsWithGear = uniqueRankings.filter((row) => hasUsableGearData(row));
       const rankingPool = rankingsWithGear.length > 0 ? rankingsWithGear : uniqueRankings;
-      const mergedRankings = trimToTopRankings(rankingPool, MAX_PARSE_ROWS);
-
-      const filteredRankings = selectionMode === 'dungeons'
-        ? mergedRankings.filter((row) => Number(row.bracketData ?? 0) >= MIN_DUNGEON_KEY_LEVEL)
-        : mergedRankings;
+      const filteredRankings = trimToTopRankings(rankingPool, MAX_PARSE_ROWS);
 
       if (filteredRankings.length === 0) {
         failures.push(`${spec.specName} ${spec.className}`);
@@ -1153,16 +1131,14 @@ async function loadTrinketTierPageDataInternal(options?: {
     generatedAtEpoch: nowInSeconds(),
     zoneId: zone.id,
     zoneName: zone.name,
-    selectedView: selectionMode === 'dungeons' ? 'dungeon-all' : selectedEncounter ? 'encounter' : 'raid-all',
+    selectedView: selectedEncounter ? 'encounter' : 'raid-all',
     encounterId: selectedEncounter?.id ?? null,
-    encounterName: selectionMode === 'dungeons' ? 'All Dungeons' : selectedEncounter?.name ?? 'All Raid Bosses',
+    encounterName: selectedEncounter?.name ?? 'All Raid Bosses',
     difficultyId: difficulty?.id ?? null,
     difficultyName: difficulty?.name ?? null,
     partitionId: null,
     partitionName: null,
     availableEncounters: raidZone.encounters,
-    hasDungeonAggregate: dungeonZone !== null,
-    dungeonZoneName: dungeonZone?.name ?? null,
     specs: specResults,
     warning:
       failures.length > 0
@@ -1177,7 +1153,6 @@ async function loadTrinketTierPageDataInternal(options?: {
 export async function loadTrinketTierPageData(options?: {
   db?: D1Database;
   encounterId?: number | null;
-  selectionMode?: TrinketSelectionMode;
   classNameFilter?: string | null;
 }): Promise<TrinketTierPageData> {
   try {
