@@ -248,6 +248,18 @@ function toGearRows(ranking: WclRawRankingRow): WclRawGearRow[] {
   return [];
 }
 
+function countRankingsWithUsableGear(rows: WclRawRankingRow[]): number {
+  let count = 0;
+  for (const row of rows) {
+    const gearRows = toGearRows(row);
+    if (gearRows.length === 0) continue;
+    if (gearRows.some((gearRow) => toPositiveInt(gearRow.itemID ?? gearRow.id) !== null)) {
+      count += 1;
+    }
+  }
+  return count;
+}
+
 function normalizeIconName(icon: string | null | undefined): string | null {
   const raw = (icon ?? '').trim();
   if (!raw) return null;
@@ -766,14 +778,26 @@ async function fetchTopRankingsForSpec(
     { difficulty: null, partition: null, className: spec.className, specName: spec.specName },
   ];
 
+  let bestRows: WclRawRankingRow[] = [];
+  let bestRowsWithGear = -1;
+
   for (const attempt of attempts) {
     const rows = await fetchAttempt(attempt);
-    if (rows.length > 0) {
+    if (rows.length === 0) continue;
+
+    const rowsWithGear = countRankingsWithUsableGear(rows);
+    if (rowsWithGear > bestRowsWithGear || (rowsWithGear === bestRowsWithGear && rows.length > bestRows.length)) {
+      bestRows = rows;
+      bestRowsWithGear = rowsWithGear;
+    }
+
+    // Stop early if this attempt is clearly high-quality.
+    if (rowsWithGear > 0 && rowsWithGear >= Math.min(10, rows.length)) {
       return rows;
     }
   }
 
-  return [];
+  return bestRows;
 }
 
 function buildSpecTierRows(rankings: WclRawRankingRow[]): {
