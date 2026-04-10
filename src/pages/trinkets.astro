@@ -15,11 +15,17 @@ const searchParams = new URL(Astro.request.url).searchParams;
 const requestedEncounterParam = (searchParams.get('encounter') ?? '').trim().toLowerCase();
 const requestedEncounterRaw = Number.parseInt(requestedEncounterParam, 10);
 const selectionMode = requestedEncounterParam === 'dungeons' ? 'dungeons' : 'raid';
+const requestedClass = (searchParams.get('class') ?? '').trim().toLowerCase();
 const requestedEncounter = requestedEncounterParam && requestedEncounterParam !== 'all' && Number.isFinite(requestedEncounterRaw) && requestedEncounterRaw > 0
   ? requestedEncounterRaw
   : null;
 
-const data = await loadTrinketTierPageData({ db: env.DB, encounterId: requestedEncounter, selectionMode });
+const data = await loadTrinketTierPageData({
+  db: env.DB,
+  encounterId: requestedEncounter,
+  selectionMode,
+  classNameFilter: requestedClass || '__none__',
+});
 
 const generatedLabel = new Intl.DateTimeFormat('en-US', {
   month: 'short',
@@ -68,9 +74,7 @@ const fallbackClassNames = [
   'Warrior',
 ];
 
-const classFilterSource = data.specs.length > 0
-  ? Array.from(new Map(data.specs.map((spec) => [normalizeClassKey(spec.className), spec.className])).values())
-  : fallbackClassNames;
+const classFilterSource = fallbackClassNames;
 
 const classFilters = classFilterSource
   .map((name) => ({
@@ -81,7 +85,6 @@ const classFilters = classFilterSource
   }))
   .sort((a, b) => a.name.localeCompare(b.name));
 
-const requestedClass = normalizeClassKey(searchParams.get('class') ?? '');
 const selectedClassKey = classFilters.some((entry) => entry.key === requestedClass) ? requestedClass : null;
 const visibleSpecs = selectedClassKey
   ? data.specs.filter((spec) => normalizeClassKey(spec.className) === selectedClassKey)

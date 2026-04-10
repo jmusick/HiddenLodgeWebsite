@@ -170,6 +170,10 @@ function normalizeRoleForSpec(specSlug: string, specName: string): 'Tank' | 'Hea
   return 'DPS';
 }
 
+function normalizeClassFilterValue(value: string): string {
+  return value.trim().toLowerCase().replace(/[_-]+/g, ' ').replace(/\s+/g, ' ');
+}
+
 async function mapWithConcurrency<T, R>(
   rows: T[],
   concurrency: number,
@@ -885,6 +889,7 @@ async function loadTrinketTierPageDataInternal(options?: {
   db?: D1Database;
   encounterId?: number | null;
   selectionMode?: TrinketSelectionMode;
+  classNameFilter?: string | null;
 }): Promise<TrinketTierPageData> {
   const db = getDatabase(options?.db);
   const config = getWclAuthConfig();
@@ -923,6 +928,19 @@ async function loadTrinketTierPageDataInternal(options?: {
   if (specs.length === 0 && selectionMode === 'dungeons' && raidZone.id !== zone.id) {
     specs = await listSpecsForZone(accessToken, raidZone.id);
   }
+
+  const normalizedClassFilterRaw = (options?.classNameFilter ?? '').trim();
+  const normalizedClassFilter = normalizedClassFilterRaw ? normalizeClassFilterValue(normalizedClassFilterRaw) : '';
+  if (normalizedClassFilter === '__none__') {
+    specs = [];
+  } else if (normalizedClassFilter) {
+    specs = specs.filter((spec) => {
+      const classNameNormalized = normalizeClassFilterValue(spec.className);
+      const classSlugNormalized = normalizeClassFilterValue(spec.classSlug);
+      return classNameNormalized === normalizedClassFilter || classSlugNormalized === normalizedClassFilter;
+    });
+  }
+
   const preferredDifficultyIds = selectionMode === 'dungeons' ? [8] : [16, 15, 14, 17];
   const difficulty =
     preferredDifficultyIds
@@ -1015,6 +1033,7 @@ export async function loadTrinketTierPageData(options?: {
   db?: D1Database;
   encounterId?: number | null;
   selectionMode?: TrinketSelectionMode;
+  classNameFilter?: string | null;
 }): Promise<TrinketTierPageData> {
   try {
     return await loadTrinketTierPageDataInternal(options);
