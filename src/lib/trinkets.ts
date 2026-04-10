@@ -4,7 +4,7 @@ import { env } from 'cloudflare:workers';
 const WCL_OAUTH_URL = 'https://www.warcraftlogs.com/oauth/token';
 const WCL_GRAPHQL_URL = 'https://www.warcraftlogs.com/api/v2/client';
 const CACHE_KEY_PREFIX = 'trinket_tier_data_v8';
-const CACHE_SCHEMA_VERSION = 4;
+const CACHE_SCHEMA_VERSION = 5;
 const CACHE_TTL_SECONDS = 6 * 60 * 60;
 const MAX_PARSE_ROWS = 100;
 const MAX_PARSE_SCAN_ROWS = 300;
@@ -12,7 +12,7 @@ const INITIAL_RANKING_PAGES = 3;
 const EXTENDED_RANKING_PAGES = 8;
 
 const WCL_QUERY_RETRY_DELAYS_MS = [600, 2000];
-const WCL_AGGREGATE_INTER_ENCOUNTER_SLEEP_MS = 100;
+const WCL_AGGREGATE_INTER_ENCOUNTER_SLEEP_MS = 300;
 
 interface WclAuthConfig {
   clientId: string;
@@ -701,7 +701,8 @@ async function fetchTopRankingsForSpec(
   encounterId: number,
   difficultyId: number | null,
   partitionId: number | null,
-  spec: WclSpecMeta
+  spec: WclSpecMeta,
+  maxInitialPages = INITIAL_RANKING_PAGES
 ): Promise<WclRawRankingRow[]> {
   async function fetchAttempt(params: {
     difficulty: number | null;
@@ -712,7 +713,7 @@ async function fetchTopRankingsForSpec(
     const allRows: WclRawRankingRow[] = [];
 
     let page = 1;
-    let targetPages = INITIAL_RANKING_PAGES;
+    let targetPages = maxInitialPages;
     while (page <= targetPages) {
       const payload = await queryWclWithRetry<{
         worldData?: {
@@ -769,7 +770,8 @@ async function fetchTopRankingsForSpec(
       const usableGearCount = countRankingsWithUsableGear(allRows);
 
       // If first pages have no usable combatant gear data, scan deeper pages to recover trinket signal.
-      if (hasEnoughRows && usableGearCount === 0 && targetPages < EXTENDED_RANKING_PAGES) {
+      // Only extend if we started with the full initial page budget (not in single-page aggregate mode).
+      if (hasEnoughRows && usableGearCount === 0 && maxInitialPages >= INITIAL_RANKING_PAGES && targetPages < EXTENDED_RANKING_PAGES) {
         targetPages = EXTENDED_RANKING_PAGES;
       }
 
@@ -1090,7 +1092,8 @@ async function loadTrinketTierPageDataInternal(options?: {
       const rankingGroups: Awaited<ReturnType<typeof fetchTopRankingsForSpec>>[] = [];
       for (const encounterId of encounterIds) {
         if (rankingGroups.length > 0 && useAggregateMode) await sleep(WCL_AGGREGATE_INTER_ENCOUNTER_SLEEP_MS);
-        rankingGroups.push(await fetchTopRankingsForSpec(accessToken, encounterId, difficulty?.id ?? null, null, spec));
+        const pageLimit = useAggregateMode ? 1 : INITIAL_RANKING_PAGES;
+        rankingGroups.push(await fetchTopRankingsForSpec(accessToken, encounterId, difficulty?.id ?? null, null, spec, pageLimit));
       }
 
       const uniqueRankings = uniqueBy(rankingGroups.flat(), (row) => {
