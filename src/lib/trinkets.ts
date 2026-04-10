@@ -4,7 +4,7 @@ import { env } from 'cloudflare:workers';
 const WCL_OAUTH_URL = 'https://www.warcraftlogs.com/oauth/token';
 const WCL_GRAPHQL_URL = 'https://www.warcraftlogs.com/api/v2/client';
 const CACHE_KEY_PREFIX = 'trinket_tier_data_v8';
-const CACHE_SCHEMA_VERSION = 2;
+const CACHE_SCHEMA_VERSION = 3;
 const CACHE_TTL_SECONDS = 6 * 60 * 60;
 const MAX_PARSE_ROWS = 100;
 const MAX_PARSE_SCAN_ROWS = 300;
@@ -362,13 +362,16 @@ function zoneSelectionScore(zone: WclZoneMeta): number {
   const name = zone.name.toLowerCase();
   const difficultyIds = new Set(zone.difficulties.map((difficulty) => difficulty.id));
 
-  const hasRaidDifficultyProfile = difficultyIds.has(14) && (difficultyIds.has(15) || difficultyIds.has(16));
-  const hasDungeonDifficultyProfile = difficultyIds.has(8) && !difficultyIds.has(15) && !difficultyIds.has(16);
+  // WCL difficulty IDs: 1=LFR, 3=Normal, 4=Heroic, 5=Mythic, 10=M+ Timed
+  const hasRaidDifficultyProfile = difficultyIds.has(4) && difficultyIds.has(5);
+  const hasDungeonDifficultyProfile = (difficultyIds.has(8) || difficultyIds.has(10)) && !difficultyIds.has(5);
   const looksLikeDungeonByName =
     name.includes('dungeon') ||
     name.includes('mythic+') ||
     name.includes('keystone') ||
     name.includes('season');
+  const looksLikeBeta = name.includes('beta');
+  const looksLikeAggregate = zone.encounters.length < 4;
 
   let score = 0;
   if (hasRaidDifficultyProfile) score += 200;
@@ -376,6 +379,8 @@ function zoneSelectionScore(zone: WclZoneMeta): number {
   if (zone.encounters.length >= 10) score += 20;
   if (hasDungeonDifficultyProfile) score -= 160;
   if (looksLikeDungeonByName) score -= 120;
+  if (looksLikeBeta) score -= 200;
+  if (looksLikeAggregate) score -= 300;
 
   score += Math.min(zone.id, 100);
   return score;
