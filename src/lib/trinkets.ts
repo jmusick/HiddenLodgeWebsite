@@ -108,6 +108,7 @@ interface WclRawGearRow {
   itemID?: number;
   name?: string;
   icon?: string;
+  itemLevel?: number | string;
   slot?: number | string;
   slotName?: string;
   type?: string;
@@ -287,6 +288,52 @@ function isTrinketSlot(row: WclRawGearRow, index: number, totalItems: number): b
   }
 
   return false;
+}
+
+function toItemLevel(value: unknown): number {
+  const parsed = Number(value ?? 0);
+  if (!Number.isFinite(parsed) || parsed <= 0) return 0;
+  return Math.floor(parsed);
+}
+
+function fallbackTrinketsFromGearRows(gearRows: WclRawGearRow[]): WclRawGearRow[] {
+  const candidates = gearRows
+    .map((row) => ({
+      row,
+      itemId: toPositiveInt(row.itemID ?? row.id),
+      level: toItemLevel(row.itemLevel),
+      slotName: (row.slotName ?? '').toLowerCase(),
+      type: (row.type ?? '').toLowerCase(),
+      icon: (row.icon ?? '').toLowerCase(),
+    }))
+    .filter((entry) => entry.itemId !== null)
+    .filter((entry) =>
+      entry.slotName.includes('trinket') ||
+      entry.type.includes('trinket') ||
+      entry.slotName.includes('finger') ||
+      entry.type.includes('finger') ||
+      entry.slotName.includes('neck') ||
+      entry.type.includes('neck') ||
+      entry.icon.includes('inv_jewelry') ||
+      entry.icon.includes('inv_12_jewelry') ||
+      entry.icon.includes('trinket')
+    )
+    .sort((a, b) => {
+      if (b.level !== a.level) return b.level - a.level;
+      return (b.itemId ?? 0) - (a.itemId ?? 0);
+    });
+
+  const selected: WclRawGearRow[] = [];
+  const seen = new Set<number>();
+  for (const candidate of candidates) {
+    const id = candidate.itemId;
+    if (id === null || seen.has(id)) continue;
+    seen.add(id);
+    selected.push(candidate.row);
+    if (selected.length >= 2) break;
+  }
+
+  return selected;
 }
 
 function computeTier(useCount: number, topUseCount: number): 'S' | 'A' | 'B' | 'C' | 'D' {
@@ -739,8 +786,10 @@ function buildSpecTierRows(rankings: WclRawRankingRow[]): {
   for (const ranking of rankings) {
     const amount = toRankingAmount(ranking.amount ?? ranking.total);
     const gearRows = toGearRows(ranking);
-    const trinketsForRanking = gearRows
-      .filter((gearRow, index) => isTrinketSlot(gearRow, index, gearRows.length))
+    const explicitTrinketRows = gearRows.filter((gearRow, index) => isTrinketSlot(gearRow, index, gearRows.length));
+    const gearRowsForTrinkets = explicitTrinketRows.length > 0 ? explicitTrinketRows : fallbackTrinketsFromGearRows(gearRows);
+
+    const trinketsForRanking = gearRowsForTrinkets
       .map((gearRow) => {
         const itemId = toPositiveInt(gearRow.itemID ?? gearRow.id);
         if (!itemId) return null;
