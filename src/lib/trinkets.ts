@@ -818,6 +818,9 @@ async function readCached(db: D1Database, selectionMode: TrinketSelectionMode, e
     if (parsed.zoneId <= 0 || parsed.zoneName === 'Unavailable') {
       return null;
     }
+    if (parsed.specs.length > 0 && parsed.specs.every((spec) => spec.parseCount === 0)) {
+      return null;
+    }
 
     inMemoryCache.set(key, {
       expiresAt: parsed.generatedAtEpoch + CACHE_TTL_SECONDS,
@@ -830,6 +833,10 @@ async function readCached(db: D1Database, selectionMode: TrinketSelectionMode, e
 }
 
 async function writeCached(db: D1Database, payload: TrinketTierPageData): Promise<void> {
+  if (payload.specs.length > 0 && payload.specs.every((spec) => spec.parseCount === 0)) {
+    return;
+  }
+
   const key = cacheKeyForSelection(payload.selectedView === 'dungeon-all' ? 'dungeons' : 'raid', payload.encounterId);
   const serialized = JSON.stringify(payload);
 
