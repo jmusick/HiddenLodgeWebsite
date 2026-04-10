@@ -3,7 +3,7 @@ import { env } from 'cloudflare:workers';
 
 const WCL_OAUTH_URL = 'https://www.warcraftlogs.com/oauth/token';
 const WCL_GRAPHQL_URL = 'https://www.warcraftlogs.com/api/v2/client';
-const CACHE_KEY_PREFIX = 'trinket_tier_data_v7';
+const CACHE_KEY_PREFIX = 'trinket_tier_data_v8';
 const CACHE_TTL_SECONDS = 6 * 60 * 60;
 const MAX_PARSE_ROWS = 100;
 const MIN_DUNGEON_KEY_LEVEL = 10;
@@ -787,14 +787,23 @@ function trimToTopRankings(rows: WclRawRankingRow[], maxRows: number): WclRawRan
     .slice(0, maxRows);
 }
 
-function cacheKeyForSelection(selectionMode: TrinketSelectionMode, encounterId: number | null): string {
+function cacheKeyForSelection(
+  selectionMode: TrinketSelectionMode,
+  encounterId: number | null,
+  classFilterKey: string
+): string {
   const selectionKey = selectionMode === 'dungeons' ? 'dungeons' : encounterId === null ? 'all' : String(encounterId);
-  return `${CACHE_KEY_PREFIX}:${selectionKey}`;
+  return `${CACHE_KEY_PREFIX}:${selectionKey}:class=${classFilterKey}`;
 }
 
-async function readCached(db: D1Database, selectionMode: TrinketSelectionMode, encounterId: number | null): Promise<TrinketTierPageData | null> {
+async function readCached(
+  db: D1Database,
+  selectionMode: TrinketSelectionMode,
+  encounterId: number | null,
+  classFilterKey: string
+): Promise<TrinketTierPageData | null> {
   try {
-    const key = cacheKeyForSelection(selectionMode, encounterId);
+    const key = cacheKeyForSelection(selectionMode, encounterId, classFilterKey);
     const memoryCached = inMemoryCache.get(key);
     if (memoryCached && memoryCached.expiresAt > nowInSeconds()) {
       return memoryCached.payload;
@@ -836,12 +845,16 @@ async function readCached(db: D1Database, selectionMode: TrinketSelectionMode, e
   }
 }
 
-async function writeCached(db: D1Database, payload: TrinketTierPageData): Promise<void> {
+async function writeCached(db: D1Database, payload: TrinketTierPageData, classFilterKey: string): Promise<void> {
   if (payload.specs.length > 0 && payload.specs.every((spec) => spec.parseCount === 0)) {
     return;
   }
 
-  const key = cacheKeyForSelection(payload.selectedView === 'dungeon-all' ? 'dungeons' : 'raid', payload.encounterId);
+  const key = cacheKeyForSelection(
+    payload.selectedView === 'dungeon-all' ? 'dungeons' : 'raid',
+    payload.encounterId,
+    classFilterKey
+  );
   const serialized = JSON.stringify(payload);
 
   try {
@@ -919,7 +932,11 @@ async function loadTrinketTierPageDataInternal(options?: {
     ? zone.encounters.find((encounter) => encounter.id === requestedEncounterId) ?? null
     : null;
 
-  const cached = await readCached(db, selectionMode, selectedEncounter?.id ?? null);
+  const normalizedClassFilterRaw = (options?.classNameFilter ?? '').trim();
+  const normalizedClassFilter = normalizedClassFilterRaw ? normalizeClassFilterValue(normalizedClassFilterRaw) : '';
+  const classFilterCacheKey = normalizedClassFilter || 'all';
+
+  const cached = await readCached(db, selectionMode, selectedEncounter?.id ?? null, classFilterCacheKey);
   if (cached) {
     return cached;
   }
@@ -928,9 +945,6 @@ async function loadTrinketTierPageDataInternal(options?: {
   if (specs.length === 0 && selectionMode === 'dungeons' && raidZone.id !== zone.id) {
     specs = await listSpecsForZone(accessToken, raidZone.id);
   }
-
-  const normalizedClassFilterRaw = (options?.classNameFilter ?? '').trim();
-  const normalizedClassFilter = normalizedClassFilterRaw ? normalizeClassFilterValue(normalizedClassFilterRaw) : '';
   if (normalizedClassFilter === '__none__') {
     specs = [];
   } else if (normalizedClassFilter) {
@@ -1025,7 +1039,7 @@ async function loadTrinketTierPageDataInternal(options?: {
         : null,
   };
 
-  await writeCached(db, payload);
+  await writeCached(db, payload, classFilterCacheKey);
   return payload;
 }
 
