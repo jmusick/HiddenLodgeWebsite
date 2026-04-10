@@ -859,6 +859,13 @@ function trimToTopRankings(rows: WclRawRankingRow[], maxRows: number): WclRawRan
     .slice(0, maxRows);
 }
 
+function hasUsableGearData(row: WclRawRankingRow): boolean {
+  const gearRows = toGearRows(row);
+  if (gearRows.length === 0) return false;
+
+  return gearRows.some((gearRow) => toPositiveInt(gearRow.itemID ?? gearRow.id) !== null);
+}
+
 function cacheKeyForSelection(
   selectionMode: TrinketSelectionMode,
   encounterId: number | null,
@@ -1050,15 +1057,16 @@ async function loadTrinketTierPageDataInternal(options?: {
         fetchTopRankingsForSpec(accessToken, encounterId, difficulty?.id ?? null, null, spec)
       );
 
-      const mergedRankings = trimToTopRankings(
-        uniqueBy(rankingGroups.flat(), (row) => {
-          const report = String(row.reportID ?? row.reportCode ?? row.report ?? 'unknown');
-          const fightId = Number(row.fightID ?? 0);
-          const startTime = Number(row.startTime ?? 0);
-          return `${report}:${fightId}:${startTime}:${Math.round(toRankingAmount(row.amount ?? row.total))}`;
-        }),
-        MAX_PARSE_ROWS
-      );
+      const uniqueRankings = uniqueBy(rankingGroups.flat(), (row) => {
+        const report = String(row.reportID ?? row.reportCode ?? row.report ?? 'unknown');
+        const fightId = Number(row.fightID ?? 0);
+        const startTime = Number(row.startTime ?? 0);
+        return `${report}:${fightId}:${startTime}:${Math.round(toRankingAmount(row.amount ?? row.total))}`;
+      });
+
+      const rankingsWithGear = uniqueRankings.filter((row) => hasUsableGearData(row));
+      const rankingPool = rankingsWithGear.length > 0 ? rankingsWithGear : uniqueRankings;
+      const mergedRankings = trimToTopRankings(rankingPool, MAX_PARSE_ROWS);
 
       const filteredRankings = selectionMode === 'dungeons'
         ? mergedRankings.filter((row) => Number(row.bracketData ?? 0) >= MIN_DUNGEON_KEY_LEVEL)
