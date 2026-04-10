@@ -3,7 +3,7 @@ import { env } from 'cloudflare:workers';
 
 const WCL_OAUTH_URL = 'https://www.warcraftlogs.com/oauth/token';
 const WCL_GRAPHQL_URL = 'https://www.warcraftlogs.com/api/v2/client';
-const CACHE_KEY_PREFIX = 'trinket_tier_data_v6';
+const CACHE_KEY_PREFIX = 'trinket_tier_data_v7';
 const CACHE_TTL_SECONDS = 6 * 60 * 60;
 const MAX_PARSE_ROWS = 100;
 const MIN_DUNGEON_KEY_LEVEL = 10;
@@ -813,6 +813,9 @@ async function readCached(db: D1Database, selectionMode: TrinketSelectionMode, e
 
     if (!parsed) return null;
     if (nowInSeconds() - parsed.generatedAtEpoch > CACHE_TTL_SECONDS) {
+      return null;
+    }
+    if (parsed.zoneId <= 0 || parsed.zoneName === 'Unavailable') {
       return null;
     }
 

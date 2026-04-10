@@ -1,7 +1,7 @@
 {
   "name": "hiddenlodgewebsite",
   "type": "module",
-  "version": "1.20.0",
+  "version": "1.20.1",
   "engines": {
     "node": ">=22.12.0"
   },
@@ -20,7 +20,8 @@
     "db:copy-prod": "node scripts/copy-prod-data.mjs",
     "db:compare-schema": "node scripts/compare-d1-schema.mjs --target=local",
     "db:compare-schema:remote": "node scripts/compare-d1-schema.mjs --target=remote",
-    "db:reconcile-local": "node scripts/reconcile-local-d1.mjs"
+    "db:reconcile-local": "node scripts/reconcile-local-d1.mjs",
+    "db:seed:test-notes": "wrangler d1 execute hidden-lodge-db --local --file=db-seeds/seed_test_notes.sql"
   },
   "dependencies": {
     "@astrojs/cloudflare": "^13.1.2",

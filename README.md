@@ -337,7 +337,8 @@ These handlers remain in the codebase as retired stubs and currently return HTTP
 
 ### Key Folders
 
-- **`migrations/`** — D1 SQL migrations ordered by creation date (currently 0001–0048 plus helper seed SQL)
+- **`migrations/`** — D1 SQL migrations ordered by creation date
+- **`db-seeds/`** — Local development seed SQL files (never run in production)
 - **`public/`** — Static assets: images for leadership and lore pages, Cloudflare routing config
 - **`scripts/`** — Build and deployment helper scripts
 - **`src/components/`** — Reusable Astro components (cards, layouts, sections)
