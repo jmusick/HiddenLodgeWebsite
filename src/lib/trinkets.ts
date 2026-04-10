@@ -4,7 +4,7 @@ import { env } from 'cloudflare:workers';
 const WCL_OAUTH_URL = 'https://www.warcraftlogs.com/oauth/token';
 const WCL_GRAPHQL_URL = 'https://www.warcraftlogs.com/api/v2/client';
 const CACHE_KEY_PREFIX = 'trinket_tier_data_v8';
-const CACHE_SCHEMA_VERSION = 5;
+const CACHE_SCHEMA_VERSION = 6;
 const CACHE_TTL_SECONDS = 6 * 60 * 60;
 const MAX_PARSE_ROWS = 100;
 const MAX_PARSE_SCAN_ROWS = 300;
@@ -120,6 +120,7 @@ interface WclCharacterRankingsPayload {
 }
 
 let wclTokenCache: { accessToken: string; expiresAt: number } | null = null;
+let wclZoneCache: { raidZone: WclZoneMeta | null; dungeonZone: WclZoneMeta | null; expiresAt: number } | null = null;
 
 const inMemoryCache = new Map<string, { expiresAt: number; payload: TrinketTierPageData }>();
 
@@ -615,6 +616,11 @@ async function listCandidateZones(accessToken: string): Promise<WclZoneMeta[]> {
 }
 
 async function resolveCurrentContentZones(accessToken: string): Promise<{ raidZone: WclZoneMeta | null; dungeonZone: WclZoneMeta | null }> {
+  const now = nowInSeconds();
+  if (wclZoneCache && wclZoneCache.expiresAt > now) {
+    return { raidZone: wclZoneCache.raidZone, dungeonZone: wclZoneCache.dungeonZone };
+  }
+
   const candidateZones = await listCandidateZones(accessToken);
 
   const raidCandidates = [...candidateZones].sort((a, b) => {
@@ -629,10 +635,16 @@ async function resolveCurrentContentZones(accessToken: string): Promise<{ raidZo
     return b.id - a.id;
   });
 
-  return {
+  const result = {
     raidZone: raidCandidates[0] ?? null,
     dungeonZone: dungeonCandidates[0] ?? null,
   };
+
+  if (result.raidZone !== null) {
+    wclZoneCache = { ...result, expiresAt: now + 60 * 60 };
+  }
+
+  return result;
 }
 
 async function listSpecsForZone(accessToken: string, zoneId: number): Promise<WclSpecMeta[]> {
@@ -971,6 +983,9 @@ async function readCached(
 }
 
 async function writeCached(db: D1Database, payload: TrinketTierPageData, classFilterKey: string): Promise<void> {
+  if (payload.zoneId <= 0 || payload.zoneName === 'Unavailable') {
+    return;
+  }
   if (payload.specs.length > 0 && payload.specs.every((spec) => spec.parseCount === 0)) {
     return;
   }
