@@ -6,6 +6,8 @@ const WCL_GRAPHQL_URL = 'https://www.warcraftlogs.com/api/v2/client';
 const CACHE_KEY_PREFIX = 'trinket_tier_data_v8';
 const CACHE_SCHEMA_VERSION = 6;
 const CACHE_TTL_SECONDS = 6 * 60 * 60;
+const ZONE_CACHE_TTL_SECONDS = 2 * 60 * 60;
+const ZONE_CACHE_KEY = 'trinket_resolved_zone_v1';
 const MAX_PARSE_ROWS = 100;
 const MAX_PARSE_SCAN_ROWS = 300;
 const INITIAL_RANKING_PAGES = 3;
@@ -615,10 +617,31 @@ async function listCandidateZones(accessToken: string): Promise<WclZoneMeta[]> {
   return candidateZones;
 }
 
-async function resolveCurrentContentZones(accessToken: string): Promise<{ raidZone: WclZoneMeta | null; dungeonZone: WclZoneMeta | null }> {
+async function resolveCurrentContentZones(accessToken: string, db: D1Database): Promise<{ raidZone: WclZoneMeta | null; dungeonZone: WclZoneMeta | null }> {
   const now = nowInSeconds();
+
+  // In-process cache (hits within same isolate lifetime)
   if (wclZoneCache && wclZoneCache.expiresAt > now) {
     return { raidZone: wclZoneCache.raidZone, dungeonZone: wclZoneCache.dungeonZone };
+  }
+
+  // D1-backed cache (shared across isolates / warm requests)
+  try {
+    const row = await db
+      .prepare(`SELECT value FROM site_settings WHERE key = ? LIMIT 1`)
+      .bind(ZONE_CACHE_KEY)
+      .first<SiteSettingRow>();
+    const rawValue = (row?.value ?? '').trim();
+    if (rawValue) {
+      const parsed = JSON.parse(rawValue) as { raidZone: WclZoneMeta | null; dungeonZone: WclZoneMeta | null; cachedAt: number } | null;
+      if (parsed && now - parsed.cachedAt < ZONE_CACHE_TTL_SECONDS) {
+        const result = { raidZone: parsed.raidZone, dungeonZone: parsed.dungeonZone };
+        wclZoneCache = { ...result, expiresAt: parsed.cachedAt + ZONE_CACHE_TTL_SECONDS };
+        return result;
+      }
+    }
+  } catch {
+    // Fall through to live resolution
   }
 
   const candidateZones = await listCandidateZones(accessToken);
@@ -641,7 +664,19 @@ async function resolveCurrentContentZones(accessToken: string): Promise<{ raidZo
   };
 
   if (result.raidZone !== null) {
-    wclZoneCache = { ...result, expiresAt: now + 60 * 60 };
+    wclZoneCache = { ...result, expiresAt: now + ZONE_CACHE_TTL_SECONDS };
+    const serialized = JSON.stringify({ ...result, cachedAt: now });
+    try {
+      await db
+        .prepare(
+          `INSERT INTO site_settings (key, value, updated_at) VALUES (?, ?, unixepoch())
+           ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`
+        )
+        .bind(ZONE_CACHE_KEY, serialized)
+        .run();
+    } catch {
+      // Non-fatal; will resolve again next request
+    }
   }
 
   return result;
@@ -1053,7 +1088,7 @@ async function loadTrinketTierPageDataInternal(options?: {
     return buildUnavailablePayload(authResult.error ?? 'Unable to authenticate to Warcraft Logs with configured credentials.');
   }
 
-  const { raidZone } = await resolveCurrentContentZones(accessToken);
+  const { raidZone } = await resolveCurrentContentZones(accessToken, db);
   if (!raidZone || raidZone.encounters.length === 0) {
     return buildUnavailablePayload('Unable to resolve a current raid zone from Warcraft Logs.');
   }
