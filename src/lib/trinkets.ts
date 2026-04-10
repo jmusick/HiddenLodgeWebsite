@@ -3,7 +3,8 @@ import { env } from 'cloudflare:workers';
 
 const WCL_OAUTH_URL = 'https://www.warcraftlogs.com/oauth/token';
 const WCL_GRAPHQL_URL = 'https://www.warcraftlogs.com/api/v2/client';
-const CACHE_KEY_PREFIX = 'trinket_tier_data_v9';
+const CACHE_KEY_PREFIX = 'trinket_tier_data_v8';
+const CACHE_SCHEMA_VERSION = 2;
 const CACHE_TTL_SECONDS = 6 * 60 * 60;
 const MAX_PARSE_ROWS = 100;
 const MAX_PARSE_SCAN_ROWS = 300;
@@ -70,6 +71,7 @@ export interface SpecTrinketTierResult {
 }
 
 export interface TrinketTierPageData {
+  cacheSchemaVersion?: number;
   generatedAtEpoch: number;
   zoneId: number;
   zoneName: string;
@@ -944,6 +946,9 @@ async function readCached(
     }
 
     if (!parsed) return null;
+    if ((parsed.cacheSchemaVersion ?? 0) !== CACHE_SCHEMA_VERSION) {
+      return null;
+    }
     if (nowInSeconds() - parsed.generatedAtEpoch > CACHE_TTL_SECONDS) {
       return null;
     }
@@ -999,6 +1004,7 @@ async function writeCached(db: D1Database, payload: TrinketTierPageData, classFi
 
 function buildUnavailablePayload(message: string): TrinketTierPageData {
   return {
+    cacheSchemaVersion: CACHE_SCHEMA_VERSION,
     generatedAtEpoch: nowInSeconds(),
     zoneId: 0,
     zoneName: 'Unavailable',
@@ -1143,6 +1149,7 @@ async function loadTrinketTierPageDataInternal(options?: {
   });
 
   const payload: TrinketTierPageData = {
+    cacheSchemaVersion: CACHE_SCHEMA_VERSION,
     generatedAtEpoch: nowInSeconds(),
     zoneId: zone.id,
     zoneName: zone.name,
