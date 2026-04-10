@@ -8,6 +8,8 @@ const CACHE_TTL_SECONDS = 6 * 60 * 60;
 const MAX_PARSE_ROWS = 100;
 const MIN_DUNGEON_KEY_LEVEL = 10;
 
+const WCL_QUERY_RETRY_DELAYS_MS = [250, 600];
+
 interface WclAuthConfig {
   clientId: string;
   clientSecret: string;
@@ -194,6 +196,10 @@ async function mapWithConcurrency<T, R>(
 
   await Promise.all(workers);
   return output;
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function uniqueBy<T>(rows: T[], keySelector: (row: T) => string): T[] {
@@ -396,6 +402,23 @@ async function queryWcl<T>(accessToken: string, query: string, variables: Record
   const payload = (await response.json()) as { data?: T; errors?: unknown[] };
   if ((payload.errors?.length ?? 0) > 0) return null;
   return payload.data ?? null;
+}
+
+async function queryWclWithRetry<T>(
+  accessToken: string,
+  query: string,
+  variables: Record<string, unknown>
+): Promise<T | null> {
+  const firstAttempt = await queryWcl<T>(accessToken, query, variables);
+  if (firstAttempt) return firstAttempt;
+
+  for (const delayMs of WCL_QUERY_RETRY_DELAYS_MS) {
+    await sleep(delayMs);
+    const retry = await queryWcl<T>(accessToken, query, variables);
+    if (retry) return retry;
+  }
+
+  return null;
 }
 
 async function listCandidateZones(accessToken: string): Promise<WclZoneMeta[]> {
@@ -624,7 +647,7 @@ async function fetchTopRankingsForSpec(
     const allRows: WclRawRankingRow[] = [];
 
     for (const page of [1, 2, 3]) {
-      const payload = await queryWcl<{
+      const payload = await queryWclWithRetry<{
         worldData?: {
           encounter?: {
             characterRankings?: unknown;
@@ -964,13 +987,17 @@ async function loadTrinketTierPageDataInternal(options?: {
     null;
 
   const failures: string[] = [];
-  const specResults = await mapWithConcurrency(specs, 3, async (spec) => {
+  const useAggregateMode = selectedEncounter === null;
+  const specConcurrency = useAggregateMode ? 1 : 3;
+  const encounterConcurrency = useAggregateMode ? 1 : 2;
+
+  const specResults = await mapWithConcurrency(specs, specConcurrency, async (spec) => {
     try {
       const encounterIds = selectedEncounter
         ? [selectedEncounter.id]
         : zone.encounters.map((encounter) => encounter.id);
 
-      const rankingGroups = await mapWithConcurrency(encounterIds, 2, async (encounterId) =>
+      const rankingGroups = await mapWithConcurrency(encounterIds, encounterConcurrency, async (encounterId) =>
         fetchTopRankingsForSpec(accessToken, encounterId, difficulty?.id ?? null, null, spec)
       );
 
