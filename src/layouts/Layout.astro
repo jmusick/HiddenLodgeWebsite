@@ -18,19 +18,33 @@ const isAdmin = Astro.locals.isAdmin;
 const isGuildMember = Astro.locals.isGuildMember;
 const publicNavItems = [
 	{ href: '/', label: 'Home' },
-	{ href: '/raiding', label: 'Raiding' },
 	{ href: '/lore', label: 'Lore' },
-	{ href: '/leadership', label: 'Leadership' },
 	{ href: '/roster', label: 'Roster' },
 	{ href: '/links', label: 'Links' },
+];
+const homeNavItem = publicNavItems[0];
+const trailingPublicNavItems = publicNavItems.slice(1);
+
+const guildNavItems = [
+	{ href: '/raiding', label: 'Raiding' },
+	{ href: '/leadership', label: 'Leadership' },
+];
+
+const toolsNavItems = [
+	...(isGuildMember ? [{ href: '/trinkets', label: 'Trinkets' }] : []),
+	...(user ? [{ href: '/loot-history', label: 'Loot' }] : []),
 ];
 
 const memberNavItems = [
 	...(isGuildMember ? [{ href: '/raiders', label: 'Raiders' }] : []),
 	...(isGuildMember ? [{ href: '/signup', label: 'Signup' }] : []),
-	...(user ? [{ href: '/loot-history', label: 'Loot' }] : []),
+];
+
+const adminNavItems = [
 	...(isAdmin ? [{ href: '/admin', label: 'Admin' }] : []),
 ];
+
+const responsiveMainMenuItems = [...publicNavItems, ...guildNavItems, ...toolsNavItems];
 
 const headerLinkLabels: Record<string, string> = {
 	'Raider.IO': 'R.IO',
@@ -66,18 +80,60 @@ const siteVersion = packageJson.version;
 				<nav aria-label="Main navigation" class="nav-shell">
 					<div class="main-nav-groups">
 						<ul class="public-nav" aria-label="Public navigation">
+							{homeNavItem && (
+								<li>
+									<a href={homeNavItem.href}>{homeNavItem.label}</a>
+								</li>
+							)}
+							<li class="nav-dropdown">
+								<div class="nav-dropdown-menu">
+									<button type="button" class="nav-dropdown-trigger">Guild</button>
+									<ul class="dropdown-panel" aria-label="Guild navigation">
+										{
+											guildNavItems.map((item) => (
+												<li>
+													<a href={item.href}>{item.label}</a>
+												</li>
+											))
+										}
+									</ul>
+								</div>
+							</li>
 							{
-								publicNavItems.map((item) => (
+								trailingPublicNavItems.map((item) => (
 									<li>
 										<a href={item.href}>{item.label}</a>
 									</li>
 								))
 							}
 						</ul>
-						{memberNavItems.length > 0 && (
+						{(memberNavItems.length > 0 || toolsNavItems.length > 0 || adminNavItems.length > 0) && (
 							<ul class="member-nav" aria-label="Member navigation">
 								{
 									memberNavItems.map((item) => (
+										<li>
+											<a href={item.href}>{item.label}</a>
+										</li>
+									))
+								}
+								{toolsNavItems.length > 0 && (
+									<li class="nav-dropdown member-tools-dropdown">
+										<div class="nav-dropdown-menu">
+											<button type="button" class="nav-dropdown-trigger">Tools</button>
+											<ul class="dropdown-panel" aria-label="Tools navigation">
+												{
+													toolsNavItems.map((item) => (
+														<li>
+															<a href={item.href}>{item.label}</a>
+														</li>
+													))
+												}
+											</ul>
+										</div>
+									</li>
+								)}
+								{
+									adminNavItems.map((item) => (
 										<li>
 											<a href={item.href}>{item.label}</a>
 										</li>
@@ -96,7 +152,7 @@ const siteVersion = packageJson.version;
 								<p class="menu-heading">Main Menu</p>
 								<ul aria-label="Public links menu">
 									{
-										publicNavItems.map((item) => (
+										responsiveMainMenuItems.map((item) => (
 											<li>
 												<a href={item.href}>{item.label}</a>
 											</li>
@@ -406,6 +462,18 @@ const siteVersion = packageJson.version;
 		font-weight: 700;
 	}
 
+	.member-nav .nav-dropdown-trigger {
+		color: var(--gold-bright);
+		font-weight: 700;
+	}
+
+	.member-nav .nav-dropdown-menu:hover > .nav-dropdown-trigger,
+	.member-nav .nav-dropdown-menu:focus-within > .nav-dropdown-trigger,
+	.member-nav .nav-dropdown-trigger:hover,
+	.member-nav .nav-dropdown-trigger:focus-visible {
+		color: var(--gold-bright);
+	}
+
 	.guild-links {
 		display: flex;
 		align-items: center;
@@ -486,6 +554,81 @@ const siteVersion = packageJson.version;
 		border-radius: 0.45rem;
 		color: var(--muted);
 		transition: border-color 160ms ease, color 160ms ease, background 160ms ease;
+	}
+
+	.public-nav > li {
+		position: relative;
+	}
+
+	.nav-dropdown-menu {
+		position: relative;
+	}
+
+	/* Hover bridge keeps the menu open while moving from trigger to panel. */
+	.nav-dropdown-menu::after {
+		content: '';
+		position: absolute;
+		left: 0;
+		right: 0;
+		top: 100%;
+		height: 0.42rem;
+	}
+
+	.nav-dropdown-trigger {
+		display: inline-block;
+		font-weight: 600;
+		font-size: 0.95rem;
+		line-height: 1;
+		padding: 0.42rem 0.54rem;
+		border: 1px solid transparent;
+		border-radius: 0.45rem;
+		color: var(--muted);
+		transition: border-color 160ms ease, color 160ms ease, background 160ms ease;
+		cursor: pointer;
+		background: transparent;
+		font-family: inherit;
+	}
+
+	.nav-dropdown-trigger::after {
+		content: '▾';
+		font-size: 0.7em;
+		margin-left: 0.38rem;
+		opacity: 0.88;
+	}
+
+	.nav-dropdown-menu .dropdown-panel {
+		display: none;
+		position: absolute;
+		top: 100%;
+		left: 0;
+		margin-top: 0;
+		min-width: 9.2rem;
+		padding: 0.32rem;
+		border-radius: 0.45rem;
+		border: 1px solid rgba(214, 176, 106, 0.36);
+		background: rgba(10, 19, 29, 0.97);
+		box-shadow: 0 12px 30px rgba(0, 0, 0, 0.34);
+		z-index: 20;
+		gap: 0.18rem;
+	}
+
+	.nav-dropdown-menu:hover > .dropdown-panel,
+	.nav-dropdown-menu:focus-within > .dropdown-panel {
+		display: grid;
+	}
+
+	.nav-dropdown-menu:hover > .nav-dropdown-trigger,
+	.nav-dropdown-menu:focus-within > .nav-dropdown-trigger,
+	.nav-dropdown-trigger:hover,
+	.nav-dropdown-trigger:focus-visible {
+		border-color: rgba(214, 176, 106, 0.5);
+		background: rgba(214, 176, 106, 0.1);
+		color: var(--text);
+	}
+
+	.nav-dropdown-menu .dropdown-panel a {
+		display: block;
+		white-space: nowrap;
 	}
 
 	@media (max-width: 1120px) {

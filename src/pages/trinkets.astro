@@ -1,0 +1,468 @@
+---
+export const prerender = false;
+
+import Layout from '../layouts/Layout.astro';
+import { env } from 'cloudflare:workers';
+import { loadTrinketTierPageData, type SpecTrinketTierResult } from '../lib/trinkets';
+import { fallbackClassIconUrl } from '../lib/class-icons';
+
+const user = Astro.locals.user;
+if (!user) {
+  return Astro.redirect('/auth/login');
+}
+
+const searchParams = new URL(Astro.request.url).searchParams;
+const requestedEncounterParam = (searchParams.get('encounter') ?? '').trim().toLowerCase();
+const requestedEncounterRaw = Number.parseInt(requestedEncounterParam, 10);
+const selectionMode = requestedEncounterParam === 'dungeons' ? 'dungeons' : 'raid';
+const requestedEncounter = requestedEncounterParam && requestedEncounterParam !== 'all' && Number.isFinite(requestedEncounterRaw) && requestedEncounterRaw > 0
+  ? requestedEncounterRaw
+  : null;
+
+const data = await loadTrinketTierPageData({ db: env.DB, encounterId: requestedEncounter, selectionMode });
+
+const generatedLabel = new Intl.DateTimeFormat('en-US', {
+  month: 'short',
+  day: 'numeric',
+  year: 'numeric',
+  hour: 'numeric',
+  minute: '2-digit',
+}).format(new Date(data.generatedAtEpoch * 1000));
+
+function percentLabel(value: number): string {
+  return `${Math.round(value * 100)}%`;
+}
+
+function metricLabel(metric: SpecTrinketTierResult['metric']): string {
+  return metric === 'hps' ? 'HPS' : 'DPS';
+}
+
+function usageBarWidth(value: number): string {
+  return `${Math.max(6, Math.round(value * 100))}%`;
+}
+
+function normalizeClassKey(value: string): string {
+  return value.trim().toLowerCase();
+}
+
+function classChipLabel(value: string): string {
+  const normalized = normalizeClassKey(value);
+  if (normalized === 'death knight') return 'DK';
+  if (normalized === 'demon hunter') return 'DH';
+  return value;
+}
+
+const fallbackClassNames = [
+  'Death Knight',
+  'Demon Hunter',
+  'Druid',
+  'Evoker',
+  'Hunter',
+  'Mage',
+  'Monk',
+  'Paladin',
+  'Priest',
+  'Rogue',
+  'Shaman',
+  'Warlock',
+  'Warrior',
+];
+
+const classFilterSource = data.specs.length > 0
+  ? Array.from(new Map(data.specs.map((spec) => [normalizeClassKey(spec.className), spec.className])).values())
+  : fallbackClassNames;
+
+const classFilters = classFilterSource
+  .map((name) => ({
+    key: normalizeClassKey(name),
+    name,
+    label: classChipLabel(name),
+    iconUrl: fallbackClassIconUrl(name),
+  }))
+  .sort((a, b) => a.name.localeCompare(b.name));
+
+const requestedClass = normalizeClassKey(searchParams.get('class') ?? '');
+const selectedClassKey = classFilters.some((entry) => entry.key === requestedClass) ? requestedClass : null;
+const visibleSpecs = selectedClassKey
+  ? data.specs.filter((spec) => normalizeClassKey(spec.className) === selectedClassKey)
+  : [];
+
+function trinketIconFromName(iconName: string | null | undefined, source: 'zamimg' | 'rpglogs'): string | null {
+  const icon = (iconName ?? '').trim().toLowerCase();
+  if (!icon) return null;
+  if (source === 'zamimg') {
+    return `https://wow.zamimg.com/images/wow/icons/large/${icon}`;
+  }
+
+  return `https://assets.rpglogs.com/img/wow/icons/large/${icon}`;
+}
+
+function trinketIconPrimary(row: SpecTrinketTierResult['trinketRows'][number]): string | null {
+  const direct = row.iconUrl?.trim() ?? '';
+  if (direct) return direct;
+  return trinketIconFromName(row.iconName, 'zamimg');
+}
+
+function trinketIconFallback(row: SpecTrinketTierResult['trinketRows'][number], primary: string | null): string | null {
+  const fromNameZamimg = trinketIconFromName(row.iconName, 'zamimg');
+  const fromNameRpglogs = trinketIconFromName(row.iconName, 'rpglogs');
+  if (primary && fromNameZamimg && primary !== fromNameZamimg) return fromNameZamimg;
+  if (primary && fromNameRpglogs && primary !== fromNameRpglogs) return fromNameRpglogs;
+  if (!primary) return fromNameRpglogs;
+  return null;
+}
+
+function classFilterHref(classKey: string | null): string {
+  const params = new URLSearchParams();
+  params.set(
+    'encounter',
+    data.selectedView === 'dungeon-all' ? 'dungeons' : data.encounterId === null ? 'all' : String(data.encounterId)
+  );
+  if (classKey) {
+    params.set('class', classKey);
+  }
+
+  return `/trinkets?${params.toString()}`;
+}
+---
+
+<Layout title="Hidden Lodge | Trinkets" description="Top parse trinket tier lists for every spec.">
+  <section class="trinkets-hero card">
+    <div class="hero-copy">
+      <h1>Trinkets</h1>
+      <p>
+        Top 100 parse snapshot from Warcraft Logs for each spec. Tanks and DPS specs use DPS parses;
+        healer specs use HPS parses.
+      </p>
+      <p class="meta">
+        Zone: <strong>{data.zoneName}</strong> | Encounter: <strong>{data.encounterName}</strong> |
+        Updated: <strong>{generatedLabel}</strong>
+      </p>
+      {data.warning && <p class="warning">{data.warning}</p>}
+    </div>
+
+    <form class="encounter-picker" method="get">
+      {selectedClassKey && <input type="hidden" name="class" value={selectedClassKey} />}
+      <label for="encounter">Encounter</label>
+      <select id="encounter" name="encounter" onchange="this.form.submit()">
+        <option value="all" selected={data.selectedView === 'raid-all'}>All Raid Bosses</option>
+        {data.availableEncounters.map((encounter) => (
+          <option value={String(encounter.id)} selected={data.selectedView === 'encounter' && encounter.id === data.encounterId}>
+            {encounter.name}
+          </option>
+        ))}
+        {data.hasDungeonAggregate && (
+          <option value="dungeons" selected={data.selectedView === 'dungeon-all'}>
+            All Dungeons
+          </option>
+        )}
+      </select>
+      <noscript>
+        <button type="submit">Apply</button>
+      </noscript>
+    </form>
+  </section>
+
+  <section class="class-filter card" aria-label="Class filter">
+    {classFilters.map((entry) => (
+      <a class={`class-chip ${selectedClassKey === entry.key ? 'active' : ''}`} href={classFilterHref(entry.key)}>
+        {entry.iconUrl ? <img src={entry.iconUrl} alt="" loading="lazy" /> : <span class="class-fallback">{entry.name[0] ?? '?'}</span>}
+        <span class="chip-label">{entry.label}</span>
+      </a>
+    ))}
+  </section>
+
+  <section class="spec-grid">
+    {visibleSpecs.length === 0 ? (
+      <article class="spec-card card prompt-card">
+        <p>Select a class icon above to show spec trinket tiers.</p>
+      </article>
+    ) : visibleSpecs.map((spec) => (
+      <article class="spec-card card">
+        <header>
+          <h2>{spec.specName} {spec.className}</h2>
+          <p>{spec.role} | Parses with trinket data: {spec.parseCount}</p>
+        </header>
+
+        {spec.trinketRows.length === 0 ? (
+          <p class="empty-state">No trinket parse data found for this spec in the selected snapshot.</p>
+        ) : (
+          <ol class="tier-list">
+            {spec.trinketRows.slice(0, 12).map((row) => {
+              const iconPrimary = trinketIconPrimary(row);
+              const iconFallback = trinketIconFallback(row, iconPrimary);
+              return (
+              <li>
+                <div class="icon-shell" aria-hidden="true">
+                  {iconPrimary ? (
+                    <img src={iconPrimary} data-fallback={iconFallback ?? ''} alt="" loading="lazy" onerror="const fallback = this.dataset.fallback; if (fallback) { this.src = fallback; this.dataset.fallback = ''; return; } this.style.display='none'; const parent = this.parentElement; if (parent) { const span = document.createElement('span'); span.className = 'icon-fallback'; span.textContent = '?'; parent.appendChild(span); }" />
+                  ) : (
+                    <span class="icon-fallback">?</span>
+                  )}
+                </div>
+                <div class="item-copy">
+                  <a class={`tier-name tier-${row.tier.toLowerCase()}`} href={`https://www.wowhead.com/item=${row.itemId}`} target="_blank" rel="noopener noreferrer">{row.itemName}</a>
+                  <small>
+                    Usage {percentLabel(row.usageRate)} ({row.uses}) | Avg {metricLabel(spec.metric)}{' '}
+                    {Math.round(row.avgParseAmount).toLocaleString('en-US')}
+                  </small>
+                  <div class="usage-bar" role="img" aria-label={`Usage ${percentLabel(row.usageRate)}`}>
+                    <span class={`usage-fill tier-${row.tier.toLowerCase()}`} style={`width: ${usageBarWidth(row.usageRate)}`}></span>
+                  </div>
+                </div>
+              </li>
+            )})}
+          </ol>
+        )}
+      </article>
+    ))}
+  </section>
+</Layout>
+
+<style>
+  .card {
+    border: 1px solid rgba(214, 176, 106, 0.45);
+    border-radius: 0.85rem;
+    background: rgba(8, 16, 26, 0.82);
+    box-shadow: 0 18px 42px rgba(0, 0, 0, 0.34);
+  }
+
+  .trinkets-hero {
+    margin: 1rem 0 1.2rem;
+    padding: 1.25rem;
+    display: grid;
+    grid-template-columns: 1fr auto;
+    gap: 1rem;
+    align-items: start;
+  }
+
+  .trinkets-hero h1 {
+    margin: 0 0 0.3rem;
+  }
+
+  .trinkets-hero p {
+    margin: 0.2rem 0;
+  }
+
+  .meta {
+    color: rgba(219, 229, 238, 0.88);
+    font-size: 0.95rem;
+  }
+
+  .warning {
+    margin-top: 0.45rem;
+    color: #f6c86f;
+  }
+
+  .encounter-picker {
+    display: grid;
+    gap: 0.35rem;
+    min-width: 13rem;
+  }
+
+  .encounter-picker label {
+    font-size: 0.84rem;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    color: rgba(212, 224, 236, 0.75);
+  }
+
+  .encounter-picker select,
+  .encounter-picker button {
+    background: rgba(4, 11, 19, 0.92);
+    border: 1px solid rgba(214, 176, 106, 0.45);
+    color: #f0f5fa;
+    border-radius: 0.5rem;
+    padding: 0.5rem 0.6rem;
+    font: inherit;
+  }
+
+  .spec-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(20rem, 1fr));
+    gap: 1rem;
+    padding-bottom: 1.2rem;
+  }
+
+  .class-filter {
+    margin-bottom: 1rem;
+    padding: 0.7rem;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+  }
+
+  .class-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.45rem;
+    text-decoration: none;
+    border: 1px solid rgba(146, 168, 191, 0.45);
+    border-radius: 999px;
+    padding: 0.3rem 0.6rem 0.3rem 0.3rem;
+    background: rgba(9, 20, 33, 0.72);
+    color: rgba(228, 236, 244, 0.92);
+    transition: border-color 140ms ease, background-color 140ms ease;
+  }
+
+  .class-chip:hover {
+    border-color: rgba(214, 176, 106, 0.78);
+    background: rgba(14, 29, 46, 0.88);
+  }
+
+  .class-chip.active {
+    border-color: rgba(214, 176, 106, 0.9);
+    background: rgba(33, 52, 74, 0.92);
+    box-shadow: inset 0 0 0 1px rgba(214, 176, 106, 0.35);
+  }
+
+  .class-chip img,
+  .class-fallback {
+    width: 1.7rem;
+    height: 1.7rem;
+    border-radius: 999px;
+    object-fit: cover;
+    border: 1px solid rgba(255, 255, 255, 0.22);
+    background: rgba(22, 33, 46, 0.85);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 700;
+    font-size: 0.8rem;
+  }
+
+  .chip-label {
+    font-size: 0.88rem;
+  }
+
+  .prompt-card {
+    display: grid;
+    place-items: center;
+    min-height: 8rem;
+  }
+
+  .prompt-card p {
+    margin: 0;
+    color: rgba(212, 224, 236, 0.9);
+    text-align: center;
+  }
+
+  .spec-card {
+    padding: 1rem;
+  }
+
+  .spec-card h2 {
+    margin: 0 0 0.2rem;
+    font-size: 1.22rem;
+  }
+
+  .spec-card header p {
+    margin: 0;
+    font-size: 0.9rem;
+    color: rgba(203, 217, 231, 0.85);
+  }
+
+  .empty-state {
+    margin: 0.75rem 0 0;
+    color: rgba(203, 217, 231, 0.75);
+    font-size: 0.92rem;
+  }
+
+  .tier-list {
+    list-style: none;
+    margin: 0.85rem 0 0;
+    padding: 0;
+    display: grid;
+    gap: 0.45rem;
+  }
+
+  .tier-list li {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: 0.6rem;
+    align-items: center;
+    border: 1px solid rgba(124, 151, 176, 0.35);
+    background: rgba(12, 24, 38, 0.6);
+    border-radius: 0.55rem;
+    padding: 0.45rem 0.55rem;
+  }
+
+  .icon-shell {
+    width: 2rem;
+    height: 2rem;
+    border-radius: 0.35rem;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+    border: 1px solid rgba(255, 255, 255, 0.24);
+    background: rgba(16, 28, 42, 0.75);
+  }
+
+  .icon-shell img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+  }
+
+  .icon-fallback {
+    font-weight: 700;
+    color: rgba(231, 238, 246, 0.78);
+  }
+
+  .item-copy {
+    display: grid;
+    gap: 0.18rem;
+  }
+
+  .item-copy .tier-name {
+    line-height: 1.2;
+    text-decoration: none;
+  }
+
+  .item-copy .tier-name:hover {
+    text-decoration: underline;
+  }
+
+  .tier-name.tier-s { color: #f3a344; }
+  .tier-name.tier-a { color: #b684ff; }
+  .tier-name.tier-b { color: #61a8ff; }
+  .tier-name.tier-c { color: #6fda8d; }
+  .tier-name.tier-d { color: #d2d9e0; }
+
+  .item-copy small {
+    color: rgba(209, 221, 234, 0.82);
+    font-size: 0.8rem;
+  }
+
+  .usage-bar {
+    width: 100%;
+    height: 0.4rem;
+    border-radius: 999px;
+    overflow: hidden;
+    background: rgba(88, 110, 131, 0.35);
+    border: 1px solid rgba(145, 170, 194, 0.25);
+  }
+
+  .usage-fill {
+    display: block;
+    height: 100%;
+    min-width: 0;
+  }
+
+  .usage-fill.tier-s { background: #f3a344; }
+  .usage-fill.tier-a { background: #b684ff; }
+  .usage-fill.tier-b { background: #61a8ff; }
+  .usage-fill.tier-c { background: #6fda8d; }
+  .usage-fill.tier-d { background: #b7c0ca; }
+
+  @media (max-width: 54rem) {
+    .trinkets-hero {
+      grid-template-columns: 1fr;
+    }
+
+    .encounter-picker {
+      min-width: 0;
+    }
+  }
+</style>
