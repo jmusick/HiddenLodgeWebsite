@@ -4,7 +4,7 @@ import { env } from 'cloudflare:workers';
 const WCL_OAUTH_URL = 'https://www.warcraftlogs.com/oauth/token';
 const WCL_GRAPHQL_URL = 'https://www.warcraftlogs.com/api/v2/client';
 const CACHE_KEY_PREFIX = 'trinket_tier_data_v8';
-const CACHE_SCHEMA_VERSION = 7;
+const CACHE_SCHEMA_VERSION = 8;
 const CACHE_TTL_SECONDS = 6 * 60 * 60;
 const ZONE_CACHE_TTL_SECONDS = 24 * 60 * 60;
 const ZONE_CACHE_KEY = 'trinket_resolved_zone_v1';
@@ -1006,6 +1006,9 @@ async function readCached(
     if (parsed.specs.length === 0) {
       return null;
     }
+    if ((parsed.warning ?? '').includes('No ranking data was returned')) {
+      return null;
+    }
     if (parsed.specs.length > 0 && parsed.specs.every((spec) => spec.parseCount === 0)) {
       return null;
     }
@@ -1214,7 +1217,10 @@ async function loadTrinketTierPageDataInternal(options?: {
         : null,
   };
 
-  await writeCached(db, payload, classFilterCacheKey);
+  const hasRecoverablePartialFailure = failures.length > 0 && !suppressSpecs;
+  if (!hasRecoverablePartialFailure) {
+    await writeCached(db, payload, classFilterCacheKey);
+  }
   return payload;
 }
 
