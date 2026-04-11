@@ -183,6 +183,8 @@ const buffOptions = [...new Set(availableMembers.map((m) => primaryRaidBuff(m.cl
 const statusParam = new URL(Astro.request.url).searchParams.get('status');
 const openPickerTeamId = Number.parseInt(new URL(Astro.request.url).searchParams.get('open_picker') ?? '', 10);
 const shouldKeepPickerOpen = Number.isInteger(openPickerTeamId) && openPickerTeamId > 0;
+const openTeamDetailsId = Number.parseInt(new URL(Astro.request.url).searchParams.get('open_team') ?? '', 10);
+const shouldKeepTeamDetailsOpen = Number.isInteger(openTeamDetailsId) && openTeamDetailsId > 0;
 const statusMessages: Record<string, { type: 'ok' | 'error'; text: string }> = {
   'team-created': { type: 'ok', text: 'Team created.' },
   'team-updated': { type: 'ok', text: 'Team updated.' },
@@ -299,7 +301,7 @@ function roleLabel(role: AssignedRole): string {
                 </form>
               </header>
 
-              <details class="team-details">
+              <details class="team-details" open={shouldKeepTeamDetailsOpen && openTeamDetailsId === team.id}>
                 <summary class="team-details-summary">Team Details</summary>
                 <div class="team-details-content">
 
@@ -404,25 +406,69 @@ function roleLabel(role: AssignedRole): string {
                 </article>
               </div>
 
-              <div class="table-wrap">
+              <div class="table-wrap" data-team-id={String(team.id)}>
                 <h3 class="subheading">Assigned Members</h3>
+                <div class="picker-controls assigned-controls">
+                  <label>
+                    Search
+                    <input
+                      type="search"
+                      class="assigned-search"
+                      placeholder="Character name"
+                      autocomplete="off"
+                    />
+                  </label>
+                  <label>
+                    Class
+                    <select class="assigned-class-filter">
+                      <option value="all">All Classes</option>
+                      {classOptions.map((className) => (
+                        <option value={className}>{className}</option>
+                      ))}
+                    </select>
+                  </label>
+                  <label>
+                    Role
+                    <select class="assigned-role-filter">
+                      <option value="all">All Roles</option>
+                      <option value="tank">Tank</option>
+                      <option value="healer">Healer</option>
+                      <option value="melee-dps">Melee DPS</option>
+                      <option value="ranged-dps">Ranged DPS</option>
+                    </select>
+                  </label>
+                  <label>
+                    Status
+                    <select class="assigned-status-filter">
+                      <option value="all">All Statuses</option>
+                      <option value="authenticated">Authenticated</option>
+                      <option value="not-logged-in">Not Logged In</option>
+                    </select>
+                  </label>
+                </div>
                 {members.length === 0 ? (
                   <p class="muted">No members assigned yet.</p>
                 ) : (
                   <table class="data-table">
                     <thead>
                       <tr>
-                        <th>Name</th>
-                        <th>Class</th>
-                        <th>Realm</th>
-                        <th>Role</th>
-                        <th>Status</th>
+                        <th><button type="button" class="sort-btn assigned-sort-btn" data-sort-key="name">Name</button></th>
+                        <th><button type="button" class="sort-btn assigned-sort-btn" data-sort-key="class">Class</button></th>
+                        <th><button type="button" class="sort-btn assigned-sort-btn" data-sort-key="realm">Realm</button></th>
+                        <th><button type="button" class="sort-btn assigned-sort-btn" data-sort-key="role">Role</button></th>
+                        <th><button type="button" class="sort-btn assigned-sort-btn" data-sort-key="status">Status</button></th>
                         <th>Actions</th>
                       </tr>
                     </thead>
                     <tbody>
                       {members.map((member) => (
-                        <tr>
+                        <tr
+                          class="assigned-member-row"
+                          data-name={member.name.toLowerCase()}
+                          data-class={member.class_name}
+                          data-role={member.assigned_role}
+                          data-status={member.is_authenticated ? 'authenticated' : 'not-logged-in'}
+                        >
                           <td>
                             <strong style={`color: ${classColor(member.class_name)}`}>{member.name}</strong>
                             {member.is_authenticated === 1 && member.nickname && (
@@ -438,6 +484,8 @@ function roleLabel(role: AssignedRole): string {
                           <td>
                             <form method="POST" action="/api/admin/roster-teams/update-member-role" class="inline-form">
                               <input type="hidden" name="team_id" value={team.id} />
+                              <input type="hidden" name="open_team" value={team.id} />
+                              <input type="hidden" name="open_picker" value={team.id} />
                               <input type="hidden" name="blizzard_char_id" value={member.blizzard_char_id} />
                               <select name="assigned_role" aria-label={`Role for ${member.name}`}>
                                 {ASSIGNED_ROLES.map((role) => (
@@ -455,6 +503,8 @@ function roleLabel(role: AssignedRole): string {
                           <td>
                             <form method="POST" action="/api/admin/roster-teams/remove-member">
                               <input type="hidden" name="team_id" value={team.id} />
+                              <input type="hidden" name="open_team" value={team.id} />
+                              <input type="hidden" name="open_picker" value={team.id} />
                               <input type="hidden" name="blizzard_char_id" value={member.blizzard_char_id} />
                               <button type="submit" class="btn btn-danger btn-sm">Remove</button>
                             </form>
@@ -496,24 +546,16 @@ function roleLabel(role: AssignedRole): string {
                       ))}
                     </select>
                   </label>
-                  <label>
-                    Sort By
-                    <select class="picker-sort">
-                      <option value="name" selected>Name</option>
-                      <option value="class">Class</option>
-                      <option value="buff">Raid Buff</option>
-                    </select>
-                  </label>
                 </div>
 
                 <div class="table-wrap picker-table-wrap">
                   <table class="data-table picker-table">
                     <thead>
                       <tr>
-                        <th>Name</th>
-                        <th>Class</th>
-                        <th>Raid Buffs</th>
-                        <th>Status</th>
+                        <th><button type="button" class="sort-btn picker-sort-btn" data-sort-key="name">Name</button></th>
+                        <th><button type="button" class="sort-btn picker-sort-btn" data-sort-key="class">Class</button></th>
+                        <th><button type="button" class="sort-btn picker-sort-btn" data-sort-key="buff">Raid Buffs</button></th>
+                        <th><button type="button" class="sort-btn picker-sort-btn" data-sort-key="status">Status</button></th>
                         <th>Add to Team</th>
                       </tr>
                     </thead>
@@ -527,6 +569,7 @@ function roleLabel(role: AssignedRole): string {
                             data-name={member.name.toLowerCase()}
                             data-class={member.class_name}
                             data-buff={primaryBuff}
+                            data-status={member.is_authenticated ? 'authenticated' : 'not-logged-in'}
                           >
                             <td>
                               <strong style={`color: ${classColor(member.class_name)}`}>{member.name}</strong>
@@ -548,6 +591,8 @@ function roleLabel(role: AssignedRole): string {
                             <td>
                               <form method="POST" action="/api/admin/roster-teams/add-member" class="inline-form">
                                 <input type="hidden" name="team_id" value={team.id} />
+                                <input type="hidden" name="open_team" value={team.id} />
+                                <input type="hidden" name="open_picker" value={team.id} />
                                 <input type="hidden" name="blizzard_char_id" value={member.blizzard_char_id} />
                                 <select name="assigned_role" aria-label={`Add role for ${member.name}`}>
                                   <option value="tank">Tank</option>
@@ -580,35 +625,237 @@ function roleLabel(role: AssignedRole): string {
 
 <script>
   // @ts-nocheck
+  const readPersistedState = (key) => {
+    try {
+      const raw = localStorage.getItem(key);
+      if (!raw) return null;
+      const parsed = JSON.parse(raw);
+      return parsed && typeof parsed === 'object' ? parsed : null;
+    } catch {
+      return null;
+    }
+  };
+
+  const writePersistedState = (key, state) => {
+    try {
+      localStorage.setItem(key, JSON.stringify(state));
+    } catch {
+      // Ignore quota/privacy errors and keep UI functional.
+    }
+  };
+
+  const assignedTables = [...document.querySelectorAll('.team-details .table-wrap')];
+
+  for (const assignedTableWrap of assignedTables) {
+    const searchInput = assignedTableWrap.querySelector('.assigned-search');
+    const classFilter = assignedTableWrap.querySelector('.assigned-class-filter');
+    const roleFilter = assignedTableWrap.querySelector('.assigned-role-filter');
+    const statusFilter = assignedTableWrap.querySelector('.assigned-status-filter');
+    const sortButtons = [...assignedTableWrap.querySelectorAll('.assigned-sort-btn')];
+    const tableBody = assignedTableWrap.querySelector('tbody');
+    const teamId = assignedTableWrap.getAttribute('data-team-id') || '';
+    const storageKey = teamId ? `hl:roster-teams:assigned:${teamId}` : '';
+
+    if (
+      !(searchInput instanceof HTMLInputElement) ||
+      !(classFilter instanceof HTMLSelectElement) ||
+      !(roleFilter instanceof HTMLSelectElement) ||
+      !(statusFilter instanceof HTMLSelectElement) ||
+      sortButtons.length === 0 ||
+      !(tableBody instanceof HTMLTableSectionElement)
+    ) {
+      continue;
+    }
+
+    const rows = [...tableBody.querySelectorAll('tr.assigned-member-row')];
+    const persistedState = storageKey ? readPersistedState(storageKey) : null;
+    let sortKey = 'name';
+    let sortDir = 'asc';
+
+    if (persistedState) {
+      if (typeof persistedState.search === 'string') searchInput.value = persistedState.search;
+      if (typeof persistedState.classFilter === 'string') classFilter.value = persistedState.classFilter;
+      if (typeof persistedState.roleFilter === 'string') roleFilter.value = persistedState.roleFilter;
+      if (typeof persistedState.statusFilter === 'string') statusFilter.value = persistedState.statusFilter;
+      if (typeof persistedState.sortKey === 'string') sortKey = persistedState.sortKey;
+      if (persistedState.sortDir === 'asc' || persistedState.sortDir === 'desc') sortDir = persistedState.sortDir;
+    }
+
+    /** @param {string} a @param {string} b */
+    const compareText = (a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' });
+
+    function updateAssignedSortIndicators() {
+      for (const button of sortButtons) {
+        button.removeAttribute('aria-sort');
+        if (button.getAttribute('data-sort-key') === sortKey) {
+          button.setAttribute('aria-sort', sortDir);
+        }
+      }
+    }
+
+    function applyAssignedFilterAndSort() {
+      const query = searchInput.value.trim().toLowerCase();
+      const classValue = classFilter.value;
+      const roleValue = roleFilter.value;
+      const statusValue = statusFilter.value;
+
+      const visibleRows = [];
+      const hiddenRows = [];
+
+      for (const row of rows) {
+        const rowName = row.getAttribute('data-name') || '';
+        const rowClass = row.getAttribute('data-class') || '';
+        const rowRole = row.getAttribute('data-role') || '';
+        const rowStatus = row.getAttribute('data-status') || '';
+
+        const matchesQuery = query.length === 0 || rowName.includes(query);
+        const matchesClass = classValue === 'all' || rowClass === classValue;
+        const matchesRole = roleValue === 'all' || rowRole === roleValue;
+        const matchesStatus = statusValue === 'all' || rowStatus === statusValue;
+
+        if (matchesQuery && matchesClass && matchesRole && matchesStatus) {
+          visibleRows.push(row);
+        } else {
+          hiddenRows.push(row);
+        }
+      }
+
+      visibleRows.sort((a, b) => {
+        const nameA = a.getAttribute('data-name') || '';
+        const nameB = b.getAttribute('data-name') || '';
+        const classA = a.getAttribute('data-class') || '';
+        const classB = b.getAttribute('data-class') || '';
+        const roleA = a.getAttribute('data-role') || '';
+        const roleB = b.getAttribute('data-role') || '';
+        const statusA = a.getAttribute('data-status') || '';
+        const statusB = b.getAttribute('data-status') || '';
+        const realmA = (a.cells[2]?.textContent ?? '').trim().toLowerCase();
+        const realmB = (b.cells[2]?.textContent ?? '').trim().toLowerCase();
+        let result = 0;
+
+        if (sortKey === 'class') {
+          result = compareText(classA, classB) || compareText(nameA, nameB);
+        } else if (sortKey === 'realm') {
+          result = compareText(realmA, realmB) || compareText(nameA, nameB);
+        } else if (sortKey === 'role') {
+          result = compareText(roleA, roleB) || compareText(nameA, nameB);
+        } else if (sortKey === 'status') {
+          result = compareText(statusA, statusB) || compareText(nameA, nameB);
+        } else {
+          result = compareText(nameA, nameB);
+        }
+
+        return sortDir === 'asc' ? result : -result;
+      });
+
+      for (const row of visibleRows) {
+        row.hidden = false;
+        tableBody.appendChild(row);
+      }
+      for (const row of hiddenRows) {
+        row.hidden = true;
+        tableBody.appendChild(row);
+      }
+    }
+
+    function persistAssignedState() {
+      if (!storageKey) return;
+      writePersistedState(storageKey, {
+        search: searchInput.value,
+        classFilter: classFilter.value,
+        roleFilter: roleFilter.value,
+        statusFilter: statusFilter.value,
+        sortKey,
+        sortDir,
+      });
+    }
+
+    searchInput.addEventListener('input', () => {
+      persistAssignedState();
+      applyAssignedFilterAndSort();
+    });
+    classFilter.addEventListener('change', () => {
+      persistAssignedState();
+      applyAssignedFilterAndSort();
+    });
+    roleFilter.addEventListener('change', () => {
+      persistAssignedState();
+      applyAssignedFilterAndSort();
+    });
+    statusFilter.addEventListener('change', () => {
+      persistAssignedState();
+      applyAssignedFilterAndSort();
+    });
+
+    for (const button of sortButtons) {
+      button.addEventListener('click', () => {
+        const key = button.getAttribute('data-sort-key') || 'name';
+        if (key === sortKey) {
+          sortDir = sortDir === 'asc' ? 'desc' : 'asc';
+        } else {
+          sortKey = key;
+          sortDir = 'asc';
+        }
+        updateAssignedSortIndicators();
+        persistAssignedState();
+        applyAssignedFilterAndSort();
+      });
+    }
+
+    updateAssignedSortIndicators();
+    applyAssignedFilterAndSort();
+  }
+
   const pickers = [...document.querySelectorAll('.member-picker')];
 
   for (const picker of pickers) {
     const searchInput = picker.querySelector('.picker-search');
     const classFilter = picker.querySelector('.picker-class-filter');
     const buffFilter = picker.querySelector('.picker-buff-filter');
-    const sortSelect = picker.querySelector('.picker-sort');
+    const sortButtons = [...picker.querySelectorAll('.picker-sort-btn')];
     const tableBody = picker.querySelector('tbody');
+    const teamId = picker.getAttribute('data-team-id') || '';
+    const storageKey = teamId ? `hl:roster-teams:picker:${teamId}` : '';
 
     if (
       !(searchInput instanceof HTMLInputElement) ||
       !(classFilter instanceof HTMLSelectElement) ||
       !(buffFilter instanceof HTMLSelectElement) ||
-      !(sortSelect instanceof HTMLSelectElement) ||
+      sortButtons.length === 0 ||
       !(tableBody instanceof HTMLTableSectionElement)
     ) {
       continue;
     }
 
     const rows = [...tableBody.querySelectorAll('tr.member-row')];
+    const persistedState = storageKey ? readPersistedState(storageKey) : null;
+    let sortKey = 'name';
+    let sortDir = 'asc';
+
+    if (persistedState) {
+      if (typeof persistedState.search === 'string') searchInput.value = persistedState.search;
+      if (typeof persistedState.classFilter === 'string') classFilter.value = persistedState.classFilter;
+      if (typeof persistedState.buffFilter === 'string') buffFilter.value = persistedState.buffFilter;
+      if (typeof persistedState.sortKey === 'string') sortKey = persistedState.sortKey;
+      if (persistedState.sortDir === 'asc' || persistedState.sortDir === 'desc') sortDir = persistedState.sortDir;
+    }
 
     /** @param {string} a @param {string} b */
     const compareText = (a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' });
+
+    function updatePickerSortIndicators() {
+      for (const button of sortButtons) {
+        button.removeAttribute('aria-sort');
+        if (button.getAttribute('data-sort-key') === sortKey) {
+          button.setAttribute('aria-sort', sortDir);
+        }
+      }
+    }
 
     function applyFilterAndSort() {
       const query = searchInput.value.trim().toLowerCase();
       const classValue = classFilter.value;
       const buffValue = buffFilter.value;
-      const sortKey = sortSelect.value;
 
       const visibleRows = [];
       const hiddenRows = [];
@@ -636,14 +883,21 @@ function roleLabel(role: AssignedRole): string {
         const classB = b.getAttribute('data-class') || '';
         const buffA = a.getAttribute('data-buff') || '';
         const buffB = b.getAttribute('data-buff') || '';
+        const statusA = a.getAttribute('data-status') || '';
+        const statusB = b.getAttribute('data-status') || '';
+        let result = 0;
 
         if (sortKey === 'class') {
-          return compareText(classA, classB) || compareText(nameA, nameB);
+          result = compareText(classA, classB) || compareText(nameA, nameB);
+        } else if (sortKey === 'buff') {
+          result = compareText(buffA, buffB) || compareText(nameA, nameB);
+        } else if (sortKey === 'status') {
+          result = compareText(statusA, statusB) || compareText(nameA, nameB);
+        } else {
+          result = compareText(nameA, nameB);
         }
-        if (sortKey === 'buff') {
-          return compareText(buffA, buffB) || compareText(nameA, nameB);
-        }
-        return compareText(nameA, nameB);
+
+        return sortDir === 'asc' ? result : -result;
       });
 
       for (const row of visibleRows) {
@@ -656,10 +910,46 @@ function roleLabel(role: AssignedRole): string {
       }
     }
 
-    searchInput.addEventListener('input', applyFilterAndSort);
-    classFilter.addEventListener('change', applyFilterAndSort);
-    buffFilter.addEventListener('change', applyFilterAndSort);
-    sortSelect.addEventListener('change', applyFilterAndSort);
+    function persistPickerState() {
+      if (!storageKey) return;
+      writePersistedState(storageKey, {
+        search: searchInput.value,
+        classFilter: classFilter.value,
+        buffFilter: buffFilter.value,
+        sortKey,
+        sortDir,
+      });
+    }
+
+    searchInput.addEventListener('input', () => {
+      persistPickerState();
+      applyFilterAndSort();
+    });
+    classFilter.addEventListener('change', () => {
+      persistPickerState();
+      applyFilterAndSort();
+    });
+    buffFilter.addEventListener('change', () => {
+      persistPickerState();
+      applyFilterAndSort();
+    });
+
+    for (const button of sortButtons) {
+      button.addEventListener('click', () => {
+        const key = button.getAttribute('data-sort-key') || 'name';
+        if (key === sortKey) {
+          sortDir = sortDir === 'asc' ? 'desc' : 'asc';
+        } else {
+          sortKey = key;
+          sortDir = 'asc';
+        }
+        updatePickerSortIndicators();
+        persistPickerState();
+        applyFilterAndSort();
+      });
+    }
+
+    updatePickerSortIndicators();
     applyFilterAndSort();
   }
 </script>
@@ -838,6 +1128,10 @@ function roleLabel(role: AssignedRole): string {
 
   .team-details-content .table-wrap {
     margin-top: 0.15rem;
+  }
+
+  .assigned-controls {
+    margin-bottom: 0.55rem;
   }
 
   .summary-grid {
@@ -1120,6 +1414,36 @@ function roleLabel(role: AssignedRole): string {
     font-size: 0.88rem;
   }
 
+  .sort-btn {
+    border: 0;
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    font-weight: 700;
+    padding: 0;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+    cursor: pointer;
+  }
+
+  .sort-btn::after {
+    content: '⇅';
+    color: var(--muted);
+    font-size: 0.72rem;
+    line-height: 1;
+  }
+
+  .sort-btn[aria-sort='asc']::after {
+    content: '▲';
+    color: var(--gold-bright);
+  }
+
+  .sort-btn[aria-sort='desc']::after {
+    content: '▼';
+    color: var(--gold-bright);
+  }
+
   .tiny-meta {
     color: var(--muted);
     font-size: 0.78rem;
@@ -1177,10 +1501,14 @@ function roleLabel(role: AssignedRole): string {
   }
 
   .picker-controls {
-    display: grid;
-    grid-template-columns: repeat(4, minmax(0, 1fr));
+    display: flex;
+    flex-wrap: nowrap;
+    align-items: end;
     gap: 0.6rem;
     padding: 0.8rem 0.9rem 0;
+    overflow-x: auto;
+    overflow-y: hidden;
+    scrollbar-width: thin;
   }
 
   .picker-controls label {
@@ -1189,6 +1517,13 @@ function roleLabel(role: AssignedRole): string {
     gap: 0.25rem;
     color: var(--muted);
     font-size: 0.8rem;
+    flex: 0 0 12rem;
+    min-width: 12rem;
+  }
+
+  .picker-controls label:first-child {
+    flex-basis: 15rem;
+    min-width: 15rem;
   }
 
   .picker-table-wrap {
@@ -1210,10 +1545,6 @@ function roleLabel(role: AssignedRole): string {
       grid-template-columns: repeat(2, minmax(0, 1fr));
     }
 
-    .picker-controls {
-      grid-template-columns: repeat(2, minmax(0, 1fr));
-    }
-
     .distribution-grid {
       grid-template-columns: 1fr;
     }
@@ -1221,10 +1552,6 @@ function roleLabel(role: AssignedRole): string {
 
   @media (max-width: 760px) {
     .role-strip {
-      grid-template-columns: 1fr;
-    }
-
-    .picker-controls {
       grid-template-columns: 1fr;
     }
 
