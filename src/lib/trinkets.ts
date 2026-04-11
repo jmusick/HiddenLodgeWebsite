@@ -183,6 +183,40 @@ function normalizeClassFilterValue(value: string): string {
   return value.trim().toLowerCase().replace(/[_-]+/g, ' ').replace(/\s+/g, ' ');
 }
 
+const FALLBACK_CLASS_SPECS: Record<string, { className: string; classSlug: string; specs: string[] }> = {
+  'death knight': { className: 'Death Knight', classSlug: 'DeathKnight', specs: ['Blood', 'Frost', 'Unholy'] },
+  'demon hunter': { className: 'Demon Hunter', classSlug: 'DemonHunter', specs: ['Havoc', 'Vengeance'] },
+  druid: { className: 'Druid', classSlug: 'Druid', specs: ['Balance', 'Feral', 'Guardian', 'Restoration'] },
+  evoker: { className: 'Evoker', classSlug: 'Evoker', specs: ['Augmentation', 'Devastation', 'Preservation'] },
+  hunter: { className: 'Hunter', classSlug: 'Hunter', specs: ['Beast Mastery', 'Marksmanship', 'Survival'] },
+  mage: { className: 'Mage', classSlug: 'Mage', specs: ['Arcane', 'Fire', 'Frost'] },
+  monk: { className: 'Monk', classSlug: 'Monk', specs: ['Brewmaster', 'Mistweaver', 'Windwalker'] },
+  paladin: { className: 'Paladin', classSlug: 'Paladin', specs: ['Holy', 'Protection', 'Retribution'] },
+  priest: { className: 'Priest', classSlug: 'Priest', specs: ['Discipline', 'Holy', 'Shadow'] },
+  rogue: { className: 'Rogue', classSlug: 'Rogue', specs: ['Assassination', 'Outlaw', 'Subtlety'] },
+  shaman: { className: 'Shaman', classSlug: 'Shaman', specs: ['Elemental', 'Enhancement', 'Restoration'] },
+  warlock: { className: 'Warlock', classSlug: 'Warlock', specs: ['Affliction', 'Demonology', 'Destruction'] },
+  warrior: { className: 'Warrior', classSlug: 'Warrior', specs: ['Arms', 'Fury', 'Protection'] },
+};
+
+function buildFallbackSpecsForClass(classFilter: string): WclSpecMeta[] {
+  const classEntry = FALLBACK_CLASS_SPECS[classFilter];
+  if (!classEntry) return [];
+
+  return classEntry.specs.map((specName) => {
+    const specSlug = specName.replace(/[^A-Za-z]/g, '');
+    const role = normalizeRoleForSpec(specSlug, specName);
+    return {
+      className: classEntry.className,
+      classSlug: classEntry.classSlug,
+      specName,
+      specSlug,
+      role,
+      metric: role === 'Healer' ? 'hps' : 'dps',
+    } satisfies WclSpecMeta;
+  });
+}
+
 async function mapWithConcurrency<T, R>(
   rows: T[],
   concurrency: number,
@@ -1130,6 +1164,10 @@ async function loadTrinketTierPageDataInternal(options?: {
       const classSlugNormalized = normalizeClassFilterValue(spec.classSlug);
       return classNameNormalized === normalizedClassFilter || classSlugNormalized === normalizedClassFilter;
     });
+
+    if (specs.length === 0) {
+      specs = buildFallbackSpecsForClass(normalizedClassFilter);
+    }
   }
 
   const preferredDifficultyIds = [16, 15, 14, 17];
