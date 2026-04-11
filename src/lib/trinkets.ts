@@ -15,6 +15,7 @@ const EXTENDED_RANKING_PAGES = 8;
 
 const WCL_QUERY_RETRY_DELAYS_MS = [600, 2000];
 const WCL_AGGREGATE_INTER_ENCOUNTER_SLEEP_MS = 300;
+const WCL_AGGREGATE_INTER_SPEC_SLEEP_MS = 1200;
 const WCL_MISSING_SPEC_RETRY_DELAY_MS = 1200;
 
 interface WclAuthConfig {
@@ -1143,8 +1144,16 @@ async function loadTrinketTierPageDataInternal(options?: {
   const useAggregateMode = selectedEncounter === null;
   const specConcurrency = useAggregateMode ? 1 : 3;
   const encounterConcurrency = useAggregateMode ? 1 : 2;
+  let aggregateSpecFetchCount = 0;
 
   const specResults = await mapWithConcurrency(specs, specConcurrency, async (spec) => {
+    if (useAggregateMode) {
+      if (aggregateSpecFetchCount > 0) {
+        await sleep(WCL_AGGREGATE_INTER_SPEC_SLEEP_MS);
+      }
+      aggregateSpecFetchCount += 1;
+    }
+
     try {
       const encounterIds = selectedEncounter
         ? [selectedEncounter.id]
