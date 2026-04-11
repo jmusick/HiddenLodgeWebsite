@@ -3,16 +3,17 @@ import { env } from 'cloudflare:workers';
 
 const WCL_OAUTH_URL = 'https://www.warcraftlogs.com/oauth/token';
 const WCL_GRAPHQL_URL = 'https://www.warcraftlogs.com/api/v2/client';
-const CACHE_KEY_PREFIX = 'trinket_tier_data_v8';
-const CACHE_SCHEMA_VERSION = 8;
+const CACHE_KEY_PREFIX = 'trinket_tier_data_v9';
+const CACHE_SCHEMA_VERSION = 9;
 const CACHE_TTL_SECONDS = 6 * 60 * 60;
 const ZONE_CACHE_TTL_SECONDS = 24 * 60 * 60;
-const ZONE_CACHE_KEY = 'trinket_resolved_zone_v1';
+const ZONE_CACHE_KEY = 'trinket_resolved_zone_v2';
 const MAX_PARSE_ROWS = 100;
 const MAX_PARSE_SCAN_ROWS = 300;
 const INITIAL_RANKING_PAGES = 3;
 const EXTENDED_RANKING_PAGES = 8;
-const MAX_AGGREGATE_ENCOUNTER_SAMPLES = 8;
+const MAX_AGGREGATE_ZONES = 4;
+const MAX_AGGREGATE_ENCOUNTERS_PER_ZONE = 3;
 
 const WCL_QUERY_RETRY_DELAYS_MS = [600, 2000];
 const WCL_AGGREGATE_INTER_ENCOUNTER_SLEEP_MS = 150;
@@ -125,7 +126,7 @@ interface WclCharacterRankingsPayload {
 }
 
 let wclTokenCache: { accessToken: string; expiresAt: number } | null = null;
-let wclZoneCache: { raidZone: WclZoneMeta | null; dungeonZone: WclZoneMeta | null; expiresAt: number } | null = null;
+let wclZoneCache: { raidZone: WclZoneMeta | null; allRaidZones: WclZoneMeta[]; dungeonZone: WclZoneMeta | null; expiresAt: number } | null = null;
 
 const inMemoryCache = new Map<string, { expiresAt: number; payload: TrinketTierPageData }>();
 
@@ -654,12 +655,12 @@ async function listCandidateZones(accessToken: string): Promise<WclZoneMeta[]> {
   return candidateZones;
 }
 
-async function resolveCurrentContentZones(accessToken: string, db: D1Database): Promise<{ raidZone: WclZoneMeta | null; dungeonZone: WclZoneMeta | null }> {
+async function resolveCurrentContentZones(accessToken: string, db: D1Database): Promise<{ raidZone: WclZoneMeta | null; allRaidZones: WclZoneMeta[]; dungeonZone: WclZoneMeta | null }> {
   const now = nowInSeconds();
 
   // In-process cache (hits within same isolate lifetime)
   if (wclZoneCache && wclZoneCache.expiresAt > now) {
-    return { raidZone: wclZoneCache.raidZone, dungeonZone: wclZoneCache.dungeonZone };
+    return { raidZone: wclZoneCache.raidZone, allRaidZones: wclZoneCache.allRaidZones, dungeonZone: wclZoneCache.dungeonZone };
   }
 
   // D1-backed cache (shared across isolates / warm requests)
@@ -670,9 +671,9 @@ async function resolveCurrentContentZones(accessToken: string, db: D1Database): 
       .first<SiteSettingRow>();
     const rawValue = (row?.value ?? '').trim();
     if (rawValue) {
-      const parsed = JSON.parse(rawValue) as { raidZone: WclZoneMeta | null; dungeonZone: WclZoneMeta | null; cachedAt: number } | null;
+      const parsed = JSON.parse(rawValue) as { raidZone: WclZoneMeta | null; allRaidZones?: WclZoneMeta[]; dungeonZone: WclZoneMeta | null; cachedAt: number } | null;
       if (parsed && now - parsed.cachedAt < ZONE_CACHE_TTL_SECONDS) {
-        const result = { raidZone: parsed.raidZone, dungeonZone: parsed.dungeonZone };
+        const result = { raidZone: parsed.raidZone, allRaidZones: parsed.allRaidZones ?? (parsed.raidZone ? [parsed.raidZone] : []), dungeonZone: parsed.dungeonZone };
         wclZoneCache = { ...result, expiresAt: parsed.cachedAt + ZONE_CACHE_TTL_SECONDS };
         return result;
       }
@@ -695,8 +696,13 @@ async function resolveCurrentContentZones(accessToken: string, db: D1Database): 
     return b.id - a.id;
   });
 
+  const allRaidZones = raidCandidates
+    .filter((zone) => zoneSelectionScore(zone) > 100)
+    .slice(0, MAX_AGGREGATE_ZONES);
+
   const result = {
-    raidZone: raidCandidates[0] ?? null,
+    raidZone: allRaidZones[0] ?? null,
+    allRaidZones,
     dungeonZone: dungeonCandidates[0] ?? null,
   };
 
@@ -1131,16 +1137,17 @@ async function loadTrinketTierPageDataInternal(options?: {
     return buildUnavailablePayload(authResult.error ?? 'Unable to authenticate to Warcraft Logs with configured credentials.');
   }
 
-  const { raidZone } = await resolveCurrentContentZones(accessToken, db);
+  const { raidZone, allRaidZones } = await resolveCurrentContentZones(accessToken, db);
   if (!raidZone || raidZone.encounters.length === 0) {
     return buildUnavailablePayload('Unable to resolve a current raid zone from Warcraft Logs.');
   }
 
   const zone = raidZone;
+  const allEncounters = uniqueBy(allRaidZones.flatMap((z) => z.encounters), (e) => String(e.id));
 
   const requestedEncounterId = toPositiveInt(options?.encounterId ?? null);
   const selectedEncounter = requestedEncounterId
-    ? zone.encounters.find((encounter) => encounter.id === requestedEncounterId) ?? null
+    ? allEncounters.find((encounter) => encounter.id === requestedEncounterId) ?? null
     : null;
 
   const normalizedClassFilterRaw = (options?.classNameFilter ?? '').trim();
@@ -1193,7 +1200,7 @@ async function loadTrinketTierPageDataInternal(options?: {
     try {
       const encounterIds = selectedEncounter
         ? [selectedEncounter.id]
-        : zone.encounters.slice(0, MAX_AGGREGATE_ENCOUNTER_SAMPLES).map((encounter) => encounter.id);
+        : allRaidZones.flatMap((z) => z.encounters.slice(0, MAX_AGGREGATE_ENCOUNTERS_PER_ZONE).map((e) => e.id));
 
       const rankingGroups: Awaited<ReturnType<typeof fetchTopRankingsForSpec>>[] = [];
       for (const encounterId of encounterIds) {
@@ -1260,8 +1267,11 @@ async function loadTrinketTierPageDataInternal(options?: {
       try {
         const encounterIds = selectedEncounter
           ? [selectedEncounter.id]
-          : zone.encounters.slice(0, MAX_AGGREGATE_ENCOUNTER_SAMPLES).map((encounter) => encounter.id);
-        const retryEncounterIds = useAggregateMode ? encounterIds.slice(0, 3) : encounterIds;
+          : allRaidZones.flatMap((z) => z.encounters.slice(0, MAX_AGGREGATE_ENCOUNTERS_PER_ZONE).map((e) => e.id));
+        // For retry, sample the first encounter from each zone to cover all raids
+        const retryEncounterIds = useAggregateMode
+          ? allRaidZones.map((z) => z.encounters[0]).filter((e): e is { id: number; name: string } => e !== undefined).map((e) => e.id)
+          : encounterIds;
 
         const rankingGroups: Awaited<ReturnType<typeof fetchTopRankingsForSpec>>[] = [];
         for (const encounterId of retryEncounterIds) {
@@ -1299,7 +1309,7 @@ async function loadTrinketTierPageDataInternal(options?: {
     cacheSchemaVersion: CACHE_SCHEMA_VERSION,
     generatedAtEpoch: nowInSeconds(),
     zoneId: zone.id,
-    zoneName: zone.name,
+    zoneName: allRaidZones.length > 1 ? allRaidZones.map((z) => z.name).join(' / ') : zone.name,
     selectedView: selectedEncounter ? 'encounter' : 'raid-all',
     encounterId: selectedEncounter?.id ?? null,
     encounterName: selectedEncounter?.name ?? 'All Raid Bosses',
@@ -1307,7 +1317,7 @@ async function loadTrinketTierPageDataInternal(options?: {
     difficultyName: difficulty?.name ?? null,
     partitionId: null,
     partitionName: null,
-    availableEncounters: raidZone.encounters,
+    availableEncounters: allEncounters,
     specs: specResults,
     warning: unresolvedSpecCount > 0 ? `No ranking data was returned for ${unresolvedSpecCount} specs in this snapshot.` : null,
   };
