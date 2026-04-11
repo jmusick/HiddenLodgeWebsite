@@ -146,12 +146,18 @@ const ATTENDANCE_RAID_NIGHT_TIME_ZONE = 'America/New_York';
 const ATTENDANCE_WCL_BACKOFF_KEY = 'attendance_wcl_backoff_until';
 const ATTENDANCE_WCL_RATE_LIMIT_BACKOFF_SECONDS = 15 * 60;
 const ATTENDANCE_WCL_MAX_BACKOFF_SECONDS = 2 * 60 * 60;
+const MIDNIGHT_S1_RAID_NAMES = new Set([
+  'the voidspire',
+  'the dreamrift',
+  "march on quel'danas",
+]);
 
 const WCL_OAUTH_URL = 'https://www.warcraftlogs.com/oauth/token';
 const WCL_GRAPHQL_URL = 'https://www.warcraftlogs.com/api/v2/client';
 const WCL_GUILD_ID = 781707;
 
 let wclTokenCache: { accessToken: string; expiresAt: number } | null = null;
+let midnightS1EncounterIdsCache: Set<number> | null = null;
 const attendanceNightFormatter = new Intl.DateTimeFormat('en-CA', {
   timeZone: ATTENDANCE_RAID_NIGHT_TIME_ZONE,
   year: 'numeric',
@@ -534,6 +540,84 @@ async function listCandidateReportsForOccurrence(
     });
 }
 
+async function getMidnightS1EncounterIds(accessToken: string): Promise<Set<number>> {
+  if (midnightS1EncounterIdsCache) {
+    return midnightS1EncounterIdsCache;
+  }
+
+  const payload = await queryWcl<{
+    worldData?: {
+      expansions?: Array<{ id?: number }>;
+    };
+  }>(
+    accessToken,
+    `
+      query AttendanceExpansions {
+        worldData {
+          expansions {
+            id
+          }
+        }
+      }
+    `,
+    {}
+  );
+
+  const expansionIds = (payload?.worldData?.expansions ?? [])
+    .map((row) => Number(row.id ?? 0))
+    .filter((id) => Number.isFinite(id) && id > 0)
+    .sort((a, b) => b - a);
+
+  const preferredExpansionIds = expansionIds.length > 0 ? [expansionIds[0], null] : [null];
+  const encounterIds = new Set<number>();
+
+  for (const expansionId of preferredExpansionIds) {
+    const zonesPayload = await queryWcl<{
+      worldData?: {
+        zones?: Array<{
+          name?: string;
+          encounters?: Array<{ id?: number }>;
+        }>;
+      };
+    }>(
+      accessToken,
+      `
+        query AttendanceZones($expansionId: Int) {
+          worldData {
+            zones(expansion_id: $expansionId) {
+              name
+              encounters {
+                id
+              }
+            }
+          }
+        }
+      `,
+      { expansionId }
+    );
+
+    const zones = zonesPayload?.worldData?.zones ?? [];
+    for (const zone of zones) {
+      const zoneName = (zone.name ?? '').trim().toLowerCase();
+      if (!MIDNIGHT_S1_RAID_NAMES.has(zoneName)) continue;
+
+      for (const encounter of zone.encounters ?? []) {
+        const encounterId = Number(encounter.id ?? 0);
+        if (Number.isFinite(encounterId) && encounterId > 0) {
+          encounterIds.add(Math.floor(encounterId));
+        }
+      }
+    }
+
+    if (encounterIds.size > 0) {
+      break;
+    }
+  }
+
+  midnightS1EncounterIdsCache = encounterIds;
+  return encounterIds;
+}
+
 async function fetchFightParticipantsByCharId(
   accessToken: string,
   reportCode: string,
@@ -596,6 +680,7 @@ async function fetchFightParticipantsByCharId(
 
   const reportStartMs = Number(report.startTime ?? 0);
   const reportEndMs = Number(report.endTime ?? 0);
+  const midnightS1EncounterIds = await getMidnightS1EncounterIds(accessToken);
   const fights = (report.fights ?? []).filter((fight) => {
     const fightId = Number(fight.id ?? 0);
     const encounterId = Number(fight.encounterID ?? 0);
@@ -636,6 +721,18 @@ async function fetchFightParticipantsByCharId(
   }
 
   const fightIds = new Set(fights.map((fight) => Number(fight.id)));
+  const deathScopedFightIds = new Set(
+    fights
+      .filter((fight) => {
+        const encounterId = Number(fight.encounterID ?? 0);
+        if (!Number.isFinite(encounterId) || encounterId <= 0) return false;
+        // Fail open if encounter metadata is unavailable.
+        if (midnightS1EncounterIds.size === 0) return true;
+        return midnightS1EncounterIds.has(Math.floor(encounterId));
+      })
+      .map((fight) => Number(fight.id ?? 0))
+      .filter((fightId) => Number.isFinite(fightId) && fightId > 0)
+  );
   const encounterByFightId = new Map<number, number>(
     fights.map((fight) => [Number(fight.id), Number(fight.encounterID ?? 0)])
   );
@@ -713,6 +810,8 @@ async function fetchFightParticipantsByCharId(
         participantsByFightChar.set(fightId, fightCharSet);
       }
       fightCharSet.add(sourceCharId);
+
+      if (!deathScopedFightIds.has(fightId)) continue;
     }
 
     const nextPage = Number(page?.reportData?.report?.events?.nextPageTimestamp ?? 0);
@@ -760,7 +859,7 @@ async function fetchFightParticipantsByCharId(
     const events = page?.reportData?.report?.events?.data ?? [];
     for (const event of events) {
       const fightId = Number(event.fight ?? 0);
-      if (!fightIds.has(fightId)) continue;
+      if (!deathScopedFightIds.has(fightId)) continue;
 
       const targetActorId = Number(event.targetID ?? 0);
       const targetCharId = actorCharIdById.get(targetActorId);
@@ -821,7 +920,8 @@ async function fetchFightParticipantsByCharId(
     }
   }
 
-  for (const participants of participantsByFightChar.values()) {
+  for (const [fightId, participants] of participantsByFightChar.entries()) {
+    if (!deathScopedFightIds.has(fightId)) continue;
     for (const blizzardCharId of participants) {
       const aggregate = deathStatsByCharIdMutable.get(blizzardCharId) ?? createAttendanceDeathAggregate();
       aggregate.fightsPresent += 1;
@@ -845,12 +945,14 @@ async function fetchFightParticipantsByCharId(
       }
     }
 
-    for (const blizzardCharId of reportCharIds) {
-      const aggregate = deathStatsByCharIdMutable.get(blizzardCharId) ?? createAttendanceDeathAggregate();
-      if (aggregate.fightsPresent <= 0) {
-        aggregate.fightsPresent = 1;
+    if (deathScopedFightIds.size > 0) {
+      for (const blizzardCharId of reportCharIds) {
+        const aggregate = deathStatsByCharIdMutable.get(blizzardCharId) ?? createAttendanceDeathAggregate();
+        if (aggregate.fightsPresent <= 0) {
+          aggregate.fightsPresent = 1;
+        }
+        deathStatsByCharIdMutable.set(blizzardCharId, aggregate);
       }
-      deathStatsByCharIdMutable.set(blizzardCharId, aggregate);
     }
   }
 

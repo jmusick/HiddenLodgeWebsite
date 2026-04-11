@@ -43,7 +43,7 @@ const statusParam = new URL(Astro.request.url).searchParams.get('status');
           <span class="scope-badge">Season: Midnight S1</span>
         </div>
         <p class="page-desc">
-          Officer-facing review tools for raid performance signals. The first metric tracks excessive deaths from Thursday and Friday primary main raids by weighting early deaths in each logged boss pull.
+          Officer-facing review tools for raid performance signals. The first metric tracks excessive deaths from Thursday and Friday primary main raids by weighting early deaths in each logged boss pull from The Voidspire, The Dreamrift, and March on Quel'Danas.
         </p>
       </div>
       <div class="header-actions">
@@ -90,7 +90,7 @@ const statusParam = new URL(Astro.request.url).searchParams.get('status');
         <div>
           <h2><Icon name="lucide:file-search" aria-hidden="true" />Included Logs</h2>
           <p class="section-copy">
-            These are the primary Thu/Fri logs currently in scope for this report. Only rows marked Synced are included in excessive-death calculations.
+            These are the primary Thu/Fri logs currently in scope for this report. Excessive-death calculations only include synced pulls from The Voidspire, The Dreamrift, and March on Quel'Danas.
           </p>
         </div>
       </div>
