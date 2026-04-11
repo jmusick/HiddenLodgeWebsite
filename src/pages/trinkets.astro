@@ -22,7 +22,7 @@ const requestedEncounter = requestedEncounterParam && requestedEncounterParam !=
 const data = await loadTrinketTierPageData({
   db: env.DB,
   encounterId: requestedEncounter,
-  classNameFilter: requestedClass || '__none__',
+  classNameFilter: null,
 });
 
 const generatedLabel = new Intl.DateTimeFormat('en-US', {
