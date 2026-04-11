@@ -14,9 +14,9 @@ const INITIAL_RANKING_PAGES = 3;
 const EXTENDED_RANKING_PAGES = 8;
 
 const WCL_QUERY_RETRY_DELAYS_MS = [600, 2000];
+const WCL_AGGREGATE_INTER_ENCOUNTER_SLEEP_MS = 150;
 const WCL_AGGREGATE_INTER_SPEC_SLEEP_MS = 1200;
 const WCL_MISSING_SPEC_RETRY_DELAY_MS = 1200;
-const WCL_AGGREGATE_ENCOUNTER_CONCURRENCY = 1;
 
 interface WclAuthConfig {
   clientId: string;
@@ -1194,13 +1194,12 @@ async function loadTrinketTierPageDataInternal(options?: {
         ? [selectedEncounter.id]
         : zone.encounters.map((encounter) => encounter.id);
 
-      const rankingGroups = useAggregateMode
-        ? await mapWithConcurrency(encounterIds, WCL_AGGREGATE_ENCOUNTER_CONCURRENCY, (encounterId) =>
-            fetchTopRankingsForSpec(accessToken, encounterId, difficulty?.id ?? null, null, spec, 1)
-          )
-        : await mapWithConcurrency(encounterIds, 1, (encounterId) =>
-            fetchTopRankingsForSpec(accessToken, encounterId, difficulty?.id ?? null, null, spec, INITIAL_RANKING_PAGES)
-          );
+      const rankingGroups: Awaited<ReturnType<typeof fetchTopRankingsForSpec>>[] = [];
+      for (const encounterId of encounterIds) {
+        if (rankingGroups.length > 0 && useAggregateMode) await sleep(WCL_AGGREGATE_INTER_ENCOUNTER_SLEEP_MS);
+        const pageLimit = useAggregateMode ? 1 : INITIAL_RANKING_PAGES;
+        rankingGroups.push(await fetchTopRankingsForSpec(accessToken, encounterId, difficulty?.id ?? null, null, spec, pageLimit));
+      }
 
       const uniqueRankings = uniqueBy(rankingGroups.flat(), (row) => {
         const report = String(row.reportID ?? row.reportCode ?? row.report ?? 'unknown');
@@ -1263,9 +1262,11 @@ async function loadTrinketTierPageDataInternal(options?: {
           : zone.encounters.map((encounter) => encounter.id);
         const retryEncounterIds = useAggregateMode ? encounterIds.slice(0, 3) : encounterIds;
 
-        const rankingGroups = await mapWithConcurrency(retryEncounterIds, WCL_AGGREGATE_ENCOUNTER_CONCURRENCY, (encounterId) =>
-          fetchTopRankingsForSpec(accessToken, encounterId, difficulty?.id ?? null, null, spec, 1)
-        );
+        const rankingGroups: Awaited<ReturnType<typeof fetchTopRankingsForSpec>>[] = [];
+        for (const encounterId of retryEncounterIds) {
+          if (rankingGroups.length > 0) await sleep(WCL_AGGREGATE_INTER_ENCOUNTER_SLEEP_MS);
+          rankingGroups.push(await fetchTopRankingsForSpec(accessToken, encounterId, difficulty?.id ?? null, null, spec, 1));
+        }
 
         const uniqueRankings = uniqueBy(rankingGroups.flat(), (row) => {
           const report = String(row.reportID ?? row.reportCode ?? row.report ?? 'unknown');
