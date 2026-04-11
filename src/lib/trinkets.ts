@@ -1263,9 +1263,10 @@ async function loadTrinketTierPageDataInternal(options?: {
         const encounterIds = selectedEncounter
           ? [selectedEncounter.id]
           : zone.encounters.map((encounter) => encounter.id);
+        const retryEncounterIds = useAggregateMode ? encounterIds.slice(0, 3) : encounterIds;
 
         const rankingGroups: Awaited<ReturnType<typeof fetchTopRankingsForSpec>>[] = [];
-        for (const encounterId of encounterIds) {
+        for (const encounterId of retryEncounterIds) {
           if (rankingGroups.length > 0) await sleep(WCL_AGGREGATE_INTER_ENCOUNTER_SLEEP_MS);
           rankingGroups.push(await fetchTopRankingsForSpec(accessToken, encounterId, difficulty?.id ?? null, null, spec, 1));
         }
