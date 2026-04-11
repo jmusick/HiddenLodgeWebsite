@@ -703,7 +703,6 @@ async function fetchFightParticipantsByCharId(
   const actorOwnerKeyById = new Map<number, string>();
   const actorCharIdById = new Map<number, number>();
   const reportOwnerKeys = new Set<string>();
-  const reportCharIds = new Set<number>();
   for (const actor of report.masterData?.actors ?? []) {
     const actorId = Number(actor.id ?? 0);
     const name = normalizeName(actor.name);
@@ -717,7 +716,6 @@ async function fetchFightParticipantsByCharId(
     actorOwnerKeyById.set(actorId, ownerKey);
     actorCharIdById.set(actorId, charId);
     reportOwnerKeys.add(ownerKey);
-    reportCharIds.add(charId);
   }
 
   const fightIds = new Set(fights.map((fight) => Number(fight.id)));
@@ -726,8 +724,8 @@ async function fetchFightParticipantsByCharId(
       .filter((fight) => {
         const encounterId = Number(fight.encounterID ?? 0);
         if (!Number.isFinite(encounterId) || encounterId <= 0) return false;
-        // Fail open if encounter metadata is unavailable.
-        if (midnightS1EncounterIds.size === 0) return true;
+        // Fail closed: if raid encounter metadata is unavailable, do not count deaths for this report.
+        if (midnightS1EncounterIds.size === 0) return false;
         return midnightS1EncounterIds.has(Math.floor(encounterId));
       })
       .map((fight) => Number(fight.id ?? 0))
@@ -810,8 +808,6 @@ async function fetchFightParticipantsByCharId(
         participantsByFightChar.set(fightId, fightCharSet);
       }
       fightCharSet.add(sourceCharId);
-
-      if (!deathScopedFightIds.has(fightId)) continue;
     }
 
     const nextPage = Number(page?.reportData?.report?.events?.nextPageTimestamp ?? 0);
@@ -945,15 +941,6 @@ async function fetchFightParticipantsByCharId(
       }
     }
 
-    if (deathScopedFightIds.size > 0) {
-      for (const blizzardCharId of reportCharIds) {
-        const aggregate = deathStatsByCharIdMutable.get(blizzardCharId) ?? createAttendanceDeathAggregate();
-        if (aggregate.fightsPresent <= 0) {
-          aggregate.fightsPresent = 1;
-        }
-        deathStatsByCharIdMutable.set(blizzardCharId, aggregate);
-      }
-    }
   }
 
   const bossesByCharId = new Map<number, number>();
