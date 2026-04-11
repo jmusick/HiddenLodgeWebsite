@@ -12,6 +12,7 @@ const MAX_PARSE_ROWS = 100;
 const MAX_PARSE_SCAN_ROWS = 300;
 const INITIAL_RANKING_PAGES = 3;
 const EXTENDED_RANKING_PAGES = 8;
+const MAX_AGGREGATE_ENCOUNTER_SAMPLES = 4;
 
 const WCL_QUERY_RETRY_DELAYS_MS = [600, 2000];
 const WCL_AGGREGATE_INTER_ENCOUNTER_SLEEP_MS = 150;
@@ -1192,7 +1193,7 @@ async function loadTrinketTierPageDataInternal(options?: {
     try {
       const encounterIds = selectedEncounter
         ? [selectedEncounter.id]
-        : zone.encounters.map((encounter) => encounter.id);
+        : zone.encounters.slice(0, MAX_AGGREGATE_ENCOUNTER_SAMPLES).map((encounter) => encounter.id);
 
       const rankingGroups: Awaited<ReturnType<typeof fetchTopRankingsForSpec>>[] = [];
       for (const encounterId of encounterIds) {
@@ -1259,7 +1260,7 @@ async function loadTrinketTierPageDataInternal(options?: {
       try {
         const encounterIds = selectedEncounter
           ? [selectedEncounter.id]
-          : zone.encounters.map((encounter) => encounter.id);
+          : zone.encounters.slice(0, MAX_AGGREGATE_ENCOUNTER_SAMPLES).map((encounter) => encounter.id);
         const retryEncounterIds = useAggregateMode ? encounterIds.slice(0, 3) : encounterIds;
 
         const rankingGroups: Awaited<ReturnType<typeof fetchTopRankingsForSpec>>[] = [];
