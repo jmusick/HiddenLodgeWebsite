@@ -15,6 +15,7 @@ const EXTENDED_RANKING_PAGES = 8;
 
 const WCL_QUERY_RETRY_DELAYS_MS = [600, 2000];
 const WCL_AGGREGATE_INTER_ENCOUNTER_SLEEP_MS = 300;
+const WCL_MISSING_SPEC_RETRY_DELAY_MS = 1200;
 
 interface WclAuthConfig {
   clientId: string;
@@ -1197,6 +1198,57 @@ async function loadTrinketTierPageDataInternal(options?: {
     }
   });
 
+  if (useAggregateMode) {
+    for (let index = 0; index < specResults.length; index += 1) {
+      const current = specResults[index];
+      if (current.parseCount > 0) continue;
+
+      const spec = specs.find(
+        (candidate) =>
+          candidate.classSlug === current.classSlug &&
+          candidate.specSlug === current.specSlug
+      );
+      if (!spec) continue;
+
+      await sleep(WCL_MISSING_SPEC_RETRY_DELAY_MS);
+
+      try {
+        const encounterIds = selectedEncounter
+          ? [selectedEncounter.id]
+          : zone.encounters.map((encounter) => encounter.id);
+
+        const rankingGroups: Awaited<ReturnType<typeof fetchTopRankingsForSpec>>[] = [];
+        for (const encounterId of encounterIds) {
+          if (rankingGroups.length > 0) await sleep(WCL_AGGREGATE_INTER_ENCOUNTER_SLEEP_MS);
+          rankingGroups.push(await fetchTopRankingsForSpec(accessToken, encounterId, difficulty?.id ?? null, null, spec, 1));
+        }
+
+        const uniqueRankings = uniqueBy(rankingGroups.flat(), (row) => {
+          const report = String(row.reportID ?? row.reportCode ?? row.report ?? 'unknown');
+          const fightId = Number(row.fightID ?? 0);
+          const startTime = Number(row.startTime ?? 0);
+          return `${report}:${fightId}:${startTime}:${Math.round(toRankingAmount(row.amount ?? row.total))}`;
+        });
+
+        const rankingsWithGear = uniqueRankings.filter((row) => hasUsableGearData(row));
+        const rankingPool = rankingsWithGear.length > 0 ? rankingsWithGear : uniqueRankings;
+        const filteredRankings = trimToTopRankings(rankingPool, MAX_PARSE_ROWS);
+        if (filteredRankings.length === 0) continue;
+
+        const tierData = buildSpecTierRows(filteredRankings);
+        specResults[index] = {
+          ...current,
+          parseCount: tierData.parseCount,
+          trinketRows: tierData.trinketRows,
+        };
+      } catch {
+        // Keep original zero-parse result if retry also fails.
+      }
+    }
+  }
+
+  const unresolvedSpecCount = specResults.filter((spec) => spec.parseCount === 0).length;
+
   const payload: TrinketTierPageData = {
     cacheSchemaVersion: CACHE_SCHEMA_VERSION,
     generatedAtEpoch: nowInSeconds(),
@@ -1211,13 +1263,10 @@ async function loadTrinketTierPageDataInternal(options?: {
     partitionName: null,
     availableEncounters: raidZone.encounters,
     specs: specResults,
-    warning:
-      failures.length > 0
-        ? `No ranking data was returned for ${failures.length} specs in this snapshot.`
-        : null,
+    warning: unresolvedSpecCount > 0 ? `No ranking data was returned for ${unresolvedSpecCount} specs in this snapshot.` : null,
   };
 
-  const hasRecoverablePartialFailure = failures.length > 0 && !suppressSpecs;
+  const hasRecoverablePartialFailure = unresolvedSpecCount > 0 && !suppressSpecs;
   if (!hasRecoverablePartialFailure) {
     await writeCached(db, payload, classFilterCacheKey);
   }
