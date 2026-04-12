@@ -1248,7 +1248,20 @@ export async function getDesktopDroptimizerUpgrades(
   if (runIds.length === 0) return [];
 
   const placeholders = runIds.map(() => '?').join(', ');
-  const rowsResult = await db
+
+  type ScoreRow = {
+    blizzard_char_id: number;
+    name: string;
+    realm: string;
+    item_id: number;
+    delta_dps: number;
+    pct_gain: number | null;
+    difficulty: string;
+    updated_at: number;
+  };
+
+  // Primary source: per-character per-item scores (populated by LodgeSim v1.4.0+).
+  const itemScoreRowsResult = await db
     .prepare(
       `SELECT
          sis.blizzard_char_id,
@@ -1267,19 +1280,44 @@ export async function getDesktopDroptimizerUpgrades(
        ORDER BY sr.updated_at DESC, sis.delta_dps DESC`
     )
     .bind(...runIds)
-    .all<{
-      blizzard_char_id: number;
-      name: string;
-      realm: string;
-      item_id: number;
-      delta_dps: number;
-      pct_gain: number | null;
-      difficulty: string;
-      updated_at: number;
-    }>();
+    .all<ScoreRow>();
+
+  // Fallback: when sim_item_scores is empty for the selected runs (older LodgeSim
+  // versions did not submit item_scores), use sim_item_winners which stores the
+  // per-item best winner. This gives one entry per item rather than per character,
+  // but avoids a completely empty droptimizer sync until a fresh run populates scores.
+  const useWinnerFallback = (itemScoreRowsResult.results ?? []).length === 0;
+
+  let rawRows: ScoreRow[];
+  if (useWinnerFallback) {
+    const winnerRowsResult = await db
+      .prepare(
+        `SELECT
+           siw.best_blizzard_char_id AS blizzard_char_id,
+           c.name,
+           c.realm,
+           siw.item_id,
+           siw.delta_dps,
+           siw.pct_gain,
+           sr.difficulty,
+           sr.updated_at
+         FROM sim_item_winners siw
+         JOIN sim_runs sr ON sr.id = siw.sim_run_id
+         JOIN roster_members_cache c ON c.blizzard_char_id = siw.best_blizzard_char_id
+         WHERE siw.sim_run_id IN (${placeholders})
+           AND siw.item_id IS NOT NULL
+           AND siw.best_blizzard_char_id IS NOT NULL
+         ORDER BY sr.updated_at DESC, siw.delta_dps DESC`
+      )
+      .bind(...runIds)
+      .all<ScoreRow>();
+    rawRows = winnerRowsResult.results ?? [];
+  } else {
+    rawRows = itemScoreRowsResult.results ?? [];
+  }
 
   const deduped = new Map<string, DesktopDroptimizerUpgradeEntry>();
-  for (const row of rowsResult.results ?? []) {
+  for (const row of rawRows) {
     const difficulty = normalizeDifficulty(row.difficulty);
     if (difficulty === 'unknown') continue;
     const itemId = Number(row.item_id ?? NaN);
