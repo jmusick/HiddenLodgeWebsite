@@ -68,7 +68,9 @@ const parsedDifficulty = Number.parseInt(rawDiff, 10);
 const difficultyFilter = RAID_DIFFICULTIES.has(parsedDifficulty) ? parsedDifficulty : 16;
 const hasDifficultyFilter = true;
 
-const whereParts: string[] = [];
+const whereParts: string[] = [
+	'owner_blizzard_char_id IN (SELECT blizzard_char_id FROM roster_members_cache)',
+];
 const binds: (string | number)[] = [];
 
 if (rawQuery) {
