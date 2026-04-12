@@ -10,6 +10,8 @@ if (!user) {
 	return Astro.redirect('/auth/login');
 }
 
+const isOfficer = Astro.locals.isAdmin;
+
 interface LootHistoryRow {
 	id: number;
 	owner_blizzard_char_id: number | null;
@@ -25,6 +27,8 @@ interface LootHistoryRow {
 	awarded_date: string | null;
 	awarded_time: string | null;
 	awarded_at_epoch: number | null;
+	is_excluded: number;
+	exclude_note: string | null;
 }
 
 interface UserSettingsRow {
@@ -70,6 +74,7 @@ const hasDifficultyFilter = true;
 
 const whereParts: string[] = [
 	'owner_blizzard_char_id IN (SELECT blizzard_char_id FROM roster_members_cache)',
+	'is_excluded = 0',
 ];
 const binds: (string | number)[] = [];
 
@@ -120,7 +125,9 @@ const rowsStmt = env.DB.prepare(
 		item_name,
 		awarded_date,
 		awarded_time,
-		awarded_at_epoch
+		awarded_at_epoch,
+		is_excluded,
+		exclude_note
 	 FROM loot_history
 	 ${whereSql}
 	 ORDER BY COALESCE(awarded_at_epoch, 0) DESC, id DESC
@@ -460,11 +467,12 @@ function comparisonTotalFor(memberId: number): number {
 								<th>Instance</th>
 								<th>Diff</th>
 								<th>Response</th>
+								{isOfficer && <th></th>}
 							</tr>
 						</thead>
 						<tbody>
 							{rows.map((row) => (
-								<tr>
+								<tr data-loot-id={row.id}>
 									<td>{formatAwardedAt(row)}</td>
 									<td>
 										{row.resolved_owner_blizzard_char_id ? (
@@ -486,6 +494,16 @@ function comparisonTotalFor(memberId: number): number {
 									<td>{row.instance_name ?? '-'}</td>
 									<td>{difficultyLabel(row.difficulty_id)}</td>
 									<td><span class={responseClass(row.response_text)}>{row.response_text ?? '-'}</span></td>
+									{isOfficer && (
+										<td class="action-cell">
+											<button
+												type="button"
+												class="btn-exclude"
+												data-entry-id={row.id}
+												aria-label={`Exclude loot entry for ${row.owner_name}`}
+											>Exclude</button>
+										</td>
+									)}
 								</tr>
 							))}
 						</tbody>
@@ -502,6 +520,24 @@ function comparisonTotalFor(memberId: number): number {
 			</nav>
 		)}
 	</div>
+
+	{isOfficer && (
+		<dialog id="exclude-dialog" aria-labelledby="exclude-dialog-title">
+			<form id="exclude-form" method="dialog">
+				<h2 id="exclude-dialog-title">Exclude Loot Entry</h2>
+				<p class="exclude-warning">This will permanently hide the entry from loot history. Provide a reason so other officers understand why.</p>
+				<label>
+					<span>Reason <span class="required-mark" aria-hidden="true">*</span></span>
+					<textarea id="exclude-note" name="note" rows="4" maxlength="1000" placeholder="Why is this entry being excluded?"></textarea>
+				</label>
+				<div class="exclude-error" id="exclude-error" role="alert" aria-live="polite"></div>
+				<div class="exclude-actions">
+					<button type="button" id="exclude-cancel">Cancel</button>
+					<button type="button" class="btn-confirm-exclude" id="exclude-submit">Confirm Exclude</button>
+				</div>
+			</form>
+		</dialog>
+	)}
 </Layout>
 
 <script is:inline>
@@ -658,6 +694,92 @@ function comparisonTotalFor(memberId: number): number {
 				button.classList.toggle('is-desc', nextDirection === 'desc');
 			});
 		}
+	})();
+
+	(() => {
+		const dialog = document.getElementById('exclude-dialog');
+		if (!(dialog instanceof HTMLDialogElement)) return;
+
+		const noteInput = document.getElementById('exclude-note');
+		const errorEl = document.getElementById('exclude-error');
+		const submitBtn = document.getElementById('exclude-submit');
+		const cancelBtn = document.getElementById('exclude-cancel');
+
+		let pendingEntryId = null;
+		let pendingRow = null;
+
+		function showError(msg) {
+			if (errorEl) errorEl.textContent = msg;
+		}
+
+		function clearError() {
+			if (errorEl) errorEl.textContent = '';
+		}
+
+		function openDialog(entryId, row) {
+			pendingEntryId = entryId;
+			pendingRow = row;
+			if (noteInput instanceof HTMLTextAreaElement) noteInput.value = '';
+			clearError();
+			dialog.showModal();
+			noteInput?.focus();
+		}
+
+		cancelBtn?.addEventListener('click', () => {
+			dialog.close();
+		});
+
+		dialog.addEventListener('close', () => {
+			pendingEntryId = null;
+			pendingRow = null;
+			clearError();
+		});
+
+		submitBtn?.addEventListener('click', async () => {
+			const note = noteInput instanceof HTMLTextAreaElement ? noteInput.value.trim() : '';
+			if (!note) {
+				showError('A reason is required.');
+				noteInput?.focus();
+				return;
+			}
+
+			submitBtn.disabled = true;
+			submitBtn.textContent = 'Excluding…';
+			clearError();
+
+			try {
+				const res = await fetch('/api/admin/loot-history/exclude', {
+					method: 'POST',
+					headers: { 'Content-Type': 'application/json' },
+					body: JSON.stringify({ id: pendingEntryId, note }),
+				});
+
+				if (res.ok) {
+					dialog.close();
+					if (pendingRow instanceof HTMLTableRowElement) {
+						pendingRow.remove();
+					}
+				} else {
+					const data = await res.json().catch(() => ({}));
+					showError(data.error ?? 'Something went wrong. Please try again.');
+				}
+			} catch {
+				showError('Network error. Please try again.');
+			} finally {
+				submitBtn.disabled = false;
+				submitBtn.textContent = 'Confirm Exclude';
+			}
+		});
+
+		document.addEventListener('click', (e) => {
+			const btn = e.target?.closest?.('.btn-exclude');
+			if (!btn) return;
+			const entryId = Number.parseInt(btn.dataset.entryId ?? '', 10);
+			const row = btn.closest('tr');
+			if (Number.isFinite(entryId) && entryId > 0) {
+				openDialog(entryId, row);
+			}
+		});
 	})();
 </script>
 
@@ -1064,5 +1186,133 @@ function comparisonTotalFor(memberId: number): number {
 		.comparison .actions {
 			justify-content: flex-start;
 		}
+	}
+
+	/* Exclude button in loot table */
+	.action-cell {
+		white-space: nowrap;
+		width: 1%;
+	}
+
+	.btn-exclude {
+		padding: 0.2rem 0.55rem;
+		border-radius: 0.3rem;
+		border: 1px solid rgba(220, 80, 80, 0.45);
+		background: rgba(180, 40, 40, 0.12);
+		color: #f2a9a9;
+		font: inherit;
+		font-size: 0.78rem;
+		cursor: pointer;
+		white-space: nowrap;
+		transition: background-color 120ms ease, border-color 120ms ease;
+	}
+
+	.btn-exclude:hover,
+	.btn-exclude:focus-visible {
+		border-color: rgba(220, 80, 80, 0.75);
+		background: rgba(180, 40, 40, 0.28);
+		color: #ffc8c8;
+	}
+
+	/* Exclude dialog */
+	#exclude-dialog {
+		background: var(--bg-panel, #0d1a28);
+		border: 1px solid rgba(220, 80, 80, 0.45);
+		border-radius: 0.6rem;
+		color: var(--text, #ecf2f7);
+		padding: 1.25rem 1.5rem;
+		width: min(36rem, calc(100vw - 2rem));
+		box-shadow: 0 8px 32px rgba(0, 0, 0, 0.6);
+	}
+
+	#exclude-dialog::backdrop {
+		background: rgba(0, 0, 0, 0.65);
+	}
+
+	#exclude-dialog h2 {
+		margin: 0 0 0.5rem;
+		font-size: 1.1rem;
+		color: #f2a9a9;
+	}
+
+	.exclude-warning {
+		margin: 0 0 1rem;
+		font-size: 0.9rem;
+		color: var(--muted, #8fa3b3);
+	}
+
+	#exclude-dialog label {
+		display: grid;
+		gap: 0.3rem;
+		margin-bottom: 0.75rem;
+	}
+
+	#exclude-dialog label span {
+		font-size: 0.85rem;
+		font-weight: 700;
+	}
+
+	.required-mark {
+		color: #f2a9a9;
+	}
+
+	#exclude-note {
+		width: 100%;
+		padding: 0.5rem 0.6rem;
+		border: 1px solid rgba(214, 176, 106, 0.35);
+		background: rgba(7, 14, 22, 0.85);
+		color: var(--text, #ecf2f7);
+		border-radius: 0.35rem;
+		font: inherit;
+		font-size: 0.92rem;
+		resize: vertical;
+		box-sizing: border-box;
+	}
+
+	#exclude-note:focus {
+		outline: none;
+		border-color: rgba(220, 80, 80, 0.6);
+	}
+
+	.exclude-error {
+		min-height: 1.2em;
+		font-size: 0.85rem;
+		color: #f2a9a9;
+		margin-bottom: 0.5rem;
+	}
+
+	.exclude-actions {
+		display: flex;
+		gap: 0.6rem;
+		justify-content: flex-end;
+	}
+
+	.exclude-actions button {
+		height: 2.2rem;
+		padding: 0 0.9rem;
+		border-radius: 0.35rem;
+		border: 1px solid rgba(214, 176, 106, 0.4);
+		background: rgba(18, 30, 42, 0.85);
+		color: var(--text, #ecf2f7);
+		font: inherit;
+		cursor: pointer;
+	}
+
+	.btn-confirm-exclude {
+		border-color: rgba(220, 80, 80, 0.55) !important;
+		background: rgba(180, 40, 40, 0.18) !important;
+		color: #f2a9a9 !important;
+	}
+
+	.btn-confirm-exclude:hover,
+	.btn-confirm-exclude:focus-visible {
+		border-color: rgba(220, 80, 80, 0.85) !important;
+		background: rgba(180, 40, 40, 0.35) !important;
+		color: #ffc8c8 !important;
+	}
+
+	.btn-confirm-exclude:disabled {
+		opacity: 0.55;
+		cursor: not-allowed;
 	}
 </style>
