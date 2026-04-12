@@ -1261,7 +1261,7 @@ export async function getDesktopDroptimizerUpgrades(
          sr.updated_at
        FROM sim_item_scores sis
        JOIN sim_runs sr ON sr.id = sis.sim_run_id
-       JOIN characters c ON c.blizzard_char_id = sis.blizzard_char_id
+       JOIN roster_members_cache c ON c.blizzard_char_id = sis.blizzard_char_id
        WHERE sis.sim_run_id IN (${placeholders})
          AND sis.item_id IS NOT NULL
        ORDER BY sr.updated_at DESC, sis.delta_dps DESC`
