@@ -57,6 +57,18 @@ export interface SimItemWinnerInput {
   simc?: string | null;
 }
 
+export interface SimItemScoreInput {
+  blizzard_char_id: number;
+  slot: string;
+  item_id?: number | null;
+  item_label?: string | null;
+  ilvl?: number | null;
+  source?: string | null;
+  delta_dps?: number | null;
+  pct_gain?: number | null;
+  simc?: string | null;
+}
+
 export interface SimResultsInput {
   run_id: string;
   roster_revision?: string | null;
@@ -68,6 +80,7 @@ export interface SimResultsInput {
   runner_version?: string | null;
   raider_summaries: SimRaiderSummaryInput[];
   item_winners: SimItemWinnerInput[];
+  item_scores?: SimItemScoreInput[];
 }
 
 export interface InsertSimResultsResult {
@@ -176,6 +189,17 @@ export interface RaiderDroptimizerSnapshot {
   finished_at_utc: string | null;
   site_team_id: number;
   difficulty: SimDifficulty;
+}
+
+export interface DesktopDroptimizerUpgradeEntry {
+  blizzardCharId: number;
+  character: string;
+  realm: string;
+  itemId: number;
+  deltaDps: number;
+  pctGain: number | null;
+  difficulty: SimDifficulty;
+  updatedAt: number;
 }
 
 interface SimRunsSchema {
@@ -327,6 +351,9 @@ export function validateSimResultsInput(payload: unknown): { value: SimResultsIn
   if (!Number.isInteger(siteTeamId) || siteTeamId <= 0) errors.push('site_team_id must be a positive integer.');
   if (!Array.isArray(record.raider_summaries)) errors.push('raider_summaries must be an array.');
   if (!Array.isArray(record.item_winners)) errors.push('item_winners must be an array.');
+  if (record.item_scores !== undefined && !Array.isArray(record.item_scores)) {
+    errors.push('item_scores must be an array when provided.');
+  }
 
   if (errors.length > 0) return { value: null, errors };
 
@@ -356,6 +383,21 @@ export function validateSimResultsInput(payload: unknown): { value: SimResultsIn
     } as SimItemWinnerInput;
   });
 
+  const itemScores = (Array.isArray(record.item_scores) ? record.item_scores : []).map((entry) => {
+    const value = (entry ?? {}) as Record<string, unknown>;
+    return {
+      blizzard_char_id: Number(value.blizzard_char_id ?? NaN),
+      slot: typeof value.slot === 'string' ? value.slot.trim() : '',
+      item_id: Number.isFinite(Number(value.item_id)) ? Number(value.item_id) : null,
+      item_label: typeof value.item_label === 'string' ? value.item_label : null,
+      ilvl: Number.isFinite(Number(value.ilvl)) ? Number(value.ilvl) : null,
+      source: typeof value.source === 'string' ? value.source : null,
+      delta_dps: asFiniteNumber(value.delta_dps),
+      pct_gain: asFiniteNumber(value.pct_gain),
+      simc: typeof value.simc === 'string' ? value.simc : null,
+    } as SimItemScoreInput;
+  });
+
   for (const summary of raiderSummaries) {
     if (!Number.isInteger(summary.blizzard_char_id) || summary.blizzard_char_id <= 0) {
       errors.push('Each raider_summaries entry must include a positive blizzard_char_id.');
@@ -366,6 +408,17 @@ export function validateSimResultsInput(payload: unknown): { value: SimResultsIn
   for (const winner of itemWinners) {
     if (!winner.slot) {
       errors.push('Each item_winners entry must include a non-empty slot.');
+      break;
+    }
+  }
+
+  for (const score of itemScores) {
+    if (!Number.isInteger(score.blizzard_char_id) || score.blizzard_char_id <= 0) {
+      errors.push('Each item_scores entry must include a positive blizzard_char_id.');
+      break;
+    }
+    if (!score.slot) {
+      errors.push('Each item_scores entry must include a non-empty slot.');
       break;
     }
   }
@@ -384,6 +437,7 @@ export function validateSimResultsInput(payload: unknown): { value: SimResultsIn
       runner_version: typeof record.runner_version === 'string' ? record.runner_version : null,
       raider_summaries: raiderSummaries,
       item_winners: itemWinners,
+      item_scores: itemScores,
     },
     errors: [],
   };
@@ -658,6 +712,41 @@ export async function insertSimResults(db: D1Database, input: SimResultsInput): 
       );
   });
 
+  const tables = await getTableNames(db);
+  const itemScoreStatements = tables.has('sim_item_scores')
+    ? (input.item_scores ?? []).map((entry) => {
+        return db
+          .prepare(
+            `INSERT INTO sim_item_scores (
+              sim_run_id,
+              blizzard_char_id,
+              slot,
+              item_id,
+              item_label,
+              ilvl,
+              source,
+              delta_dps,
+              pct_gain,
+              simc,
+              created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+          )
+          .bind(
+            simRunId,
+            entry.blizzard_char_id,
+            entry.slot,
+            entry.item_id ?? null,
+            entry.item_label ?? null,
+            entry.ilvl ?? null,
+            entry.source ?? null,
+            entry.delta_dps ?? null,
+            entry.pct_gain ?? null,
+            entry.simc ?? null,
+            now
+          );
+      })
+    : [];
+
   if (raiderStatements.length > 0) {
     console.log(
       `[insertSimResults] run_id=${input.run_id}: batch-inserting ${raiderStatements.length} raider_summaries rows`
@@ -669,6 +758,12 @@ export async function insertSimResults(db: D1Database, input: SimResultsInput): 
       `[insertSimResults] run_id=${input.run_id}: batch-inserting ${winnerStatements.length} item_winners rows`
     );
     await db.batch(winnerStatements);
+  }
+  if (itemScoreStatements.length > 0) {
+    console.log(
+      `[insertSimResults] run_id=${input.run_id}: batch-inserting ${itemScoreStatements.length} item_scores rows`
+    );
+    await db.batch(itemScoreStatements);
   }
 
   const result = {
@@ -1111,6 +1206,109 @@ export async function getLatestSimsForRaiderByDifficulty(
   });
 
   return recommendations;
+}
+
+export async function getDesktopDroptimizerUpgrades(
+  db: D1Database,
+  options?: { maxAgeSeconds?: number }
+): Promise<DesktopDroptimizerUpgradeEntry[]> {
+  if (!(await hasSimRunsTable(db))) return [];
+
+  const tables = await getTableNames(db);
+  if (!tables.has('sim_item_scores')) return [];
+
+  const maxAgeSeconds = Math.max(60 * 60, Math.min(30 * 24 * 60 * 60, options?.maxAgeSeconds ?? 14 * 24 * 60 * 60));
+  const cutoff = nowSeconds() - maxAgeSeconds;
+
+  const runRowsResult = await db
+    .prepare(
+      `SELECT sr.id, sr.difficulty, sr.updated_at
+       FROM sim_runs sr
+       WHERE sr.status = 'finished'
+         AND sr.updated_at >= ?
+         AND (sr.runner_version IS NULL OR (${SINGLE_TARGET_RUNNER_SQL}) = 0)
+       ORDER BY COALESCE(sr.finished_at_utc, '') DESC, sr.updated_at DESC, sr.id DESC`
+    )
+    .bind(cutoff)
+    .all<{ id: number; difficulty: string; updated_at: number }>();
+
+  const latestRunByDifficulty = new Map<SimDifficulty, { id: number; updated_at: number }>();
+  for (const row of runRowsResult.results ?? []) {
+    const normalized = normalizeDifficulty(row.difficulty);
+    if (normalized === 'unknown') continue;
+    if (!latestRunByDifficulty.has(normalized)) {
+      latestRunByDifficulty.set(normalized, { id: row.id, updated_at: row.updated_at });
+    }
+    if (latestRunByDifficulty.has('heroic') && latestRunByDifficulty.has('mythic')) {
+      break;
+    }
+  }
+
+  const runIds = [...latestRunByDifficulty.values()].map((row) => row.id);
+  if (runIds.length === 0) return [];
+
+  const placeholders = runIds.map(() => '?').join(', ');
+  const rowsResult = await db
+    .prepare(
+      `SELECT
+         sis.blizzard_char_id,
+         c.name,
+         c.realm,
+         sis.item_id,
+         sis.delta_dps,
+         sis.pct_gain,
+         sr.difficulty,
+         sr.updated_at
+       FROM sim_item_scores sis
+       JOIN sim_runs sr ON sr.id = sis.sim_run_id
+       JOIN characters c ON c.blizzard_char_id = sis.blizzard_char_id
+       WHERE sis.sim_run_id IN (${placeholders})
+         AND sis.item_id IS NOT NULL
+       ORDER BY sr.updated_at DESC, sis.delta_dps DESC`
+    )
+    .bind(...runIds)
+    .all<{
+      blizzard_char_id: number;
+      name: string;
+      realm: string;
+      item_id: number;
+      delta_dps: number;
+      pct_gain: number | null;
+      difficulty: string;
+      updated_at: number;
+    }>();
+
+  const deduped = new Map<string, DesktopDroptimizerUpgradeEntry>();
+  for (const row of rowsResult.results ?? []) {
+    const difficulty = normalizeDifficulty(row.difficulty);
+    if (difficulty === 'unknown') continue;
+    const itemId = Number(row.item_id ?? NaN);
+    const delta = Number(row.delta_dps ?? NaN);
+    if (!Number.isFinite(itemId) || itemId <= 0 || !Number.isFinite(delta)) continue;
+
+    const key = `${difficulty}|${row.blizzard_char_id}|${itemId}`;
+    if (deduped.has(key)) continue;
+
+    deduped.set(key, {
+      blizzardCharId: Number(row.blizzard_char_id),
+      character: String(row.name ?? ''),
+      realm: String(row.realm ?? ''),
+      itemId: itemId,
+      deltaDps: delta,
+      pctGain: row.pct_gain == null ? null : Number(row.pct_gain),
+      difficulty,
+      updatedAt: Number(row.updated_at ?? 0),
+    });
+  }
+
+  const entries = [...deduped.values()];
+  entries.sort((a, b) => {
+    if (a.itemId !== b.itemId) return a.itemId - b.itemId;
+    if (a.character !== b.character) return a.character.localeCompare(b.character);
+    return b.deltaDps - a.deltaDps;
+  });
+
+  return entries;
 }
 
 export async function purgeSimHistoryForRaider(
