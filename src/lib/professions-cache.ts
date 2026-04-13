@@ -436,8 +436,8 @@ export async function refreshProfessionsCache(
 
     for (const profession of professions) {
       const recipes = extractKnownRecipes(profession.payload);
-      for (const recipe of recipes) {
-        await db
+      const recipeInsertStatements = recipes.map((recipe) =>
+        db
           .prepare(
             `INSERT OR IGNORE INTO profession_recipe_owners_cache (
                 blizzard_char_id,
@@ -462,9 +462,13 @@ export async function refreshProfessionsCache(
             now,
             now
           )
-          .run();
-        recipeInsertCount += 1;
+      );
+
+      if (recipeInsertStatements.length > 0) {
+        await db.batch(recipeInsertStatements);
       }
+
+      recipeInsertCount += recipes.length;
     }
 
     await db
