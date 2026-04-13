@@ -456,6 +456,13 @@ async function listUnsignedRaidOccurrencesNeedingSync(
            OR ar.total_boss_wipes IS NULL
            OR ar.total_wipe_pulls IS NULL
            OR ar.death_stats_synced_at IS NULL
+           OR (
+             ar.death_stats_synced_at IS NOT NULL
+             AND (ar.total_boss_kills + COALESCE(ar.total_boss_wipes, 0)) > 0
+             AND NOT EXISTS (
+               SELECT 1 FROM raid_attendance_death_stats ds WHERE ds.report_id = ar.id LIMIT 1
+             )
+           )
            OR EXISTS (
              SELECT 1
              FROM raid_attendance_participants ap
@@ -724,8 +731,8 @@ async function fetchFightParticipantsByCharId(
       .filter((fight) => {
         const encounterId = Number(fight.encounterID ?? 0);
         if (!Number.isFinite(encounterId) || encounterId <= 0) return false;
-        // Fail closed: if raid encounter metadata is unavailable, do not count deaths for this report.
-        if (midnightS1EncounterIds.size === 0) return false;
+        // Fail open: if raid encounter metadata is unavailable, count deaths for all boss encounters.
+        if (midnightS1EncounterIds.size === 0) return true;
         return midnightS1EncounterIds.has(Math.floor(encounterId));
       })
       .map((fight) => Number(fight.id ?? 0))
@@ -1015,11 +1022,10 @@ async function upsertAttendanceReport(
          total_boss_wipes,
          total_wipe_pulls,
          total_boss_fights,
-         death_stats_synced_at,
          synced_at,
          created_at,
          updated_at
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, unixepoch(), unixepoch(), unixepoch(), unixepoch())
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, unixepoch(), unixepoch(), unixepoch())
        ON CONFLICT(raid_ref_key, occurrence_start_utc) DO UPDATE SET
          report_code = excluded.report_code,
          report_start_utc = excluded.report_start_utc,
@@ -1028,7 +1034,6 @@ async function upsertAttendanceReport(
          total_boss_wipes = excluded.total_boss_wipes,
          total_wipe_pulls = excluded.total_wipe_pulls,
          total_boss_fights = excluded.total_boss_fights,
-         death_stats_synced_at = excluded.death_stats_synced_at,
          synced_at = excluded.synced_at,
          updated_at = excluded.updated_at`
     )
@@ -1127,6 +1132,11 @@ async function upsertAttendanceReport(
   if (deathInserts.length > 0) {
     await db.batch(deathInserts);
   }
+
+  await db
+    .prepare('UPDATE raid_attendance_reports SET death_stats_synced_at = unixepoch() WHERE id = ?')
+    .bind(reportId)
+    .run();
 }
 
 async function syncAttendanceOccurrence(
