@@ -119,14 +119,13 @@ function canonicalEntryKey(entry: LootHistoryInputEntry, awardedAtEpoch: number 
 	const ownerFullName = asString(entry.ownerFullName);
 	const ownerName = asString(entry.ownerName);
 	const ownerRealm = asString(entry.ownerRealm);
-	const factionRealm = asString(entry.factionRealm);
 
 	if (sourceId && ownerFullName) {
-		return ['src', factionRealm, ownerFullName, sourceId].map(normalizeKeyToken).join('|');
+		return ['src', ownerFullName, sourceId].map(normalizeKeyToken).join('|');
 	}
 
 	if (sourceId && ownerName) {
-		return ['src-fallback', factionRealm, ownerName, ownerRealm, sourceId].map(normalizeKeyToken).join('|');
+		return ['src-fallback', ownerName, ownerRealm, sourceId].map(normalizeKeyToken).join('|');
 	}
 
 	if (typeof awardedAtEpoch === 'number' && Number.isFinite(awardedAtEpoch) && awardedAtEpoch > 0) {
@@ -237,6 +236,7 @@ export async function POST(context: APIContext): Promise<Response> {
 		charIdsByName.set(nameKey, ids);
 	}
 
+	const seenCanonicalKeys = new Set<string>();
 	const statements = validated.map((entry) => {
 		const ownerName = asString(entry.ownerName);
 		const ownerRealm = asString(entry.ownerRealm);
@@ -255,6 +255,10 @@ export async function POST(context: APIContext): Promise<Response> {
 
 		const lootWon = asString(entry.lootWon);
 		const canonicalKey = canonicalEntryKey(entry, awardedAtEpoch, lootWon);
+		if (seenCanonicalKeys.has(canonicalKey)) {
+			return null;
+		}
+		seenCanonicalKeys.add(canonicalKey);
 		const extractedItem = extractItemFromLootLink(lootWon);
 		const effectiveItemId = entry.itemId ?? extractedItem.itemId;
 		const effectiveItemName = asString(entry.itemName) || extractedItem.itemName;
