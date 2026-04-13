@@ -3,6 +3,7 @@ import { env } from 'cloudflare:workers';
 import { getRosterRefreshOptions, refreshRosterCache } from '../../../lib/roster-cache';
 import { refreshRaidersCache } from '../../../lib/raiders';
 import { refreshAttendanceCache } from '../../../lib/attendance';
+import { refreshProfessionsCache } from '../../../lib/professions-cache';
 
 export const GET: APIRoute = async ({ request }) => {
   const provided = request.headers.get('X-Cron-Secret');
@@ -15,11 +16,15 @@ export const GET: APIRoute = async ({ request }) => {
     batchSize: url.searchParams.get('detailBatchSize') ? Number.parseInt(url.searchParams.get('detailBatchSize')!, 10) : undefined,
     questBackfillBatchSize: url.searchParams.get('backfillBatchSize') ? Number.parseInt(url.searchParams.get('backfillBatchSize')!, 10) : undefined,
   });
+  const professionBatchSize = url.searchParams.get('professionBatchSize')
+    ? Number.parseInt(url.searchParams.get('professionBatchSize')!, 10)
+    : undefined;
 
-  const [rosterResult, raidersResult, attendanceResult] = await Promise.allSettled([
+  const [rosterResult, raidersResult, attendanceResult, professionsResult] = await Promise.allSettled([
     refreshRosterCache(undefined, rosterOptions),
     refreshRaidersCache(),
     refreshAttendanceCache(),
+    refreshProfessionsCache(undefined, { batchSize: professionBatchSize }),
   ]);
 
   const failures: string[] = [];
@@ -34,6 +39,10 @@ export const GET: APIRoute = async ({ request }) => {
   if (attendanceResult.status === 'rejected') {
     console.error('Cron attendance refresh failed', attendanceResult.reason);
     failures.push('attendance');
+  }
+  if (professionsResult.status === 'rejected') {
+    console.error('Cron professions refresh failed', professionsResult.reason);
+    failures.push('professions');
   }
 
   const attendanceSummary = await env.DB
@@ -52,11 +61,13 @@ export const GET: APIRoute = async ({ request }) => {
     failed: failures,
     roster: rosterResult.status === 'fulfilled' ? rosterResult.value : null,
     raiders: raidersResult.status === 'fulfilled' ? raidersResult.value : null,
+    professions: professionsResult.status === 'fulfilled' ? professionsResult.value : null,
     attendance: {
       totalReports: Number(attendanceSummary?.total_reports ?? 0),
       reportsWithKills: Number(attendanceSummary?.reports_with_kills ?? 0),
       lastSyncedAt: attendanceSummary?.last_synced_at ?? null,
     },
     requestedRosterOptions: rosterOptions,
+    requestedProfessionBatchSize: professionBatchSize,
   });
 };

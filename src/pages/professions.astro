@@ -1,0 +1,572 @@
+---
+export const prerender = false;
+
+import Layout from '../layouts/Layout.astro';
+import { loadProfessionsPageData } from '../lib/professions-cache';
+
+const user = (Astro.locals as { user?: { id: number } | null }).user;
+if (!user) {
+  return Astro.redirect('/auth/login');
+}
+
+const searchParams = new URL(Astro.request.url).searchParams;
+const rawProfession = Number.parseInt(searchParams.get('profession') ?? '', 10);
+const rawRecipe = Number.parseInt(searchParams.get('recipe') ?? '', 10);
+const recipeSearch = (searchParams.get('q') ?? '').trim();
+
+const selectedProfessionId = Number.isFinite(rawProfession) && rawProfession > 0 ? rawProfession : null;
+const selectedRecipeId = Number.isFinite(rawRecipe) && rawRecipe > 0 ? rawRecipe : null;
+
+const data = await loadProfessionsPageData(selectedProfessionId, selectedRecipeId);
+
+const timestampFormatter = new Intl.DateTimeFormat('en-US', {
+  month: 'short',
+  day: 'numeric',
+  year: 'numeric',
+  hour: 'numeric',
+  minute: '2-digit',
+});
+
+function formatSyncEpoch(epoch: number | null): string {
+  if (!epoch || !Number.isFinite(epoch)) return 'n/a';
+  return timestampFormatter.format(new Date(epoch * 1000));
+}
+
+function recipeHref(professionId: number, recipeId: number): string {
+  const params = new URLSearchParams();
+  params.set('profession', String(professionId));
+  params.set('recipe', String(recipeId));
+  if (recipeSearch) {
+    params.set('q', recipeSearch);
+  }
+
+  return `/professions?${params.toString()}`;
+}
+
+function professionHref(professionId: number): string {
+  const params = new URLSearchParams();
+  params.set('profession', String(professionId));
+  if (recipeSearch) {
+    params.set('q', recipeSearch);
+  }
+
+  return `/professions?${params.toString()}`;
+}
+
+function formatRealmSlug(realmSlug: string): string {
+  return realmSlug
+    .split('-')
+    .filter(Boolean)
+    .map((part) => part[0]?.toUpperCase() + part.slice(1))
+    .join(' ');
+}
+
+const recipeSearchLower = recipeSearch.toLowerCase();
+const filteredRecipes =
+  data.selectedProfession && recipeSearchLower
+    ? data.recipes.filter((recipe) => recipe.recipeName.toLowerCase().includes(recipeSearchLower))
+    : data.recipes;
+
+const selectedRecipeVisible =
+  data.selectedRecipe && filteredRecipes.some((recipe) => recipe.recipeId === data.selectedRecipe?.recipeId);
+---
+
+<Layout title="The Hidden Lodge | Professions" description="Guild profession and recipe directory.">
+  <nav class="breadcrumbs" aria-label="Breadcrumb">
+    <ol>
+      <li><a href="/">Home</a></li>
+      <li><a href="/professions">Professions</a></li>
+      {data.selectedProfession && <li><a href={professionHref(data.selectedProfession.professionId)}>{data.selectedProfession.professionName}</a></li>}
+      {data.selectedRecipe && <li aria-current="page">{data.selectedRecipe.recipeName}</li>}
+    </ol>
+  </nav>
+
+  <section class="hero card">
+    <div>
+      <h1>Professions</h1>
+      <p>Browse guild professions, drill into recipes, and see exactly which raiders can craft each recipe.</p>
+    </div>
+    <dl class="sync-meta" aria-label="Profession cache status">
+      <div>
+        <dt>Roster</dt>
+        <dd>{data.status.rosterCount}</dd>
+      </div>
+      <div>
+        <dt>Synced</dt>
+        <dd>{data.status.syncedCount}</dd>
+      </div>
+      <div>
+        <dt>Stale</dt>
+        <dd>{data.status.staleCount}</dd>
+      </div>
+      <div>
+        <dt>Oldest sync</dt>
+        <dd>{formatSyncEpoch(data.status.oldestSync)}</dd>
+      </div>
+      <div>
+        <dt>Newest sync</dt>
+        <dd>{formatSyncEpoch(data.status.newestSync)}</dd>
+      </div>
+    </dl>
+  </section>
+
+  <section class="card profession-list" aria-label="Profession list">
+    <header>
+      <h2>All Professions</h2>
+      <p>Select a profession to view recipes and crafters.</p>
+    </header>
+
+    {data.professions.length === 0 ? (
+      <p class="empty">No profession data has been synced yet. Reload in a minute while sync backfills from Blizzard.</p>
+    ) : (
+      <div class="profession-grid">
+        {data.professions.map((profession) => (
+          <a
+            href={professionHref(profession.professionId)}
+            class={`profession-chip ${data.selectedProfession?.professionId === profession.professionId ? 'active' : ''}`}
+          >
+            <span class="profession-chip-head">
+              {profession.iconUrl ? (
+                <img src={profession.iconUrl} alt="" loading="lazy" class="profession-icon" />
+              ) : (
+                <span class="profession-icon-fallback" aria-hidden="true">?</span>
+              )}
+              <span class="name">{profession.professionName}</span>
+            </span>
+            <span class="meta">{profession.ownerCount} crafters | {profession.recipeCount} recipes</span>
+          </a>
+        ))}
+      </div>
+    )}
+  </section>
+
+  {data.selectedProfession && (
+    <section class="recipe-workspace" aria-label="Recipe workspace">
+      <section class="card recipe-list" aria-label="Recipe list">
+        <header>
+          <h2>{data.selectedProfession.professionName} Recipes</h2>
+          <a class="back-link" href="/professions">Clear selection</a>
+        </header>
+
+        <form method="get" class="recipe-search" role="search" aria-label="Search recipes">
+          <input type="hidden" name="profession" value={String(data.selectedProfession.professionId)} />
+          <label for="recipe-search-input">Search recipes</label>
+          <div class="recipe-search-row">
+            <input
+              id="recipe-search-input"
+              name="q"
+              type="search"
+              value={recipeSearch}
+              placeholder="Type a recipe name"
+              autocomplete="off"
+            />
+            <button type="submit">Search</button>
+            {recipeSearch && <a href={professionHref(data.selectedProfession.professionId)} class="clear-search">Clear</a>}
+          </div>
+        </form>
+
+        {recipeSearch && (
+          <p class="search-summary">
+            Showing {filteredRecipes.length} of {data.recipes.length} recipes for "{recipeSearch}".
+          </p>
+        )}
+
+        {filteredRecipes.length === 0 ? (
+          <p class="empty">No recipes found for this profession yet.</p>
+        ) : (
+          <div class="recipe-list-scroll">
+            <table>
+              <thead>
+                <tr>
+                  <th>Recipe</th>
+                  <th>Crafters</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filteredRecipes.map((recipe) => (
+                  <tr class={data.selectedRecipe?.recipeId === recipe.recipeId ? 'active-row' : ''}>
+                    <td>
+                      <a href={recipeHref(data.selectedProfession!.professionId, recipe.recipeId)}>{recipe.recipeName}</a>
+                    </td>
+                    <td>{recipe.ownerCount}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </section>
+
+      <section class="card owner-list" aria-label="Recipe crafters">
+        <header>
+          <h2>
+            {data.selectedRecipe && selectedRecipeVisible
+              ? `Crafters for: ${data.selectedRecipe.recipeName}`
+              : 'Recipe Crafters'}
+          </h2>
+        </header>
+
+        {data.selectedRecipe && selectedRecipeVisible ? (
+          data.owners.length === 0 ? (
+            <p class="empty">No current roster members are cached as crafters for this recipe.</p>
+          ) : (
+            <div class="owner-list-scroll">
+              <ul>
+                {data.owners.map((owner) => (
+                  <li>
+                    <span class="owner-name">{owner.characterName}</span>
+                    <span class="owner-realm">{formatRealmSlug(owner.realmSlug)}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )
+        ) : (
+          <p class="empty">Select a recipe on the left to see available crafters.</p>
+        )}
+      </section>
+    </section>
+  )}
+</Layout>
+
+<style>
+  .card {
+    border: 1px solid rgba(214, 176, 106, 0.45);
+    border-radius: 0.85rem;
+    background: rgba(8, 16, 26, 0.82);
+    box-shadow: 0 18px 42px rgba(0, 0, 0, 0.34);
+    margin: 1rem 0;
+    padding: 1.1rem 1.2rem;
+  }
+
+  h1,
+  h2 {
+    margin: 0;
+  }
+
+  .hero {
+    display: grid;
+    gap: 0.9rem;
+  }
+
+  .breadcrumbs {
+    margin-top: 0.8rem;
+  }
+
+  .breadcrumbs ol {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.42rem;
+    color: rgba(185, 206, 220, 0.9);
+    font-size: 0.92rem;
+  }
+
+  .breadcrumbs li {
+    display: inline-flex;
+    align-items: center;
+  }
+
+  .breadcrumbs li + li::before {
+    content: '/';
+    margin-right: 0.42rem;
+    color: rgba(143, 170, 190, 0.72);
+  }
+
+  .breadcrumbs a {
+    color: #dfedf8;
+    text-decoration: none;
+  }
+
+  .breadcrumbs a:hover {
+    color: #f4cd8d;
+  }
+
+  .hero p {
+    margin: 0.4rem 0 0;
+    color: rgba(223, 232, 240, 0.86);
+  }
+
+  .sync-meta {
+    margin: 0;
+    display: grid;
+    gap: 0.65rem;
+    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  }
+
+  .sync-meta div {
+    border: 1px solid rgba(125, 157, 178, 0.32);
+    background: rgba(9, 20, 30, 0.78);
+    border-radius: 0.7rem;
+    padding: 0.6rem 0.72rem;
+  }
+
+  .sync-meta dt {
+    font-size: 0.74rem;
+    letter-spacing: 0.07em;
+    text-transform: uppercase;
+    color: rgba(165, 187, 203, 0.85);
+  }
+
+  .sync-meta dd {
+    margin: 0.2rem 0 0;
+    font-size: 1.06rem;
+    color: #edf3f7;
+  }
+
+  .profession-list header,
+  .recipe-list header,
+  .owner-list header {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 0.8rem;
+    margin-bottom: 0.8rem;
+  }
+
+  .profession-list p {
+    margin: 0.35rem 0 0;
+    color: rgba(195, 214, 228, 0.82);
+  }
+
+  .recipe-workspace {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 1rem;
+    align-items: start;
+  }
+
+  .profession-grid {
+    display: grid;
+    gap: 0.7rem;
+    grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  }
+
+  .profession-chip {
+    display: grid;
+    gap: 0.28rem;
+    padding: 0.75rem 0.85rem;
+    border-radius: 0.7rem;
+    border: 1px solid rgba(131, 162, 183, 0.36);
+    text-decoration: none;
+    background: rgba(9, 20, 30, 0.72);
+    color: #eaf2f8;
+  }
+
+  .profession-chip-head {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+
+  .profession-icon {
+    width: 1.45rem;
+    height: 1.45rem;
+    border-radius: 0.32rem;
+    border: 1px solid rgba(198, 220, 236, 0.36);
+    object-fit: cover;
+    flex-shrink: 0;
+  }
+
+  .profession-icon-fallback {
+    width: 1.45rem;
+    height: 1.45rem;
+    border-radius: 0.32rem;
+    border: 1px solid rgba(198, 220, 236, 0.36);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 700;
+    color: rgba(220, 232, 241, 0.9);
+    background: rgba(15, 31, 44, 0.82);
+    flex-shrink: 0;
+  }
+
+  .profession-chip .name {
+    font-weight: 700;
+    letter-spacing: 0.02em;
+  }
+
+  .profession-chip .meta {
+    color: rgba(176, 200, 216, 0.9);
+    font-size: 0.88rem;
+  }
+
+  .profession-chip:hover {
+    border-color: rgba(230, 197, 133, 0.85);
+    transform: translateY(-1px);
+  }
+
+  .profession-chip.active {
+    border-color: rgba(232, 201, 144, 0.95);
+    background: linear-gradient(180deg, rgba(29, 42, 56, 0.98), rgba(13, 23, 33, 0.88));
+  }
+
+  .back-link {
+    color: #f4cd8d;
+    text-decoration: none;
+    font-weight: 600;
+  }
+
+  .recipe-search {
+    margin: 0.35rem 0 0.95rem;
+    display: grid;
+    gap: 0.35rem;
+  }
+
+  .recipe-search label {
+    font-size: 0.82rem;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    color: rgba(171, 196, 213, 0.86);
+  }
+
+  .recipe-search-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.45rem;
+    align-items: center;
+  }
+
+  .recipe-search-row input[type='search'] {
+    flex: 1 1 18rem;
+    min-width: 14rem;
+    border-radius: 0.55rem;
+    border: 1px solid rgba(123, 153, 173, 0.58);
+    background: rgba(7, 17, 27, 0.9);
+    color: #eaf3fa;
+    padding: 0.48rem 0.58rem;
+  }
+
+  .recipe-search-row button {
+    border: 1px solid rgba(218, 186, 126, 0.85);
+    background: rgba(44, 62, 78, 0.88);
+    color: #f6d89f;
+    border-radius: 0.5rem;
+    padding: 0.44rem 0.72rem;
+    font-weight: 700;
+    cursor: pointer;
+  }
+
+  .clear-search {
+    color: #d8e9f5;
+    text-decoration: none;
+    font-size: 0.92rem;
+  }
+
+  .clear-search:hover {
+    color: #f3cf95;
+  }
+
+  .search-summary {
+    margin: 0 0 0.65rem;
+    color: rgba(182, 205, 221, 0.9);
+    font-size: 0.92rem;
+  }
+
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.95rem;
+  }
+
+  .recipe-list-scroll,
+  .owner-list-scroll {
+    max-height: min(62vh, 42rem);
+    overflow: auto;
+    padding-right: 0.2rem;
+  }
+
+  .recipe-list-scroll thead th {
+    position: sticky;
+    top: 0;
+    background: rgba(8, 16, 26, 0.98);
+    z-index: 1;
+  }
+
+  th,
+  td {
+    text-align: left;
+    padding: 0.56rem 0.45rem;
+    border-bottom: 1px solid rgba(126, 155, 175, 0.25);
+  }
+
+  td:last-child,
+  th:last-child {
+    width: 7rem;
+    text-align: right;
+  }
+
+  tbody a {
+    color: #e6f0f7;
+    text-decoration: none;
+  }
+
+  tbody a:hover {
+    color: #f7d79c;
+  }
+
+  .active-row {
+    background: rgba(31, 46, 60, 0.58);
+  }
+
+  .owner-list ul {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: grid;
+    gap: 0.48rem;
+  }
+
+  .owner-list {
+    position: sticky;
+    top: 1rem;
+  }
+
+  .owner-list li {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    border: 1px solid rgba(121, 152, 173, 0.32);
+    border-radius: 0.62rem;
+    padding: 0.52rem 0.66rem;
+    background: rgba(7, 17, 27, 0.78);
+  }
+
+  .owner-name {
+    font-weight: 700;
+  }
+
+  .owner-realm {
+    color: rgba(171, 196, 215, 0.88);
+    font-size: 0.9rem;
+  }
+
+  .empty {
+    margin: 0;
+    color: rgba(189, 209, 224, 0.86);
+  }
+
+  @media (max-width: 720px) {
+    .card {
+      padding: 0.9rem 0.92rem;
+    }
+
+    .recipe-list header,
+    .profession-list header,
+    .owner-list header {
+      flex-direction: column;
+      align-items: flex-start;
+    }
+
+    .recipe-workspace {
+      grid-template-columns: 1fr;
+    }
+
+    .owner-list {
+      position: static;
+    }
+  }
+</style>
