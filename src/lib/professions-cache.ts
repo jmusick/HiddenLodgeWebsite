@@ -439,7 +439,7 @@ export async function refreshProfessionsCache(
       for (const recipe of recipes) {
         await db
           .prepare(
-            `INSERT INTO profession_recipe_owners_cache (
+            `INSERT OR IGNORE INTO profession_recipe_owners_cache (
                 blizzard_char_id,
                 character_name,
                 realm_slug,
