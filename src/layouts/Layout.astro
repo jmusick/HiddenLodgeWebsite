@@ -34,6 +34,7 @@ const toolsNavItems = [
 	...(isGuildMember ? [{ href: '/trinkets', label: 'Trinkets' }] : []),
 	...(user ? [{ href: '/professions', label: 'Professions' }] : []),
 	...(user ? [{ href: '/loot-history', label: 'Loot' }] : []),
+	...(isGuildMember ? [{ href: '/upgrades', label: 'Upgrades' }] : []),
 ];
 
 const memberNavItems = [

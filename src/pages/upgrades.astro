@@ -1,0 +1,1071 @@
+---
+export const prerender = false;
+
+import Layout from '../layouts/Layout.astro';
+import { env } from 'cloudflare:workers';
+import {
+  loadUpgradesPageData,
+  MIDNIGHT_S1_RAIDS,
+  RAID_SLUG_TO_NAME,
+} from '../lib/upgrades';
+import { classColor } from '../lib/wow';
+
+const isGuildMember = Astro.locals.isGuildMember;
+if (!isGuildMember) {
+  return Astro.redirect('/auth/login');
+}
+
+const searchParams = new URL(Astro.request.url).searchParams;
+const rawDifficulty = (searchParams.get('difficulty') ?? 'heroic').trim().toLowerCase();
+const difficulty: 'heroic' | 'mythic' = rawDifficulty === 'mythic' ? 'mythic' : 'heroic';
+
+// Blizzard credentials from env for Journal API.
+const blizzardClientId = (env as unknown as Record<string, string>)['BLIZZARD_CLIENT_ID'];
+const blizzardClientSecret = (env as unknown as Record<string, string>)['BLIZZARD_CLIENT_SECRET'];
+
+const data = await loadUpgradesPageData(env.DB, difficulty, blizzardClientId, blizzardClientSecret);
+
+const hasBossData = data.journalRaids.some((raid) => raid.bosses.length > 0);
+
+// Build a flat list of all bosses across all raids for JSON embedding.
+const allBosses = data.journalRaids.flatMap((raid) =>
+  raid.bosses.map((boss) => ({
+    encounterId: boss.encounterId,
+    raidSlug: raid.raidSlug,
+    itemIds: boss.itemIds,
+  }))
+);
+
+// The set of item IDs we actually have upgrade data for.
+const knownItemIds = new Set(data.items.map((i) => i.itemId));
+
+const availableRaidSlugs = new Set<string>();
+for (const item of data.items) {
+  if (item.raidSlug) availableRaidSlugs.add(item.raidSlug);
+}
+for (const raid of data.journalRaids) {
+  if (raid.bosses.some((boss) => boss.itemIds.some((id) => knownItemIds.has(id)))) {
+    availableRaidSlugs.add(raid.raidSlug);
+  }
+}
+
+const raidOptions = MIDNIGHT_S1_RAIDS
+  .filter((raid) => availableRaidSlugs.has(raid.slug))
+  .map((raid) => {
+    const journalRaid = data.journalRaids.find((entry) => entry.raidSlug === raid.slug);
+    const bosses = (journalRaid?.bosses ?? []).filter((boss) =>
+      boss.itemIds.some((id) => knownItemIds.has(id))
+    );
+    return {
+      raidSlug: raid.slug,
+      raidName: raid.name,
+      bosses,
+    };
+  });
+
+const initialRaidSlug =
+  raidOptions.find((raid) => raid.raidSlug === searchParams.get('raid'))?.raidSlug ??
+  raidOptions[0]?.raidSlug ??
+  null;
+
+const initialRaid = raidOptions.find((raid) => raid.raidSlug === initialRaidSlug) ?? null;
+const rawBossId = Number(searchParams.get('boss'));
+const initialBossId =
+  initialRaid && Number.isFinite(rawBossId) && rawBossId > 0 && initialRaid.bosses.some((boss) => boss.encounterId === rawBossId)
+    ? rawBossId
+    : null;
+
+function upgradesHref(nextDifficulty: 'heroic' | 'mythic'): string {
+  const params = new URLSearchParams({ difficulty: nextDifficulty });
+  if (initialRaidSlug) params.set('raid', initialRaidSlug);
+  if (initialBossId != null) params.set('boss', String(initialBossId));
+  return `/upgrades?${params.toString()}`;
+}
+
+// Helper: normalize slot names for display.
+function displaySlot(slot: string | null | undefined): string {
+  if (!slot) return '';
+  const normalized = slot.trim().toLowerCase().replace(/-/g, '_');
+  
+  // Trinkets
+  if (normalized === 'trinket' || normalized === 'trinket1' || normalized === 'trinket2') return 'Trinket';
+  
+  // Rings/Fingers
+  if (normalized === 'ring' || normalized === 'finger' || normalized === 'finger1' || normalized === 'finger2') return 'Ring';
+  
+  // Hands
+  if (normalized === 'hand' || normalized === 'hands') return 'Hands';
+  
+  // Main Hand
+  if (normalized === 'mainhand' || normalized === 'main_hand' || normalized === 'main hand') return 'Main Hand';
+  
+  // Off Hand
+  if (normalized === 'offhand' || normalized === 'off_hand' || normalized === 'off hand') return 'Off Hand';
+  
+  // Two-Hand
+  if (normalized === 'twohand' || normalized === 'two_hand' || normalized === 'two hand') return 'Two-Hand';
+  
+  // One-Hand (general)
+  if (normalized === 'onehand' || normalized === 'one_hand' || normalized === 'one hand') return 'One-Hand';
+  
+  // Ranged/Bow/Gun/Wand
+  if (normalized === 'ranged' || normalized === 'bow' || normalized === 'gun' || normalized === 'wand') return 'Ranged';
+  
+  // Back/Cloak
+  if (normalized === 'back' || normalized === 'cloak') return 'Back';
+  
+  // Chest/Robe
+  if (normalized === 'chest' || normalized === 'robe') return 'Chest';
+  
+  // Waist/Belt
+  if (normalized === 'waist' || normalized === 'belt') return 'Waist';
+  
+  // Wrist/Bracer
+  if (normalized === 'wrist' || normalized === 'bracer' || normalized === 'bracers') return 'Wrist';
+  
+  // Head
+  if (normalized === 'head' || normalized === 'helm' || normalized === 'helmet') return 'Head';
+  
+  // Neck
+  if (normalized === 'neck' || normalized === 'amulet' || normalized === 'necklace') return 'Neck';
+  
+  // Shoulder/Mantle
+  if (normalized === 'shoulder' || normalized === 'shoulders' || normalized === 'mantle') return 'Shoulder';
+  
+  // Legs
+  if (normalized === 'leg' || normalized === 'legs') return 'Legs';
+  
+  // Feet
+  if (normalized === 'feet' || normalized === 'foot' || normalized === 'boots') return 'Feet';
+  
+  // Shirt/Tabard
+  if (normalized === 'shirt' || normalized === 'tabard') return normalized.charAt(0).toUpperCase() + normalized.slice(1);
+  
+  // Default: title case with spaces
+  return slot.charAt(0).toUpperCase() + slot.slice(1).toLowerCase().replace(/_/g, ' ').replace(/-/g, ' ');
+}
+
+// Helper: get icon for slot type
+function getSlotIcon(slot: string | null | undefined): string {
+  if (!slot) return '⚙️';
+  const normalized = slot.trim().toLowerCase().replace(/-/g, '_');
+  const iconMap: Record<string, string> = {
+    'head': '👑',
+    'helm': '👑',
+    'helmet': '👑',
+    'neck': '📿',
+    'amulet': '📿',
+    'necklace': '📿',
+    'shoulder': '🎯',
+    'shoulders': '🎯',
+    'mantle': '🎯',
+    'chest': '🛡️',
+    'robe': '🛡️',
+    'waist': '⌚',
+    'belt': '⌚',
+    'legs': '👖',
+    'leg': '👖',
+    'feet': '👟',
+    'foot': '👟',
+    'boots': '👟',
+    'wrist': '🔗',
+    'bracer': '🔗',
+    'bracers': '🔗',
+    'hands': '✋',
+    'hand': '✋',
+    'back': '🧥',
+    'cloak': '🧥',
+    'finger': '💍',
+    'finger1': '💍',
+    'finger2': '💍',
+    'ring': '💍',
+    'trinket': '💎',
+    'trinket1': '💎',
+    'trinket2': '💎',
+    'mainhand': '⚔️',
+    'main_hand': '⚔️',
+    'main hand': '⚔️',
+    'offhand': '🗡️',
+    'off_hand': '🗡️',
+    'off hand': '🗡️',
+    'twohand': '🗡️',
+    'two_hand': '🗡️',
+    'two hand': '🗡️',
+    'onehand': '⚔️',
+    'one_hand': '⚔️',
+    'one hand': '⚔️',
+    'ranged': '🏹',
+    'bow': '🏹',
+    'gun': '🔫',
+    'wand': '🪄',
+  };
+  return iconMap[normalized] || '⚙️';
+}
+
+// Helper: format DPS delta as "28,500".
+function formatDps(value: number): string {
+  return Math.round(value).toLocaleString('en-US');
+}
+
+// Helper: format pct_gain as "+4.2%".
+function formatPct(value: number | null): string {
+  if (value == null) return '';
+  return `+${value.toFixed(1)}%`;
+}
+
+// Helper: Wowhead item URL.
+function wowheadUrl(itemId: number): string {
+  return `https://www.wowhead.com/item=${itemId}`;
+}
+
+// Helper: display item label.
+function itemDisplayName(item: (typeof data.items)[number]): string {
+  return item.itemLabel ?? `Item #${item.itemId}`;
+}
+
+function slotGroupLabel(slot: string | null | undefined): string {
+  return displaySlot(slot) || 'Other';
+}
+
+const itemGroups = (() => {
+  const groups = new Map<string, Array<(typeof data.items)[number]>>();
+  for (const item of data.items) {
+    const label = slotGroupLabel(item.slot);
+    const existing = groups.get(label) ?? [];
+    existing.push(item);
+    groups.set(label, existing);
+  }
+
+  return [...groups.entries()]
+    .map(([slotLabel, items]) => ({ slotLabel, items, slot: items[0]?.slot }))
+    .sort((a, b) => getSlotOrder(a.slotLabel) - getSlotOrder(b.slotLabel));
+})();
+
+// Helper: class slug for CSS class coloring.
+function classSlug(className: string): string {
+  return className.trim().toLowerCase().replace(/\s+/g, '-');
+}
+
+// Helper: define slot display order
+function getSlotOrder(slotLabel: string): number {
+  const order: Record<string, number> = {
+    'Head': 1,
+    'Neck': 2,
+    'Shoulder': 3,
+    'Back': 4,
+    'Chest': 5,
+    'Wrist': 6,
+    'Hands': 7,
+    'Waist': 8,
+    'Legs': 9,
+    'Feet': 10,
+    'Ring': 11,
+    'Trinket': 12,
+    'Main Hand': 13,
+    'Off Hand': 14,
+    'Two-Hand': 15,
+    'One-Hand': 16,
+    'Ranged': 17,
+  };
+  return order[slotLabel] ?? 999; // "Other" and unknown slots sorted last
+}
+---
+
+<Layout title="Upgrades | The Hidden Lodge">
+  <main class="upgrades-page container shell">
+    <div class="upgrades-header">
+      <h1 class="upgrades-title">Upgrades</h1>
+      <p class="upgrades-subtitle">
+        Items that benefit your raiders, with the strongest overall raid upgrades first.
+        {data.hasRaidbotsData && data.hasLodgeSimData && (
+          <span>Data from <span class="src-badge src-badge--raidbots">Raidbots</span> and <span class="src-badge src-badge--lodgesim">LodgeSim</span>.</span>
+        )}
+        {data.hasRaidbotsData && !data.hasLodgeSimData && (
+          <span>Data from <span class="src-badge src-badge--raidbots">Raidbots</span>.</span>
+        )}
+        {!data.hasRaidbotsData && data.hasLodgeSimData && (
+          <span>Data from <span class="src-badge src-badge--lodgesim">LodgeSim</span>.</span>
+        )}
+        <a href="/images/tools/upgrades/raidbots.png" target="_blank" rel="noopener noreferrer" class="upgrades-help-link">Raidbots settings guide ↗</a>
+      </p>
+    </div>
+
+    {data.items.length === 0 ? (
+      <div class="upgrades-empty">
+        <p>No upgrade data available for {difficulty} difficulty.</p>
+        <p>
+          Sim data populates automatically via LodgeSim or by importing Raidbots Droptimizer reports on each raider's profile page.
+          For accurate Raidbots results, set <strong>Upgrade up to</strong> to your max crest level and enable <strong>Upgrade All Equipped Gear to the Same Level</strong>.
+          <a href="/images/tools/upgrades/raidbots.png" target="_blank" rel="noopener noreferrer" class="upgrades-help-link">See recommended settings ↗</a>
+        </p>
+      </div>
+    ) : (
+      <div class={`upgrades-layout ${hasBossData ? 'upgrades-layout--with-sidebar' : ''}`}>
+
+        <!-- Boss sidebar (only when Journal data is available) -->
+        {hasBossData && (
+          <aside class="boss-sidebar" aria-label="Boss selection">
+            <div class="boss-sidebar-inner">
+              {raidOptions.map((raid) => {
+                if (raid.bosses.length === 0) return null;
+                return (
+                  <div
+                    class={`boss-raid-group ${raid.raidSlug === initialRaidSlug ? 'boss-raid-group--active' : ''}`}
+                    data-raid-group={raid.raidSlug}
+                  >
+                    <button
+                      type="button"
+                      class={`raid-panel-btn ${raid.raidSlug === initialRaidSlug ? 'raid-panel-btn--active' : ''}`}
+                      data-raid-slug={raid.raidSlug}
+                      aria-label={`Show items from ${raid.raidName}`}
+                    >
+                      <span class="boss-raid-label">{raid.raidName}</span>
+                      <span class="raid-panel-summary">{raid.bosses.length} boss{raid.bosses.length !== 1 ? 'es' : ''}</span>
+                    </button>
+                    <button
+                      type="button"
+                      class={`boss-btn boss-btn--all ${raid.raidSlug === initialRaidSlug && initialBossId == null ? 'boss-btn--active' : ''}`}
+                      data-boss-id="all"
+                      data-raid-slug={raid.raidSlug}
+                      aria-label={`Show all ${raid.raidName} items`}
+                    >All Bosses</button>
+                    {raid.bosses.map((boss) => (
+                      <button
+                        type="button"
+                        class={`boss-btn ${raid.raidSlug === initialRaidSlug && boss.encounterId === initialBossId ? 'boss-btn--active' : ''}`}
+                        data-boss-id={boss.encounterId}
+                        data-raid-slug={raid.raidSlug}
+                        aria-label={`Show items from ${boss.name}`}
+                      >{boss.name}</button>
+                    ))}
+                  </div>
+                );
+              })}
+            </div>
+          </aside>
+        )}
+
+        <!-- Main content -->
+        <div class="upgrades-main">
+          <div class="upgrades-main-header panel">
+            <div class="difficulty-tabs" role="tablist" aria-label="Difficulty">
+              <a
+                id="difficulty-tab-heroic"
+                data-difficulty="heroic"
+                href={upgradesHref('heroic')}
+                class={`diff-tab ${difficulty === 'heroic' ? 'diff-tab--active' : ''}`}
+                role="tab"
+                aria-selected={difficulty === 'heroic'}
+              >Heroic</a>
+              <a
+                id="difficulty-tab-mythic"
+                data-difficulty="mythic"
+                href={upgradesHref('mythic')}
+                class={`diff-tab ${difficulty === 'mythic' ? 'diff-tab--active' : ''}`}
+                role="tab"
+                aria-selected={difficulty === 'mythic'}
+              >Mythic</a>
+            </div>
+
+            <div class="items-list-header">
+              <span id="upgrades-visible-count"></span>
+            </div>
+          </div>
+
+          <!-- Item cards -->
+          <div class="items-list" id="items-list">
+            {itemGroups.map((group) => (
+              <section class="slot-section" data-slot-section={group.slotLabel}>
+                <h2 class="slot-section-title" data-slot-title>
+                  <span class="slot-icon">{getSlotIcon(group.slot)}</span>
+                  {group.slotLabel}
+                </h2>
+                <div class="slot-section-items">
+                  {group.items.map((item) => (
+                    <article
+                      class="item-card"
+                      data-item-id={item.itemId}
+                      data-raid-slug={item.raidSlug ?? ''}
+                    >
+                      <div class="item-card-header">
+                        <div class="item-card-title-row">
+                          <div class="item-name-with-icon">
+                            <img
+                              src={item.itemIconUrl ?? 'https://wow.zamimg.com/images/wow/icons/large/inv_misc_questionmark.jpg'}
+                              alt={itemDisplayName(item)}
+                              class="item-icon"
+                              loading="lazy"
+                            />
+                            <a
+                              href={wowheadUrl(item.itemId)}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              class="item-name-link"
+                            >
+                              {itemDisplayName(item)}
+                            </a>
+                          </div>
+                          <div class="item-card-meta">
+                            {item.ilvl && (
+                              <span class="meta-badge meta-badge--ilvl">{item.ilvl}</span>
+                            )}
+                            {item.raidSlug && RAID_SLUG_TO_NAME[item.raidSlug] && (
+                              <span class="meta-badge meta-badge--raid">{RAID_SLUG_TO_NAME[item.raidSlug]}</span>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+
+                      <div class="item-raiders">
+                        {item.raiders.map((raider) => (
+                          <div class="raider-row">
+                            <span
+                              class={`raider-name raider-name--${classSlug(raider.charClass)}`}
+                              style={`color: ${classColor(raider.charClass)}`}
+                            >
+                              {raider.charName}
+                            </span>
+                            <span class="raider-class">{raider.charClass}</span>
+                            <span class="raider-delta">+{formatDps(raider.deltaDps)} DPS</span>
+                            {raider.pctGain != null && (
+                              <span class="raider-pct">{formatPct(raider.pctGain)}</span>
+                            )}
+                            <span class={`src-badge ${raider.source === 'Raidbots' ? 'src-badge--raidbots' : 'src-badge--lodgesim'}`}>
+                              {raider.source}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    </article>
+                  ))}
+                </div>
+              </section>
+            ))}
+          </div>
+        </div>
+      </div>
+    )}
+  </main>
+</Layout>
+
+<script is:inline define:vars={{ allBosses, initialBossId, initialRaidSlug, hasBossData }}>
+  const itemsList = document.getElementById('items-list');
+  const visibleCount = document.getElementById('upgrades-visible-count');
+  const allItemCards = itemsList ? Array.from(itemsList.querySelectorAll('.item-card')) : [];
+  const slotSections = itemsList ? Array.from(itemsList.querySelectorAll('.slot-section')) : [];
+  const raidButtons = Array.from(document.querySelectorAll('.raid-panel-btn'));
+  const bossButtons = Array.from(document.querySelectorAll('.boss-btn'));
+  const bossGroups = Array.from(document.querySelectorAll('.boss-raid-group'));
+  const difficultyTabs = Array.from(document.querySelectorAll('.diff-tab'));
+
+  function updateCount(shown) {
+    if (!visibleCount) return;
+    const total = allItemCards.length;
+    visibleCount.textContent = shown === total
+      ? `${total} item${total !== 1 ? 's' : ''}`
+      : `${shown} of ${total} item${total !== 1 ? 's' : ''}`;
+  }
+
+  let activeRaidSlug = initialRaidSlug;
+  let activeBossId = initialBossId != null ? String(initialBossId) : 'all';
+
+  const bossItemMap = new Map();
+  const raidBossMap = new Map();
+  for (const boss of allBosses) {
+    bossItemMap.set(String(boss.encounterId), new Set(boss.itemIds));
+    const existing = raidBossMap.get(boss.raidSlug) ?? [];
+    existing.push(String(boss.encounterId));
+    raidBossMap.set(boss.raidSlug, existing);
+  }
+
+  function syncBossSelectionForRaid() {
+    if (activeBossId === 'all' || !activeRaidSlug) return;
+    const validBossIds = raidBossMap.get(activeRaidSlug) ?? [];
+    if (!validBossIds.includes(activeBossId)) {
+      activeBossId = 'all';
+    }
+  }
+
+  function updateRaidButtons() {
+    for (const button of raidButtons) {
+      button.classList.toggle('raid-panel-btn--active', button.getAttribute('data-raid-slug') === activeRaidSlug);
+    }
+    for (const group of bossGroups) {
+      group.classList.toggle('boss-raid-group--active', group.getAttribute('data-raid-group') === activeRaidSlug);
+    }
+  }
+
+  function updateBossGroups() {
+    for (const group of bossGroups) {
+      group.classList.toggle('boss-raid-group--inactive', group.getAttribute('data-raid-group') !== activeRaidSlug);
+    }
+  }
+
+  function updateBossButtons() {
+    for (const button of bossButtons) {
+      const buttonRaidSlug = button.getAttribute('data-raid-slug');
+      const buttonBossId = button.getAttribute('data-boss-id');
+      const isActive = buttonRaidSlug === activeRaidSlug && buttonBossId === activeBossId;
+      button.classList.toggle('boss-btn--active', isActive);
+    }
+  }
+
+  function updateDifficultyLinks() {
+    for (const tab of difficultyTabs) {
+      const nextDifficulty = tab.getAttribute('data-difficulty');
+      if (!nextDifficulty) continue;
+      const params = new URLSearchParams({ difficulty: nextDifficulty });
+      if (activeRaidSlug) params.set('raid', activeRaidSlug);
+      if (activeBossId !== 'all') params.set('boss', activeBossId);
+      tab.setAttribute('href', `/upgrades?${params.toString()}`);
+    }
+  }
+
+  function syncUrl() {
+    const url = new URL(window.location.href);
+    if (activeRaidSlug) {
+      url.searchParams.set('raid', activeRaidSlug);
+    } else {
+      url.searchParams.delete('raid');
+    }
+    if (activeBossId !== 'all') {
+      url.searchParams.set('boss', activeBossId);
+    } else {
+      url.searchParams.delete('boss');
+    }
+    window.history.replaceState({}, '', `${url.pathname}?${url.searchParams.toString()}`);
+  }
+
+  function applyFilters() {
+    syncBossSelectionForRaid();
+    const filteredItemIds = activeBossId === 'all' ? null : bossItemMap.get(activeBossId);
+    let shown = 0;
+    for (const card of allItemCards) {
+      const cardRaidSlug = card.getAttribute('data-raid-slug');
+      const cardItemId = Number(card.getAttribute('data-item-id'));
+      let visible = !activeRaidSlug || cardRaidSlug === activeRaidSlug;
+      if (visible && filteredItemIds) {
+        visible = filteredItemIds.has(cardItemId);
+      }
+      card.style.display = visible ? '' : 'none';
+      if (visible) shown += 1;
+    }
+    for (const section of slotSections) {
+      const visibleCards = Array.from(section.querySelectorAll('.item-card')).filter((card) => card.style.display !== 'none');
+      const title = section.querySelector('[data-slot-title]');
+      section.style.display = visibleCards.length > 0 ? '' : 'none';
+      if (title) {
+        title.hidden = visibleCards.length <= 1;
+      }
+    }
+    updateRaidButtons();
+    updateBossGroups();
+    updateBossButtons();
+    updateDifficultyLinks();
+    syncUrl();
+    updateCount(shown);
+  }
+
+  for (const button of raidButtons) {
+    button.addEventListener('click', () => {
+      activeRaidSlug = button.getAttribute('data-raid-slug');
+      activeBossId = 'all';
+      applyFilters();
+    });
+  }
+
+  for (const button of bossButtons) {
+    button.addEventListener('click', () => {
+      activeRaidSlug = button.getAttribute('data-raid-slug') ?? activeRaidSlug;
+      activeBossId = button.getAttribute('data-boss-id') ?? 'all';
+      applyFilters();
+    });
+  }
+
+  applyFilters();
+</script>
+
+<style>
+  .upgrades-page {
+    padding-block: 2rem;
+  }
+
+  .upgrades-header {
+    margin-bottom: 1.5rem;
+  }
+
+  .upgrades-title {
+    font-family: var(--font-display);
+    font-size: 1.75rem;
+    color: #d6b06a;
+    margin: 0 0 0.5rem;
+  }
+
+  .upgrades-subtitle {
+    color: #afc1cd;
+    font-size: 0.9rem;
+    margin: 0;
+  }
+
+  .upgrades-help-link {
+    display: inline-block;
+    margin-left: 0.4rem;
+    color: #c8a96e;
+    font-size: 0.8rem;
+    text-decoration: underline;
+    text-underline-offset: 2px;
+    white-space: nowrap;
+  }
+
+  .upgrades-help-link:hover {
+    color: #e3c27d;
+  }
+
+  /* ─── Difficulty tabs ──────────────────────────────────────────────────── */
+  .difficulty-tabs {
+    display: inline-flex;
+    gap: 0.3rem;
+    padding: 0.25rem;
+    border: 1px solid rgba(214, 176, 106, 0.22);
+    border-radius: 999px;
+    background: rgba(5, 12, 20, 0.45);
+    width: fit-content;
+  }
+
+  .diff-tab {
+    padding: 0.45rem 1rem;
+    border-radius: 999px;
+    border: 1px solid transparent;
+    color: #afc1cd;
+    text-decoration: none;
+    font-size: 0.82rem;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    transition: color 0.15s, background 0.15s, border-color 0.15s;
+  }
+
+  .diff-tab:hover {
+    color: #ebf1f5;
+    background: rgba(214, 176, 106, 0.08);
+    border-color: rgba(214, 176, 106, 0.18);
+  }
+
+  .diff-tab--active {
+    color: #06101a;
+    background: linear-gradient(180deg, #e3c27d, #cda256);
+    border-color: rgba(214, 176, 106, 0.55);
+    box-shadow: inset 0 1px 0 rgba(255, 245, 220, 0.18);
+  }
+
+  /* ─── Layout ───────────────────────────────────────────────────────────── */
+  .upgrades-layout {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+  }
+
+  .upgrades-layout--with-sidebar {
+    flex-direction: row;
+    align-items: flex-start;
+    gap: 1.5rem;
+  }
+
+  .upgrades-main-header {
+    display: flex;
+    flex-direction: column;
+    gap: 0.7rem;
+    margin-bottom: 0.9rem;
+    padding: 0.95rem 1rem 0.85rem;
+  }
+
+  .upgrades-main {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .panel {
+    border: 1px solid rgba(214, 176, 106, 0.32);
+    border-radius: 0.75rem;
+    background: linear-gradient(155deg, rgba(214, 176, 106, 0.07), transparent 45%), rgba(11, 21, 32, 0.78);
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
+  }
+
+  /* ─── Boss sidebar ─────────────────────────────────────────────────────── */
+  .boss-sidebar {
+    flex-shrink: 0;
+    width: 280px;
+    position: sticky;
+    top: 4rem;
+    max-height: calc(100vh - 5rem);
+    overflow-y: auto;
+    background: linear-gradient(155deg, rgba(214, 176, 106, 0.06), transparent 45%), rgba(11, 21, 32, 0.78);
+    border: 1px solid rgba(214, 176, 106, 0.28);
+    border-radius: 0.65rem;
+    padding: 0.5rem;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
+  }
+
+  .boss-sidebar-inner {
+    display: flex;
+    flex-direction: column;
+    gap: 0.65rem;
+  }
+
+  .boss-raid-group {
+    margin-top: 0;
+    border: 1px solid rgba(214, 176, 106, 0.18);
+    border-radius: 0.6rem;
+    background: rgba(10, 18, 28, 0.45);
+    padding: 0.45rem;
+    transition: border-color 0.12s, background 0.12s, opacity 0.12s;
+  }
+
+  .boss-raid-group--active {
+    border-color: rgba(214, 176, 106, 0.4);
+    background: rgba(214, 176, 106, 0.06);
+  }
+
+  .boss-raid-group--inactive {
+    opacity: 0.78;
+  }
+
+  .raid-panel-btn {
+    display: flex;
+    width: 100%;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+    border: 0;
+    background: transparent;
+    color: inherit;
+    text-align: left;
+    padding: 0.1rem 0.1rem 0.35rem;
+    cursor: pointer;
+  }
+
+  .raid-panel-btn:hover .boss-raid-label {
+    color: #ebf1f5;
+  }
+
+  .raid-panel-btn--active .boss-raid-label {
+    color: #e9c987;
+  }
+
+  .raid-panel-summary {
+    color: #8ca7bb;
+    font-size: 0.72rem;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+  }
+
+  .boss-raid-label {
+    font-family: var(--font-display);
+    font-size: 0.74rem;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    color: #d6b06a;
+    text-transform: uppercase;
+    padding: 0;
+    border-bottom: 0;
+    margin-bottom: 0;
+    white-space: nowrap;
+  }
+
+  .boss-btn {
+    display: block;
+    width: 100%;
+    text-align: left;
+    background: none;
+    border: none;
+    border-radius: 4px;
+    padding: 0.45rem 0.75rem;
+    font-size: 0.85rem;
+    color: #afc1cd;
+    cursor: pointer;
+    transition: background 0.1s, color 0.1s;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .boss-btn:hover {
+    background: rgba(214, 176, 106, 0.08);
+    color: #ebf1f5;
+  }
+
+  .boss-btn--all {
+    font-weight: 600;
+    color: #ebf1f5;
+    border-bottom: 1px solid rgba(214, 176, 106, 0.28);
+    padding-bottom: 0.6rem;
+    margin-bottom: 0.25rem;
+    border-radius: 4px 4px 0 0;
+  }
+
+  .boss-btn--active {
+    background: rgba(214, 176, 106, 0.12);
+    color: #d6b06a !important;
+    font-weight: 600;
+  }
+
+  /* ─── Items list header ────────────────────────────────────────────────── */
+  .items-list-header {
+    font-size: 0.8rem;
+    color: #afc1cd;
+    min-height: 1.2em;
+  }
+
+  /* ─── Item cards ───────────────────────────────────────────────────────── */
+  .items-list {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+  }
+
+  .slot-section {
+    display: flex;
+    flex-direction: column;
+    gap: 0.55rem;
+  }
+
+  .slot-section-title {
+    margin: 0;
+    padding: 0 0.15rem;
+    font-family: var(--font-display);
+    font-size: 0.88rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: #e0bc72;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+
+  .slot-icon {
+    display: inline-block;
+    font-size: 1.2rem;
+    line-height: 1;
+  }
+
+  .slot-section-items {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+  }
+
+  .item-card {
+    background: linear-gradient(155deg, rgba(214, 176, 106, 0.07), transparent 45%), rgba(11, 21, 32, 0.78);
+    border: 1px solid rgba(214, 176, 106, 0.28);
+    border-radius: 0.65rem;
+    overflow: hidden;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
+  }
+
+  .item-card-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: flex-start;
+    gap: 1rem;
+    padding: 0.75rem 1rem;
+    border-bottom: 1px solid rgba(214, 176, 106, 0.28);
+    background: rgba(214, 176, 106, 0.05);
+  }
+
+  .item-card-title-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.5rem;
+    min-width: 0;
+  }
+
+  .item-name-link {
+    font-size: 0.975rem;
+    font-weight: 600;
+    color: #d6b06a;
+    text-decoration: none;
+  }
+
+  .item-name-with-icon {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+  }
+
+  .item-icon {
+    flex-shrink: 0;
+    width: 32px;
+    height: 32px;
+    border-radius: 4px;
+    border: 1px solid rgba(214, 176, 106, 0.3);
+    background: rgba(214, 176, 106, 0.08);
+    object-fit: cover;
+    object-position: center;
+  }
+
+  .item-name-link:hover {
+    text-decoration: underline;
+    color: #dfc080;
+  }
+
+  .item-card-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.35rem;
+    align-items: center;
+  }
+
+  .meta-badge {
+    font-size: 0.7rem;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    padding: 0.15rem 0.5rem;
+    border-radius: 3px;
+    text-transform: uppercase;
+  }
+
+  .meta-badge--ilvl {
+    background: rgba(100, 80, 160, 0.25);
+    color: #b8a0f0;
+    border: 1px solid rgba(100, 80, 160, 0.35);
+  }
+
+  .meta-badge--raid {
+    background: rgba(30, 40, 55, 0.6);
+    color: #afc1cd;
+    border: 1px solid rgba(214, 176, 106, 0.28);
+  }
+
+  /* ─── Raider rows ──────────────────────────────────────────────────────── */
+  .item-raiders {
+    padding: 0.5rem 0;
+  }
+
+  .raider-row {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    padding: 0.3rem 1rem;
+    font-size: 0.85rem;
+    transition: background 0.1s;
+  }
+
+  .raider-row:hover {
+    background: rgba(214, 176, 106, 0.05);
+  }
+
+  .raider-name {
+    font-weight: 600;
+    min-width: 110px;
+  }
+
+  .raider-class {
+    color: #afc1cd;
+    font-size: 0.78rem;
+    min-width: 90px;
+  }
+
+  .raider-delta {
+    color: #6cd788;
+    font-weight: 600;
+    min-width: 110px;
+    text-align: right;
+  }
+
+  .raider-pct {
+    color: #afc1cd;
+    font-size: 0.8rem;
+    min-width: 55px;
+    text-align: right;
+  }
+
+  /* ─── Source badges ────────────────────────────────────────────────────── */
+  .src-badge {
+    display: inline-block;
+    font-size: 0.68rem;
+    font-weight: 700;
+    letter-spacing: 0.05em;
+    padding: 0.12rem 0.45rem;
+    border-radius: 3px;
+    text-transform: uppercase;
+    vertical-align: middle;
+  }
+
+  .src-badge--raidbots {
+    background: rgba(200, 169, 110, 0.15);
+    color: #c8a96e;
+    border: 1px solid rgba(200, 169, 110, 0.35);
+  }
+
+  .src-badge--lodgesim {
+    background: rgba(70, 130, 210, 0.15);
+    color: #7aadee;
+    border: 1px solid rgba(70, 130, 210, 0.35);
+  }
+
+  /* ─── Empty state ──────────────────────────────────────────────────────── */
+  .upgrades-empty {
+    background: linear-gradient(155deg, rgba(214, 176, 106, 0.07), transparent 45%), rgba(11, 21, 32, 0.78);
+    border: 1px solid rgba(214, 176, 106, 0.28);
+    border-radius: 0.65rem;
+    padding: 2.5rem 2rem;
+    text-align: center;
+    color: #afc1cd;
+  }
+
+  .upgrades-empty p {
+    margin: 0 0 0.5rem;
+  }
+
+  /* ─── Responsive ───────────────────────────────────────────────────────── */
+  @media (max-width: 768px) {
+    .upgrades-layout--with-sidebar {
+      flex-direction: column;
+    }
+
+    .upgrades-main-header {
+      gap: 0.6rem;
+    }
+
+    .boss-sidebar {
+      width: 100%;
+      position: static;
+      max-height: none;
+    }
+
+    .boss-sidebar-inner {
+      flex-direction: column;
+      gap: 0.5rem;
+    }
+
+    .boss-raid-group {
+      width: 100%;
+    }
+
+    .boss-btn {
+      display: block;
+      width: 100%;
+    }
+
+    .boss-btn--all {
+      border-bottom: none;
+      border-radius: 4px;
+      padding-bottom: 0.45rem;
+      margin-bottom: 0;
+    }
+
+    .raider-row {
+      flex-wrap: wrap;
+      gap: 0.35rem;
+    }
+
+    .raider-class {
+      min-width: auto;
+    }
+
+    .raider-delta {
+      min-width: auto;
+    }
+  }
+</style>

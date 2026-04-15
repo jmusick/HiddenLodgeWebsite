@@ -133,7 +133,11 @@ function compactReportTitle(title: string | null | undefined): string {
 
   {canManage && (
     <div class="raidbots-actions">
-      <p class="raidbots-hint">Paste Raidbots Droptimizer URLs above, then save. One report per raid per difficulty.</p>
+      <p class="raidbots-hint">
+        Paste Raidbots Droptimizer URLs above, then save. One report per raid per difficulty.
+        For accurate results, set <strong>Upgrade up to</strong> to your max crest and check <strong>Upgrade All Equipped Gear to the Same Level</strong>.
+        <a href="/images/tools/upgrades/raidbots.png" target="_blank" rel="noopener noreferrer" class="raidbots-hint-link">See recommended settings ↗</a>
+      </p>
       <button type="button" class="raidbots-save-btn" data-raidbots-save>Save All</button>
     </div>
   )}
@@ -618,6 +622,17 @@ function compactReportTitle(title: string | null | undefined): string {
     color: #8fa4ad;
     font-size: 0.78rem;
     line-height: 1.35;
+  }
+
+  .raidbots-hint-link {
+    color: #c8a96e;
+    text-decoration: underline;
+    text-underline-offset: 2px;
+    white-space: nowrap;
+  }
+
+  .raidbots-hint-link:hover {
+    color: #e3c27d;
   }
 
   .raidbots-save-btn {
