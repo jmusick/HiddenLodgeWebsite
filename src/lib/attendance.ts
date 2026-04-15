@@ -1456,6 +1456,7 @@ export async function getAttendanceSummaryMap(
            total_wipe_pulls
          FROM raid_attendance_reports
          WHERE occurrence_start_utc >= ?
+           AND raid_kind = 'primary'
            AND (total_boss_kills + COALESCE(total_boss_wipes, 0)) > 0`
       )
       .bind(ATTENDANCE_SCORING_START_UTC)
@@ -1470,6 +1471,7 @@ export async function getAttendanceSummaryMap(
          FROM raid_attendance_participants p
          JOIN raid_attendance_reports r ON r.id = p.report_id
          WHERE r.occurrence_start_utc >= ?
+           AND r.raid_kind = 'primary'
            AND (r.total_boss_kills + COALESCE(r.total_boss_wipes, 0)) > 0`
       )
       .bind(ATTENDANCE_SCORING_START_UTC)
@@ -1477,19 +1479,15 @@ export async function getAttendanceSummaryMap(
     db
       .prepare(
         `SELECT
-           CASE WHEN rs.raid_kind = 'primary' THEN 'primary:' || CAST(rs.primary_schedule_id AS TEXT) ELSE 'adhoc:' || CAST(rs.ad_hoc_raid_id AS TEXT) END AS raid_ref_key,
-           CASE WHEN rs.raid_kind = 'primary' THEN rs.occurrence_start_utc ELSE ah.starts_at_utc END AS occurrence_start_utc,
+           'primary:' || CAST(rs.primary_schedule_id AS TEXT) AS raid_ref_key,
+           rs.occurrence_start_utc,
            c.blizzard_char_id,
            rs.signup_status
          FROM raid_signups rs
          JOIN characters c ON c.id = rs.character_id
-         LEFT JOIN ad_hoc_raids ah ON ah.id = rs.ad_hoc_raid_id
-         WHERE (
-           (rs.raid_kind = 'primary' AND rs.occurrence_start_utc IS NOT NULL)
-           OR
-           (rs.raid_kind = 'adhoc' AND ah.starts_at_utc IS NOT NULL)
-         )
-           AND (CASE WHEN rs.raid_kind = 'primary' THEN rs.occurrence_start_utc ELSE ah.starts_at_utc END) >= ?`
+         WHERE rs.raid_kind = 'primary'
+           AND rs.occurrence_start_utc IS NOT NULL
+           AND rs.occurrence_start_utc >= ?`
       )
       .bind(ATTENDANCE_SCORING_START_UTC)
       .all<AttendanceSignupRow>(),
@@ -1501,6 +1499,7 @@ export async function getAttendanceSummaryMap(
            blizzard_char_id
          FROM raid_attendance_overrides
          WHERE occurrence_start_utc >= ?
+           AND raid_kind = 'primary'
            AND override_kind = 'bench'`
       )
       .bind(ATTENDANCE_SCORING_START_UTC)
