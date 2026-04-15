@@ -1,0 +1,668 @@
+---
+import { Icon } from 'astro-icon/components';
+import { classColor } from '../lib/wow';
+import type { RaiderRaidbotsReportSummary } from '../lib/sim-api';
+
+interface Props {
+  charId: number;
+  charClass: string;
+  canManage: boolean;
+  initialReports: RaiderRaidbotsReportSummary[];
+}
+
+const { charId, charClass, canManage, initialReports } = Astro.props as Props;
+const accent = classColor(charClass);
+
+const RAIDS = [
+  { slug: 'queldanas', label: "March on Quel'Danas" },
+  { slug: 'voidspire',  label: 'The Voidspire' },
+  { slug: 'dreamrift',  label: 'The Dreamrift' },
+] as const;
+
+const DIFFICULTIES = ['heroic', 'mythic'] as const;
+
+function findReport(raidSlug: string, difficulty: string): RaiderRaidbotsReportSummary | undefined {
+  // Prefer most-recently fetched for the slot
+  return initialReports
+    .filter((r) => r.raidSlug === raidSlug && r.difficulty === difficulty)
+    .sort((a, b) => (b.fetchedAt ?? 0) - (a.fetchedAt ?? 0))[0];
+}
+
+function formatFetchedAt(epoch: number | null | undefined): string {
+  if (!epoch || !Number.isFinite(epoch) || epoch <= 0) return '';
+  return new Date(epoch * 1000).toLocaleString();
+}
+
+function compactReportTitle(title: string | null | undefined): string {
+  const raw = String(title ?? '').trim();
+  if (!raw) return '';
+
+  const bulletIndex = raw.indexOf('Droptimizer •');
+  const normalized = bulletIndex >= 0 ? raw.slice(bulletIndex) : raw;
+  return normalized.replace(/\s*\[chunk\s+\d+\]\s*$/i, '').trim();
+}
+---
+
+<details class="preparedness-history-panel panel raidbots-panel" data-raidbots-root data-char-id={String(charId)}>
+  <summary class="prep-history-summary" aria-label="Raidbots Droptimizer reports">
+    <img
+      src="https://www.google.com/s2/favicons?sz=64&domain_url=https://www.raidbots.com"
+      alt=""
+      class="raidbots-favicon"
+      aria-hidden="true"
+      loading="lazy"
+      decoding="async"
+    />
+    Raidbots Droptimizer
+    <Icon name="lucide:chevron-down" class="collapse-chevron" aria-hidden="true" />
+  </summary>
+
+  <div class="raidbots-grid" style={`--rb-accent: ${accent}`}>
+    <div class="raidbots-header-row">
+      <div class="raidbots-col-raid"></div>
+      <div class="raidbots-col-diff">Heroic</div>
+      <div class="raidbots-col-diff">Mythic</div>
+    </div>
+
+    {RAIDS.map((raid) => (
+      <div class="raidbots-row">
+        <div class="raidbots-row-label">{raid.label}</div>
+
+        {DIFFICULTIES.map((diff) => {
+          const report = findReport(raid.slug, diff);
+          const reportUrl = report?.reportId
+            ? `https://www.raidbots.com/simbot/report/${report.reportId}`
+            : '';
+
+          return (
+            <div
+              class={`raidbots-slot${report ? '' : ' raidbots-slot--empty'}`}
+              data-slot-raid={raid.slug}
+              data-slot-diff={diff}
+              data-report-id={report?.reportId ?? ''}
+              data-db-id={report?.id != null ? String(report.id) : ''}
+            >
+              <div class="raidbots-slot-top">
+                <span
+                  class={`raidbots-status raidbots-status--${report?.status ?? 'empty'}`}
+                  data-status-badge
+                >
+                  {report?.status === 'ok'    ? 'OK'      : ''}
+                  {report?.status === 'error'  ? 'Error'   : ''}
+                  {report?.status === 'pending' ? 'Pending' : ''}
+                </span>
+                {canManage && (
+                  <button
+                    type="button"
+                    class="raidbots-remove"
+                    data-remove-btn
+                    style={report ? '' : 'display:none'}
+                    aria-label={`Remove ${diff} ${raid.label} Raidbots report`}
+                  >×</button>
+                )}
+              </div>
+              {report?.title && (
+                <p class="raidbots-slot-title" data-slot-title>{compactReportTitle(report.title)}</p>
+              )}
+              {!report?.title && (
+                <p class="raidbots-slot-title raidbots-slot-empty" data-slot-title></p>
+              )}
+              <p class={`raidbots-slot-updated${report?.fetchedAt ? '' : ' raidbots-slot-updated--empty'}`} data-slot-updated>
+                {report?.fetchedAt ? `Updated ${formatFetchedAt(report.fetchedAt)}` : ''}
+              </p>
+              <p class={`raidbots-slot-error${report?.status === 'error' && report?.errorMessage ? '' : ' raidbots-slot-error--empty'}`} data-slot-error>
+                {report?.status === 'error' && report?.errorMessage ? report.errorMessage : ''}
+              </p>
+              {canManage && (
+                <input
+                  type="url"
+                  class="raidbots-url-input"
+                  data-url-input
+                  placeholder="https://www.raidbots.com/simbot/report/..."
+                  value={reportUrl}
+                  autocomplete="off"
+                  spellcheck={false}
+                />
+              )}
+            </div>
+          );
+        })}
+      </div>
+    ))}
+  </div>
+
+  {canManage && (
+    <div class="raidbots-actions">
+      <p class="raidbots-hint">Paste Raidbots Droptimizer URLs above, then save. One report per raid per difficulty.</p>
+      <button type="button" class="raidbots-save-btn" data-raidbots-save>Save All</button>
+    </div>
+  )}
+
+  <p class="raidbots-global-error" data-raidbots-error aria-live="polite"></p>
+</details>
+
+<script>
+  // @ts-nocheck
+  const initRaiderRaidbots = () => {
+    const root = document.querySelector('[data-raidbots-root]');
+    if (!(root instanceof HTMLElement)) return;
+
+    const charId = root.getAttribute('data-char-id') || '';
+    const saveBtn = root.querySelector('[data-raidbots-save]');
+    const globalError = root.querySelector('[data-raidbots-error]');
+
+    const esc = (v) => String(v ?? '')
+      .replaceAll('&', '&amp;').replaceAll('<', '&lt;')
+      .replaceAll('>', '&gt;').replaceAll('"', '&quot;');
+
+    const setGlobalError = (msg) => {
+      if (!(globalError instanceof HTMLElement)) return;
+      globalError.textContent = msg || '';
+    };
+
+    const updateSlot = (slot, result) => {
+      if (!(slot instanceof HTMLElement)) return;
+      const badge = slot.querySelector('[data-status-badge]');
+      const titleEl = slot.querySelector('[data-slot-title]');
+      const updatedEl = slot.querySelector('[data-slot-updated]');
+      const errorEl = slot.querySelector('[data-slot-error]');
+      const urlInput = slot.querySelector('[data-url-input]');
+      const removeBtn = slot.querySelector('[data-remove-btn]');
+
+      if (result.ok) {
+        slot.setAttribute('data-report-id', result.reportId || '');
+        slot.setAttribute('data-db-id', result.dbId != null ? String(result.dbId) : '');
+
+        if (badge instanceof HTMLElement) {
+          badge.textContent = 'OK';
+          badge.className = 'raidbots-status raidbots-status--ok';
+        }
+        if (titleEl instanceof HTMLElement) {
+          const rawTitle = String(result.title || '');
+          const bulletIndex = rawTitle.indexOf('Droptimizer •');
+          titleEl.textContent = (bulletIndex >= 0 ? rawTitle.slice(bulletIndex) : rawTitle)
+            .replace(/\s*\[chunk\s+\d+\]\s*$/i, '')
+            .trim();
+          titleEl.classList.remove('raidbots-slot-empty');
+        }
+        if (updatedEl instanceof HTMLElement) {
+          const fetchedAtEpoch = Number(result.fetchedAt ?? Math.floor(Date.now() / 1000));
+          updatedEl.textContent = Number.isFinite(fetchedAtEpoch) && fetchedAtEpoch > 0
+            ? `Updated ${new Date(fetchedAtEpoch * 1000).toLocaleString()}`
+            : '';
+        }
+        if (errorEl instanceof HTMLElement) {
+          errorEl.textContent = '';
+          errorEl.classList.add('raidbots-slot-error--empty');
+        }
+        if (urlInput instanceof HTMLInputElement && result.reportId) {
+          urlInput.value = `https://www.raidbots.com/simbot/report/${result.reportId}`;
+        }
+        if (removeBtn instanceof HTMLElement) {
+          removeBtn.style.display = '';
+        }
+      } else {
+        if (badge instanceof HTMLElement) {
+          badge.textContent = 'Error';
+          badge.className = 'raidbots-status raidbots-status--error';
+          badge.title = result.error || '';
+        }
+        if (errorEl instanceof HTMLElement) {
+          errorEl.textContent = result.error || '';
+          errorEl.classList.toggle('raidbots-slot-error--empty', !result.error);
+        }
+      }
+    };
+
+    const findSlot = (raidSlug, diff) =>
+      root.querySelector(`[data-slot-raid="${raidSlug}"][data-slot-diff="${diff}"]`);
+
+    if (saveBtn instanceof HTMLButtonElement) {
+      saveBtn.addEventListener('click', async () => {
+        setGlobalError('');
+        const inputs = root.querySelectorAll('[data-url-input]');
+        const reports = [];
+        inputs.forEach((input) => {
+          if (!(input instanceof HTMLInputElement)) return;
+          const url = input.value.trim();
+          if (url) reports.push({ url });
+        });
+
+        if (reports.length === 0) {
+          setGlobalError('No URLs entered.');
+          return;
+        }
+
+        saveBtn.disabled = true;
+        saveBtn.textContent = 'Saving...';
+
+        try {
+          const resp = await fetch(`/api/raiders/${charId}/raidbots-reports`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ reports }),
+          });
+          const payload = await resp.json();
+
+          if (!resp.ok) {
+            setGlobalError(payload?.error || `Server error ${resp.status}`);
+            return;
+          }
+
+          let anyError = false;
+          const errorMessages = [];
+          for (const result of payload?.results ?? []) {
+            if (result.raidSlug && result.difficulty) {
+              const slot = findSlot(result.raidSlug, result.difficulty);
+              updateSlot(slot, result);
+            }
+            if (!result.ok) {
+              anyError = true;
+              if (result.error) errorMessages.push(String(result.error));
+            }
+          }
+          if (anyError) {
+            const details = [...new Set(errorMessages)].slice(0, 2).join(' | ');
+            setGlobalError(details
+              ? `Some reports could not be saved. ${details}`
+              : 'Some reports could not be saved. Check individual slots for errors.');
+          }
+          window.dispatchEvent(new CustomEvent('hl-raidbots-updated', {
+            detail: { tableData: Array.isArray(payload?.tableData) ? payload.tableData : [] },
+          }));
+        } catch (err) {
+          setGlobalError('Network error. Please try again.');
+        } finally {
+          saveBtn.disabled = false;
+          saveBtn.textContent = 'Save All';
+        }
+      });
+    }
+
+    // Remove buttons
+    root.querySelectorAll('[data-remove-btn]').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        if (!(btn instanceof HTMLButtonElement)) return;
+        const slot = btn.closest('[data-slot-raid]');
+        if (!(slot instanceof HTMLElement)) return;
+        const dbId = Number(slot.getAttribute('data-db-id') || 0);
+        if (!dbId) {
+          // Not yet persisted — just clear the URL input
+          const urlInput = slot.querySelector('[data-url-input]');
+          if (urlInput instanceof HTMLInputElement) urlInput.value = '';
+          btn.style.display = 'none';
+          return;
+        }
+
+        btn.disabled = true;
+        try {
+          const resp = await fetch(`/api/raiders/${charId}/raidbots-reports`, {
+            method: 'DELETE',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ id: dbId }),
+          });
+          if (!resp.ok) {
+            setGlobalError('Failed to remove report.');
+            return;
+          }
+          slot.setAttribute('data-report-id', '');
+          slot.setAttribute('data-db-id', '');
+          const badge = slot.querySelector('[data-status-badge]');
+          if (badge instanceof HTMLElement) {
+            badge.textContent = '';
+            badge.className = 'raidbots-status raidbots-status--empty';
+          }
+          const titleEl = slot.querySelector('[data-slot-title]');
+          if (titleEl instanceof HTMLElement) {
+            titleEl.textContent = '';
+            titleEl.classList.add('raidbots-slot-empty');
+          }
+          const updatedEl = slot.querySelector('[data-slot-updated]');
+          if (updatedEl instanceof HTMLElement) {
+            updatedEl.textContent = '';
+          }
+          const errorEl = slot.querySelector('[data-slot-error]');
+          if (errorEl instanceof HTMLElement) {
+            errorEl.textContent = '';
+            errorEl.classList.add('raidbots-slot-error--empty');
+          }
+          const urlInput = slot.querySelector('[data-url-input]');
+          if (urlInput instanceof HTMLInputElement) urlInput.value = '';
+          btn.style.display = 'none';
+        } catch {
+          setGlobalError('Network error while removing report.');
+        } finally {
+          btn.disabled = false;
+        }
+      });
+    });
+  };
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', initRaiderRaidbots, { once: true });
+  } else {
+    initRaiderRaidbots();
+  }
+</script>
+
+<style is:global>
+  /* ── Nested context: strip double-border when inside SimTools ───────── */
+  .sim-tools-panel .raidbots-panel.panel {
+    margin: 0.15rem 0 0.45rem;
+    border: 1px solid rgba(214, 176, 106, 0.16);
+    border-radius: 0.6rem;
+    background: rgba(5, 10, 16, 0.34);
+    overflow: hidden;
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.02);
+  }
+
+  .sim-tools-panel .raidbots-panel .prep-history-summary {
+    display: flex;
+    align-items: center;
+    gap: 0.45rem;
+    width: 100%;
+    box-sizing: border-box;
+    padding: 0.65rem 0.8rem;
+    border-radius: 0;
+    background: linear-gradient(180deg, rgba(214, 176, 106, 0.06), rgba(214, 176, 106, 0.02));
+    cursor: pointer;
+  }
+
+  .sim-tools-panel details.raidbots-panel[open] .prep-history-summary {
+    border-bottom: 1px solid rgba(214, 176, 106, 0.12);
+  }
+
+  /* ── Summary ─────────────────────────────────────────────────────────── */
+  .raidbots-panel > summary {
+    display: flex;
+    align-items: center;
+    gap: 0.45rem;
+    font-family: 'Cinzel', Georgia, 'Times New Roman', serif;
+    font-size: 0.95rem;
+    letter-spacing: 0.03em;
+    color: #f1d9a9;
+    list-style: none;
+  }
+
+  .raidbots-panel > summary::-webkit-details-marker {
+    display: none;
+  }
+
+  .raidbots-panel > summary::marker {
+    content: '';
+  }
+
+  .raidbots-panel summary .raidbots-favicon {
+    width: 0.95rem;
+    height: 0.95rem;
+    border-radius: 2px;
+    flex-shrink: 0;
+    opacity: 0.9;
+    filter: saturate(0.8);
+  }
+
+  .raidbots-panel .collapse-chevron {
+    width: 1rem;
+    height: 1rem;
+    margin-left: auto;
+    flex-shrink: 0;
+    transition: transform 0.2s ease;
+  }
+
+  .raidbots-panel[open] .collapse-chevron {
+    transform: rotate(180deg);
+  }
+
+  /* ── Grid layout ─────────────────────────────────────────────────────── */
+  .raidbots-grid {
+    padding: 0.7rem 0.8rem 0.3rem;
+    display: grid;
+    gap: 0;
+  }
+
+  .raidbots-header-row,
+  .raidbots-row {
+    display: grid;
+    grid-template-columns: 180px 1fr 1fr;
+    gap: 0.5rem;
+    align-items: start;
+    padding: 0.38rem 0;
+    border-bottom: 1px solid rgba(214, 176, 106, 0.08);
+  }
+
+  .raidbots-header-row {
+    padding-bottom: 0.32rem;
+    border-bottom: 1px solid rgba(214, 176, 106, 0.16);
+  }
+
+  .raidbots-row:last-child {
+    border-bottom: none;
+  }
+
+  .raidbots-col-diff {
+    color: #e4c27a;
+    font-size: 0.75rem;
+    font-weight: 700;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    padding: 0 0.4rem;
+  }
+
+  .raidbots-row-label {
+    color: #c8c9cb;
+    font-size: 0.82rem;
+    font-weight: 600;
+    padding-top: 0.42rem;
+    padding-right: 0.5rem;
+  }
+
+  /* ── Slot tiles ──────────────────────────────────────────────────────── */
+  .raidbots-slot {
+    background: rgba(4, 9, 14, 0.62);
+    border: 1px solid rgba(214, 176, 106, 0.14);
+    border-radius: 0.45rem;
+    padding: 0.42rem 0.5rem;
+    display: grid;
+    gap: 0.26rem;
+  }
+
+  .raidbots-slot-top {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.4rem;
+    min-height: 1.3rem;
+  }
+
+  .raidbots-slot--empty {
+    gap: 0;
+  }
+
+  .raidbots-slot--empty .raidbots-slot-top {
+    display: none;
+  }
+
+  /* ── Status badges ───────────────────────────────────────────────────── */
+  .raidbots-status {
+    font-size: 0.7rem;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    padding: 0.15rem 0.4rem;
+    border-radius: 999px;
+  }
+
+  .raidbots-status--ok {
+    color: #3fb950;
+    background: rgba(63, 185, 80, 0.12);
+    border: 1px solid rgba(63, 185, 80, 0.35);
+  }
+
+  .raidbots-status--error {
+    color: #f85149;
+    background: rgba(248, 81, 73, 0.12);
+    border: 1px solid rgba(248, 81, 73, 0.35);
+    cursor: help;
+  }
+
+  .raidbots-status--pending {
+    color: #f2cc60;
+    background: rgba(242, 204, 96, 0.1);
+    border: 1px solid rgba(242, 204, 96, 0.3);
+  }
+
+  .raidbots-status--empty {
+    display: none;
+  }
+
+  /* ── Slot content ────────────────────────────────────────────────────── */
+  .raidbots-slot-title {
+    margin: 0;
+    color: #a8b8bf;
+    font-size: 0.72rem;
+    line-height: 1.28;
+    white-space: normal;
+    overflow: hidden;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    min-height: 1.84rem;
+  }
+
+  .raidbots-slot-empty {
+    display: none;
+  }
+
+  .raidbots-slot-updated {
+    margin: 0;
+    color: #8298a4;
+    font-size: 0.7rem;
+  }
+
+  .raidbots-slot-updated--empty {
+    display: none;
+  }
+
+  .raidbots-slot-error {
+    margin: 0;
+    color: #ff9b93;
+    font-size: 0.7rem;
+    line-height: 1.3;
+  }
+
+  .raidbots-slot-error--empty {
+    display: none;
+  }
+
+  .raidbots-url-input {
+    width: 100%;
+    box-sizing: border-box;
+    padding: 0.28rem 0.42rem;
+    border-radius: 0.35rem;
+    border: 1px solid rgba(214, 176, 106, 0.28);
+    background: rgba(4, 10, 17, 0.8);
+    color: #d8e4e9;
+    font-size: 0.75rem;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+
+  .raidbots-url-input:focus {
+    outline: none;
+    border-color: rgba(214, 176, 106, 0.55);
+  }
+
+  .raidbots-url-input::placeholder {
+    color: rgba(200, 210, 215, 0.35);
+  }
+
+  /* ── Remove button ───────────────────────────────────────────────────── */
+  .raidbots-remove {
+    flex-shrink: 0;
+    width: 1.25rem;
+    height: 1.25rem;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border: 1px solid rgba(248, 81, 73, 0.4);
+    border-radius: 50%;
+    background: transparent;
+    color: #f85149;
+    font-size: 0.8rem;
+    line-height: 1;
+    cursor: pointer;
+    padding: 0;
+  }
+
+  .raidbots-remove:hover {
+    background: rgba(248, 81, 73, 0.15);
+  }
+
+  .raidbots-remove:disabled {
+    opacity: 0.5;
+    cursor: wait;
+  }
+
+  /* ── Actions footer ──────────────────────────────────────────────────── */
+  .raidbots-actions {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+    padding: 0.6rem 0.8rem 0.7rem;
+    border-top: 1px solid rgba(214, 176, 106, 0.08);
+    margin-top: 0.15rem;
+  }
+
+  .raidbots-hint {
+    margin: 0;
+    color: #8fa4ad;
+    font-size: 0.78rem;
+    line-height: 1.35;
+  }
+
+  .raidbots-save-btn {
+    flex-shrink: 0;
+    padding: 0.46rem 0.9rem;
+    border-radius: 0.45rem;
+    border: 1px solid rgba(214, 176, 106, 0.4);
+    background: rgba(214, 176, 106, 0.12);
+    color: #f4ddb1;
+    font-weight: 700;
+    font-size: 0.86rem;
+    cursor: pointer;
+    white-space: nowrap;
+  }
+
+  .raidbots-save-btn:hover {
+    background: rgba(214, 176, 106, 0.2);
+    border-color: rgba(214, 176, 106, 0.6);
+  }
+
+  .raidbots-save-btn:disabled {
+    opacity: 0.65;
+    cursor: wait;
+  }
+
+  .raidbots-global-error {
+    margin: 0 0.8rem 0.65rem;
+    color: #f85149;
+    font-size: 0.82rem;
+    min-height: 1rem;
+  }
+
+  @media (max-width: 600px) {
+    .raidbots-header-row,
+    .raidbots-row {
+      grid-template-columns: 120px 1fr 1fr;
+    }
+
+    .raidbots-actions {
+      flex-direction: column;
+      align-items: flex-start;
+    }
+
+    .raidbots-save-btn {
+      width: 100%;
+    }
+  }
+</style>

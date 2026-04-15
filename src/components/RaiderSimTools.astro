@@ -3,15 +3,20 @@ import { env } from 'cloudflare:workers';
 import { Icon } from 'astro-icon/components';
 import { classColor } from '../lib/wow';
 import { getLatestSimsForRaiderByDifficulty } from '../lib/sim-api';
+import type { RaiderRaidbotsReportSummary, RaidbotsTableRun } from '../lib/sim-api';
+import RaiderRaidbotsReports from './RaiderRaidbotsReports.astro';
 
 interface Props {
   charId: number;
   charName: string;
   charClass: string;
   canManageSim?: boolean;
+  showSourceDebug?: boolean;
+  raidbotsReports?: RaiderRaidbotsReportSummary[];
+  raidbotsTableData?: RaidbotsTableRun[];
 }
 
-const { charId, charClass, canManageSim = false } = Astro.props as Props;
+const { charId, charClass, canManageSim = false, showSourceDebug = false, raidbotsReports = [], raidbotsTableData = [] } = Astro.props as Props;
 const accent = classColor(charClass);
 const latestByDifficulty = await getLatestSimsForRaiderByDifficulty((env as any).DB, charId);
 ---
@@ -23,145 +28,118 @@ const latestByDifficulty = await getLatestSimsForRaiderByDifficulty((env as any)
       Sim Tools
       <span class="sim-tools-beta">Beta</span>
     </h2>
-    <p class="sim-tools-subtitle">Manual sim launches are disabled. Droptimizer sims now run automatically in the background and publish updated recommendations here.</p>
   </header>
 
-  <div class="sim-tools-controls">
-    <label class="sim-tools-field">
-      <span>Input Mode</span>
-      <select data-sim-tools-mode disabled>
-        <option value="site">Use site data</option>
-        <option value="addon">Paste SimC addon export</option>
-      </select>
-    </label>
+  <RaiderRaidbotsReports
+    charId={charId}
+    charClass={charClass}
+    canManage={canManageSim}
+    initialReports={raidbotsReports}
+  />
+  <p class="sim-source-summary" data-source-summary></p>
 
-    <label class="sim-tools-field">
-      <span>Raid</span>
-      <select data-sim-tools-raid disabled>
-        <option value="all">All Raids</option>
-        <option value="voidspire">The Voidspire</option>
-        <option value="dreamrift">The Dreamrift</option>
-        <option value="queldanas">March on Quel'Danas</option>
-      </select>
-    </label>
+  {showSourceDebug && (
+    <details class="sim-source-debug" open>
+      <summary class="prep-history-summary sim-source-debug-summary">
+        Source Debug
+        <Icon name="lucide:chevron-down" class="collapse-chevron" aria-hidden="true" />
+      </summary>
+      <div class="sim-source-debug-wrap">
+        <table class="sim-source-debug-table">
+          <thead>
+            <tr>
+              <th>Difficulty</th>
+              <th>Active Source</th>
+              <th>Active Updated</th>
+              <th>Raidbots Updated</th>
+              <th>LodgeSim Updated</th>
+              <th>Raidbots Rows</th>
+              <th>LodgeSim Rows</th>
+              <th>Merged Rows</th>
+            </tr>
+          </thead>
+          <tbody data-source-debug-body>
+            <tr><td colspan="8">Loading...</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </details>
+  )}
 
-    <label class="sim-tools-field">
-      <span>Difficulty</span>
-      <select data-sim-tools-difficulty disabled>
-        <option value="all">All</option>
-        <option value="normal">Normal</option>
-        <option value="heroic">Heroic</option>
-        <option value="mythic">Mythic</option>
-      </select>
-    </label>
-
-    <button type="button" class="sim-tools-run" data-sim-tools-run disabled>
-      Manual Launch Disabled
-    </button>
-  </div>
-
-  <label class="sim-tools-addon-wrap is-hidden" data-sim-addon-wrap>
-    <span>SimC Addon Export</span>
-    <textarea
-      data-sim-addon-input
-      disabled
-      rows="8"
-      placeholder="Paste your /simc export here when using addon mode."
-    ></textarea>
-  </label>
-
-  <div class="sim-tools-status" data-sim-status-wrap>
-    <p class="sim-tools-connection checking" data-sim-connection>
-      <span class="dot" aria-hidden="true"></span>
-      <span data-sim-connection-text>Checking LodgeSim connection...</span>
-    </p>
-    <div class="sim-tools-status-row">
-      <p class="sim-tools-status-line" data-sim-status-text>Manual launches are disabled. Waiting for automated droptimizer updates.</p>
-      {canManageSim && (
-        <button type="button" class="sim-tools-purge" data-sim-tools-purge>
-          Purge Sim History
-        </button>
-      )}
+  <div class="sim-view-bar">
+    <div class="sim-view-mode-toggle" data-view-mode-toggle>
+      <button type="button" class="sim-view-mode-btn is-active" data-view-mode-btn="encounter">Encounter</button>
+      <button type="button" class="sim-view-mode-btn" data-view-mode-btn="table">Table</button>
     </div>
-    <div class="sim-tools-progress-track" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" data-sim-progress-track>
-      <div class="sim-tools-progress-fill" data-sim-progress-fill></div>
+    <div class="sim-view-mode-toggle" data-diff-tabs>
+      <button type="button" class="sim-view-mode-btn" data-diff-tab="heroic">Heroic</button>
+      <button type="button" class="sim-view-mode-btn" data-diff-tab="mythic">Mythic</button>
     </div>
   </div>
 
-  <div class="sim-tools-meta" data-sim-meta>
-    {latestByDifficulty.length > 0 ? (
-      latestByDifficulty.map((run) => (
-        <p>
-          <strong>{String(run.difficulty).charAt(0).toUpperCase() + String(run.difficulty).slice(1)}</strong>
-          <span aria-hidden="true"> • </span>
-          <strong>{run.run_id}</strong>
-          <span aria-hidden="true"> • </span>
-          Updated {new Date(run.updated_at * 1000).toLocaleString()}
-        </p>
-      ))
-    ) : (
-      <p>No uploaded sim results for this raider yet.</p>
-    )}
-    <p class="sim-tools-assumption" data-sim-assumption>
-      Sim assumption: candidate items are evaluated at the highest crest-upgrade step available within their current upgrade track.
-    </p>
+  <div data-encounter-view>
+    <div class="sim-boss-list" data-encounter-body>
+      <p class="sim-tools-empty">Loading recommendations...</p>
+    </div>
   </div>
 
-  <div class="sim-tools-table-wrap">
-    <table class="sim-tools-table" data-sim-table>
-      <thead>
-        <tr>
-          <th><button type="button" class="sim-sort" data-sort-key="runDifficulty">Run Difficulty</button></th>
-          <th><button type="button" class="sim-sort" data-sort-key="slot">Slot</button></th>
-          <th><button type="button" class="sim-sort" data-sort-key="item">Item</button></th>
-          <th><button type="button" class="sim-sort" data-sort-key="source">Source</button></th>
-          <th><button type="button" class="sim-sort" data-sort-key="sourceDifficulty">Source Difficulty</button></th>
-          <th><button type="button" class="sim-sort" data-sort-key="ilvl">iLvl</button></th>
-          <th><button type="button" class="sim-sort" data-sort-key="delta">Delta DPS</button></th>
-          <th><button type="button" class="sim-sort" data-sort-key="pct">Gain %</button></th>
-        </tr>
-        <tr class="sim-filter-row">
-          <th>
-            <select data-filter-key="runDifficulty" class="sim-filter-select">
-              <option value="">All Runs</option>
-              <option value="heroic">Heroic</option>
-              <option value="mythic">Mythic</option>
-            </select>
-          </th>
-          <th>
-            <select data-filter-key="slot" class="sim-filter-select">
-              <option value="">All Slots</option>
-            </select>
-          </th>
-          <th><input data-filter-key="item" class="sim-filter" type="text" placeholder="Search item" /></th>
-          <th>
-            <select data-filter-key="source" class="sim-filter-select">
-              <option value="">All Sources</option>
-            </select>
-          </th>
-          <th>
-            <select data-filter-key="sourceDifficulty" class="sim-filter-select">
-              <option value="">All</option>
-              <option value="normal">Normal</option>
-              <option value="heroic">Heroic</option>
-              <option value="mythic">Mythic</option>
-            </select>
-          </th>
-          <th></th>
-          <th></th>
-          <th></th>
-          <th></th>
-        </tr>
-      </thead>
-      <tbody data-sim-table-body>
-        <tr>
-          <td colspan="8" class="sim-tools-empty">Loading recommendations...</td>
-        </tr>
-      </tbody>
-    </table>
+  <div data-table-view style="display:none">
+    <div class="sim-tools-table-wrap">
+      <table class="sim-tools-table" data-sim-table>
+        <thead>
+          <tr>
+            <th><button type="button" class="sim-sort" data-sort-key="runDifficulty">Run Difficulty</button></th>
+            <th><button type="button" class="sim-sort" data-sort-key="slot">Slot</button></th>
+            <th><button type="button" class="sim-sort" data-sort-key="item">Item</button></th>
+            <th><button type="button" class="sim-sort" data-sort-key="source">Source</button></th>
+            <th><button type="button" class="sim-sort" data-sort-key="sourceDifficulty">Source Difficulty</button></th>
+            <th><button type="button" class="sim-sort" data-sort-key="ilvl">iLvl</button></th>
+            <th><button type="button" class="sim-sort" data-sort-key="delta">Delta DPS</button></th>
+            <th><button type="button" class="sim-sort" data-sort-key="pct">Gain %</button></th>
+          </tr>
+          <tr class="sim-filter-row">
+            <th>
+              <select data-filter-key="runDifficulty" class="sim-filter-select">
+                <option value="">All Runs</option>
+                <option value="heroic">Heroic</option>
+                <option value="mythic">Mythic</option>
+              </select>
+            </th>
+            <th>
+              <select data-filter-key="slot" class="sim-filter-select">
+                <option value="">All Slots</option>
+              </select>
+            </th>
+            <th><input data-filter-key="item" class="sim-filter" type="text" placeholder="Search item" /></th>
+            <th>
+              <select data-filter-key="source" class="sim-filter-select">
+                <option value="">All Sources</option>
+              </select>
+            </th>
+            <th>
+              <select data-filter-key="sourceDifficulty" class="sim-filter-select">
+                <option value="">All</option>
+                <option value="normal">Normal</option>
+                <option value="heroic">Heroic</option>
+                <option value="mythic">Mythic</option>
+              </select>
+            </th>
+            <th></th>
+            <th></th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody data-sim-table-body>
+          <tr>
+            <td colspan="8" class="sim-tools-empty">Loading recommendations...</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
   </div>
 
   <script type="application/json" data-sim-tools-initial>{JSON.stringify(latestByDifficulty)}</script>
+  <script type="application/json" data-raidbots-table-initial>{JSON.stringify(raidbotsTableData)}</script>
 </section>
 
 <script>
@@ -170,50 +148,16 @@ const latestByDifficulty = await getLatestSimsForRaiderByDifficulty((env as any)
     const panel = document.querySelector('[data-sim-tools-root]');
     if (!(panel instanceof HTMLElement)) return;
 
-    const forceOffline = (text) => {
-      const line = panel.querySelector('[data-sim-connection]');
-      if (!(line instanceof HTMLElement)) return;
-      line.classList.remove('checking', 'online', 'offline');
-      line.classList.add('offline');
-      const textSpan = line.querySelector('[data-sim-connection-text]');
-      if (textSpan) textSpan.textContent = text;
-    };
-
     const charId = Number(panel.getAttribute('data-char-id') || 0);
     if (!Number.isFinite(charId) || charId <= 0) return;
 
-    const modeSelect = panel.querySelector('[data-sim-tools-mode]');
-    const raidSelect = panel.querySelector('[data-sim-tools-raid]');
-    const difficultySelect = panel.querySelector('[data-sim-tools-difficulty]');
-    const runButton = panel.querySelector('[data-sim-tools-run]');
-    const purgeButton = panel.querySelector('[data-sim-tools-purge]');
-    const addonWrap = panel.querySelector('[data-sim-addon-wrap]');
-    const addonInput = panel.querySelector('[data-sim-addon-input]');
-    const statusText = panel.querySelector('[data-sim-status-text]');
-    const connectionLine = panel.querySelector('[data-sim-connection]');
-    const progressTrack = panel.querySelector('[data-sim-progress-track]');
-    const progressFill = panel.querySelector('[data-sim-progress-fill]');
     const tableBody = panel.querySelector('[data-sim-table-body]');
-    const meta = panel.querySelector('[data-sim-meta]');
+    const sourceSummary = panel.querySelector('[data-source-summary]');
+    const sourceDebugBody = panel.querySelector('[data-source-debug-body]');
     const initialPayload = panel.querySelector('[data-sim-tools-initial]');
 
-    if (!(modeSelect instanceof HTMLSelectElement)) return;
-    if (!(raidSelect instanceof HTMLSelectElement)) return;
-    if (!(difficultySelect instanceof HTMLSelectElement)) return;
-    if (!(runButton instanceof HTMLButtonElement)) return;
-      if (purgeButton && !(purgeButton instanceof HTMLButtonElement)) return;
-    if (!(addonWrap instanceof HTMLElement)) return;
-    if (!(addonInput instanceof HTMLTextAreaElement)) return;
-    if (!(statusText instanceof HTMLElement)) return;
-    if (!(connectionLine instanceof HTMLElement)) return;
-    if (!(progressTrack instanceof HTMLElement)) return;
-    if (!(progressFill instanceof HTMLElement)) return;
     if (!(tableBody instanceof HTMLElement)) return;
-    if (!(meta instanceof HTMLElement)) return;
-
-    const watchdog = window.setTimeout(() => {
-      forceOffline('Connection check stalled. Refresh page.');
-    }, 6000);
+    if (!(sourceSummary instanceof HTMLElement)) return;
 
     let latestRuns = [];
     if (initialPayload instanceof HTMLScriptElement) {
@@ -224,13 +168,26 @@ const latestByDifficulty = await getLatestSimsForRaiderByDifficulty((env as any)
         latestRuns = [];
       }
     }
-    let activeJobId = null;
-    let pollTimer = null;
+
+    let raidbotsRuns = [];
+    const rbInitTag = panel.querySelector('[data-raidbots-table-initial]');
+    if (rbInitTag instanceof HTMLScriptElement) {
+      try {
+        const parsed = JSON.parse(rbInitTag.textContent || '[]');
+        raidbotsRuns = Array.isArray(parsed) ? parsed : [];
+      } catch {
+        raidbotsRuns = [];
+      }
+    }
+    const getFreshRaidbotsRuns = () => {
+      const cutoff = Math.floor(Date.now() / 1000) - (7 * 24 * 60 * 60);
+      return raidbotsRuns.filter((run) => Number(run?.updated_at ?? 0) >= cutoff);
+    };
+
     let sortKey = 'delta';
     let sortDir = 'desc';
-    let lastSimRaidLabel = null;
-    let lastSimDifficulty = null;
-    let remoteRunnerMode = false;
+    let viewMode = 'encounter';
+    let encounterDifficulty = 'heroic';
 
     const filterValues = {
       runDifficulty: '',
@@ -260,15 +217,68 @@ const latestByDifficulty = await getLatestSimsForRaiderByDifficulty((env as any)
       .replace(/^\s*(lfr|normal|heroic|mythic)\s+-\s+/i, '')
       .trim();
 
-    const idleButtonLabel = runButton.textContent?.trim() || 'Manual Launch Disabled';
+    const runOrigin = (run) => String(run?.run_id || '').startsWith('raidbots-') ? 'Raidbots' : 'LodgeSim';
 
-    const syncPurgeButtonWidth = () => {
-      if (!(purgeButton instanceof HTMLButtonElement)) return;
-      purgeButton.style.width = '';
-      const width = Math.ceil(runButton.getBoundingClientRect().width);
-      if (width > 0) {
-        purgeButton.style.width = `${width}px`;
+    const mergedWinnerKey = (winner) => {
+      const slot = String(winner?.slot || '').trim().toLowerCase();
+      const itemId = Number(winner?.item_id ?? NaN);
+      if (Number.isFinite(itemId) && itemId > 0) return `${slot}|id:${itemId}`;
+
+      const label = String(winner?.item_label || '').trim().toLowerCase();
+      const source = String(winner?.source || '').trim().toLowerCase();
+      return `${slot}|label:${label}|src:${source}`;
+    };
+
+    const mergeWinnerLists = (lodgeWinners, raidbotsWinners) => {
+      const merged = new Map();
+
+      const putWinner = (winner, origin, priority) => {
+        const key = mergedWinnerKey(winner);
+        const existing = merged.get(key);
+        if (existing && existing.priority > priority) return;
+
+        merged.set(key, {
+          winner: {
+            ...existing?.winner,
+            ...winner,
+            item_label: winner?.item_label ?? existing?.winner?.item_label ?? null,
+            ilvl: winner?.ilvl ?? existing?.winner?.ilvl ?? null,
+            simc: winner?.simc ?? existing?.winner?.simc ?? null,
+          },
+          origin,
+          priority,
+        });
+      };
+
+      for (const winner of Array.isArray(lodgeWinners) ? lodgeWinners : []) {
+        putWinner(winner, 'LodgeSim', 0);
       }
+      for (const winner of Array.isArray(raidbotsWinners) ? raidbotsWinners : []) {
+        putWinner(winner, 'Raidbots', 1);
+      }
+
+      return [...merged.values()]
+        .map((entry) => ({ ...entry.winner, __origin: entry.origin }))
+        .sort((a, b) => Number(b?.delta_dps ?? Number.NEGATIVE_INFINITY) - Number(a?.delta_dps ?? Number.NEGATIVE_INFINITY));
+    };
+
+    const getMergedRuns = () => {
+      const freshRaidbotsRuns = getFreshRaidbotsRuns();
+      const difficulties = ['mythic', 'heroic'];
+
+      return difficulties.flatMap((difficulty) => {
+        const lodgeRun = latestRuns.find((run) => String(run?.difficulty || '').toLowerCase() === difficulty) ?? null;
+        const raidbotsRun = freshRaidbotsRuns.find((run) => String(run?.difficulty || '').toLowerCase() === difficulty) ?? null;
+        if (!lodgeRun && !raidbotsRun) return [];
+
+        const winners = mergeWinnerLists(lodgeRun?.winners ?? [], raidbotsRun?.winners ?? []);
+        return [{
+          run_id: `merged-${difficulty}`,
+          difficulty,
+          updated_at: Math.max(Number(lodgeRun?.updated_at ?? 0), Number(raidbotsRun?.updated_at ?? 0)),
+          winners,
+        }];
+      });
     };
 
     const slotLabel = (value) => {
@@ -350,23 +360,6 @@ const latestByDifficulty = await getLatestSimsForRaiderByDifficulty((env as any)
       return `${Number(value).toFixed(2)}%`;
     };
 
-    const setProgress = (percent) => {
-      const pct = Math.max(0, Math.min(100, Math.round(Number(percent) || 0)));
-      progressFill.style.width = `${pct}%`;
-      progressTrack.setAttribute('aria-valuenow', String(pct));
-    };
-
-    const setStatus = (message) => {
-      statusText.textContent = message;
-    };
-
-    const setConnection = (state, text) => {
-      connectionLine.classList.remove('checking', 'online', 'offline');
-      connectionLine.classList.add(state);
-      const textSpan = connectionLine.querySelector('[data-sim-connection-text]');
-      if (textSpan) textSpan.textContent = text;
-    };
-
     const esc = (value) => String(value ?? '')
       .replaceAll('&', '&amp;')
       .replaceAll('<', '&lt;')
@@ -386,19 +379,6 @@ const latestByDifficulty = await getLatestSimsForRaiderByDifficulty((env as any)
       return String(a ?? '').localeCompare(String(b ?? ''), undefined, { sensitivity: 'base' });
     };
 
-    const fetchWithTimeout = async (url, timeoutMs) => {
-      const controller = new AbortController();
-      const timer = window.setTimeout(() => controller.abort(), timeoutMs);
-      try {
-        return await fetch(url, {
-          headers: { Accept: 'application/json' },
-          signal: controller.signal,
-        });
-      } finally {
-        window.clearTimeout(timer);
-      }
-    };
-
     const apiBase = String(import.meta.env.BASE_URL || '/').replace(/\/+$/, '');
     const normalizePath = (path) => (path.startsWith('/') ? path : `/${path}`);
     const apiUrl = (path) => `${apiBase}${normalizePath(path)}`;
@@ -414,55 +394,60 @@ const latestByDifficulty = await getLatestSimsForRaiderByDifficulty((env as any)
       return fetch(fallbackUrl, init);
     };
 
-    const checkConnection = async () => {
-      remoteRunnerMode = false;
-      setConnection('checking', 'Checking LodgeSim connection...');
-      try {
-        const response = await fetchWithTimeout(apiUrl('/api/sim/launch'), 4000);
-        const finalResponse = response.status === 404 && apiUrl('/api/sim/launch') !== rootApiUrl('/api/sim/launch')
-          ? await fetchWithTimeout(rootApiUrl('/api/sim/launch'), 4000)
-          : response;
-        if (!finalResponse.ok) {
-          setConnection('offline', 'LodgeSim connection check failed.');
-          return false;
-        }
+    const getActiveRuns = () => getMergedRuns();
 
-        const payload = await finalResponse.json();
-        if (payload?.remote_mode) {
-          remoteRunnerMode = true;
-          setConnection('checking', payload?.message || 'Remote runner mode enabled.');
-          return false;
-        }
+    const updateSourceSummary = () => {
+      const hasSite = latestRuns.length > 0;
+      const hasRaidbots = getFreshRaidbotsRuns().length > 0;
+      const mergedRuns = getMergedRuns();
+      const latestForDifficulty = (runs, difficulty) => {
+        const values = runs
+          .filter((run) => String(run?.difficulty || '').toLowerCase() === difficulty)
+          .map((run) => Number(run?.updated_at ?? 0))
+          .filter((value) => Number.isFinite(value) && value > 0);
+        return values.length > 0 ? Math.max(...values) : null;
+      };
 
-        if (payload?.online) {
-          setConnection('online', 'LodgeSim online');
-          return true;
-        }
+      const countRowsForDifficulty = (runs, difficulty) => runs
+        .filter((run) => String(run?.difficulty || '').toLowerCase() === difficulty)
+        .flatMap((run) => Array.isArray(run?.winners) ? run.winners : [])
+        .length;
 
-        setConnection('offline', payload?.message || 'LodgeSim offline');
-        return false;
-      } catch {
-        setConnection('offline', 'LodgeSim check timed out or failed');
-        return false;
-      } finally {
-        window.clearTimeout(watchdog);
+      const describeDifficulty = (difficulty) => {
+        const raidbotsUpdated = latestForDifficulty(getFreshRaidbotsRuns(), difficulty);
+        const lodgeUpdated = latestForDifficulty(latestRuns, difficulty);
+        const raidbotsRows = countRowsForDifficulty(getFreshRaidbotsRuns(), difficulty);
+        const lodgeRows = countRowsForDifficulty(latestRuns, difficulty);
+        const mergedRows = countRowsForDifficulty(mergedRuns, difficulty);
+        const parts = [];
+        if (raidbotsUpdated) parts.push(`Raidbots ${new Date(raidbotsUpdated * 1000).toLocaleString()} (${raidbotsRows})`);
+        if (lodgeUpdated) parts.push(`LodgeSim ${new Date(lodgeUpdated * 1000).toLocaleString()} (${lodgeRows})`);
+        if (parts.length === 0) return `${formatDifficulty(difficulty)}: none`;
+        return `${formatDifficulty(difficulty)}: ${parts.join(' + ')} => merged ${mergedRows}`;
+      };
+      const perDiff = `${describeDifficulty('heroic')} | ${describeDifficulty('mythic')}`;
+
+      if (hasRaidbots && hasSite) {
+        sourceSummary.textContent = `Showing merged upgrades: fresh Raidbots rows replace LodgeSim, and LodgeSim fills any remaining gaps. ${perDiff}`;
+        return;
       }
+      if (hasRaidbots) {
+        sourceSummary.textContent = `Showing Raidbots-only upgrades (fresh <= 7 days). ${perDiff}`;
+        return;
+      }
+      if (hasSite) {
+        sourceSummary.textContent = `Showing LodgeSim upgrades (Raidbots reports are missing or stale). ${perDiff}`;
+        return;
+      }
+      sourceSummary.textContent = 'No upgrade recommendations are available yet.';
     };
 
-    const setRunning = (running) => {
-      runButton.disabled = running;
-      runButton.textContent = running ? 'Running...' : idleButtonLabel;
-    };
-
-    const syncAddonModeVisibility = () => {
-      const addonMode = modeSelect.value === 'addon';
-      addonWrap.classList.toggle('is-hidden', !addonMode);
-    };
-
-    const getAllRows = () => latestRuns.flatMap((run) => {
+    const getAllRows = () => getActiveRuns().flatMap((run) => {
       const winners = Array.isArray(run?.winners) ? run.winners : [];
       return winners.map((winner) => {
         const sourceDifficulty = inferSourceDifficulty(winner);
+        const dataOrigin = String(winner?.__origin || runOrigin(run));
+        const sourceDetailText = stripSourceDifficultyPrefix(winner.source || dataOrigin);
         return {
           ...winner,
           runId: run.run_id,
@@ -470,7 +455,9 @@ const latestByDifficulty = await getLatestSimsForRaiderByDifficulty((env as any)
           runDifficulty: String(run.difficulty || 'unknown').toLowerCase(),
           slotText: slotLabel(winner.slot),
           itemText: winner.item_label || `Item #${winner.item_id ?? '—'}`,
-          sourceText: stripSourceDifficultyPrefix(winner.source || 'Unknown source'),
+          sourceText: dataOrigin,
+          sourceDetailText,
+          dataOrigin,
           sourceDifficulty,
           ilvlNum: Number.isFinite(Number(winner.ilvl)) ? Number(winner.ilvl) : null,
           deltaNum: Number.isFinite(Number(winner.delta_dps)) ? Number(winner.delta_dps) : null,
@@ -479,44 +466,56 @@ const latestByDifficulty = await getLatestSimsForRaiderByDifficulty((env as any)
       });
     });
 
-    const updateMeta = () => {
-      if (!Array.isArray(latestRuns) || latestRuns.length === 0) {
-        meta.innerHTML = '<p>No uploaded sim results for this raider yet.</p>';
-        return;
-      }
-      const contextParts = [];
-      if (lastSimRaidLabel && lastSimRaidLabel !== 'All Raids') {
-        contextParts.push(esc(lastSimRaidLabel));
-      }
-      if (lastSimDifficulty && lastSimDifficulty !== 'all') {
-        contextParts.push(esc(lastSimDifficulty.charAt(0).toUpperCase() + lastSimDifficulty.slice(1)));
-      }
-      const contextLabel = contextParts.length > 0
-        ? ` <span aria-hidden="true"> • </span> ${contextParts.join(' <span aria-hidden="true"> • </span> ')}`
-        : '';
+    const renderSourceDebug = () => {
+      if (!(sourceDebugBody instanceof HTMLElement)) return;
 
-      const runSummary = [...latestRuns]
-        .sort((a, b) => difficultyRank(a?.difficulty) - difficultyRank(b?.difficulty))
-        .map((run) => {
-          const updated = run?.updated_at ? new Date(run.updated_at * 1000).toLocaleString() : 'Unknown';
-          const winners = Array.isArray(run?.winners) ? run.winners : [];
-          const hasNegative = winners.some((winner) => Number.isFinite(Number(winner?.delta_dps)) && Number(winner.delta_dps) < 0);
-          const badge = winners.length > 0 && !hasNegative
-            ? ' <span class="sim-meta-badge">positive-only</span>'
-            : '';
-          return `<p><strong>${esc(formatDifficulty(run?.difficulty))}</strong>${contextLabel} <span aria-hidden="true"> • </span> <strong>${esc(run?.run_id || 'Unknown')}</strong> <span aria-hidden="true"> • </span> Updated ${esc(updated)}${badge}</p>`;
-        })
-        .join('');
+      const rowsFor = (runs, difficulty) => runs
+        .filter((run) => String(run?.difficulty || '').toLowerCase() === difficulty)
+        .flatMap((run) => Array.isArray(run?.winners) ? run.winners : []);
 
-      meta.innerHTML = runSummary;
+      const maxUpdatedFor = (runs, difficulty) => {
+        const candidates = runs
+          .filter((run) => String(run?.difficulty || '').toLowerCase() === difficulty)
+          .map((run) => Number(run?.updated_at ?? 0))
+          .filter((value) => Number.isFinite(value) && value > 0);
+        return candidates.length > 0 ? Math.max(...candidates) : null;
+      };
 
-      const rows = getAllRows();
-      populateSelectOptions('[data-filter-key="slot"]', rows.map((w) => w.slotText), 'All Slots');
-      populateSelectOptions('[data-filter-key="source"]', rows.map((w) => w.sourceText), 'All Sources');
+      const fmtDate = (epoch) => (epoch && Number.isFinite(epoch) && epoch > 0)
+        ? new Date(epoch * 1000).toLocaleString()
+        : '—';
+
+      const freshRaidbots = getFreshRaidbotsRuns();
+      const mergedRuns = getMergedRuns();
+      const difficulties = ['mythic', 'heroic'];
+      sourceDebugBody.innerHTML = difficulties.map((difficulty) => {
+        const rbUpdated = maxUpdatedFor(freshRaidbots, difficulty);
+        const lsUpdated = maxUpdatedFor(latestRuns, difficulty);
+        const rbRows = rowsFor(freshRaidbots, difficulty).length;
+        const lsRows = rowsFor(latestRuns, difficulty).length;
+        const mergedRows = rowsFor(mergedRuns, difficulty).length;
+        const activeSource = rbRows > 0 && lsRows > 0 ? 'Mixed' : (rbRows > 0 ? 'Raidbots' : (lsRows > 0 ? 'LodgeSim' : 'None'));
+        const activeUpdated = Math.max(Number(rbUpdated ?? 0), Number(lsUpdated ?? 0)) || null;
+
+        return `
+          <tr>
+            <td>${esc(formatDifficulty(difficulty))}</td>
+            <td>${esc(activeSource)}</td>
+            <td>${esc(fmtDate(activeUpdated))}</td>
+            <td>${esc(fmtDate(rbUpdated))}</td>
+            <td>${esc(fmtDate(lsUpdated))}</td>
+            <td>${rbRows}</td>
+            <td>${lsRows}</td>
+            <td>${mergedRows}</td>
+          </tr>
+        `;
+      }).join('');
     };
 
     const buildRows = () => {
       const rows = getAllRows();
+      populateSelectOptions('[data-filter-key="slot"]', rows.map((row) => row.slotText), 'All Slots');
+      populateSelectOptions('[data-filter-key="source"]', rows.map((row) => row.sourceText), 'All Sources');
       if (rows.length === 0) {
         tableBody.innerHTML = '<tr><td colspan="8" class="sim-tools-empty">No recommendations yet for this raider.</td></tr>';
         return;
@@ -593,7 +592,12 @@ const latestByDifficulty = await getLatestSimsForRaiderByDifficulty((env as any)
                     : `<span>${esc(winner.itemText)}</span>`}
                 </div>
               </td>
-              <td>${esc(winner.sourceText)}</td>
+              <td>
+                <div class="sim-table-source-cell">
+                  <span class="sim-item-card-source ${esc(winner.dataOrigin === 'Raidbots' ? 'sim-item-card-source--raidbots' : 'sim-item-card-source--lodgesim')}">${esc(winner.sourceText)}</span>
+                  <span class="sim-table-source-detail">${esc(winner.sourceDetailText)}</span>
+                </div>
+              </td>
               <td>${esc(formatDifficulty(winner.sourceDifficulty))}</td>
               <td>${winner.ilvlNum ?? '—'}</td>
               <td>${deltaLabel}</td>
@@ -620,217 +624,137 @@ const latestByDifficulty = await getLatestSimsForRaiderByDifficulty((env as any)
         if (!resp.ok) return;
         const payload = await resp.json();
         latestRuns = Array.isArray(payload?.data) ? payload.data : [];
-        updateMeta();
-        buildRows();
+        updateSourceSummary();
+        renderSourceDebug();
+        buildActiveView();
       } catch {
         // Keep existing table when refresh fails.
       }
     };
 
-    const stopPolling = () => {
-      if (pollTimer) {
-        window.clearInterval(pollTimer);
-        pollTimer = null;
-      }
-      activeJobId = null;
-      setRunning(false);
+    const getAvailableDifficulties = () => {
+      const diffs = new Set(
+        getActiveRuns()
+          .map((r) => String(r?.difficulty || '').toLowerCase())
+          .filter((d) => d === 'heroic' || d === 'mythic')
+      );
+      // mythic first, then heroic
+      const out = [];
+      if (diffs.has('mythic')) out.push('mythic');
+      if (diffs.has('heroic')) out.push('heroic');
+      return out;
     };
 
-    const pollStatus = async () => {
-      if (!activeJobId) return;
+    const updateDiffTabs = () => {
+      const available = getAvailableDifficulties();
+      const tabsBar = panel.querySelector('[data-diff-tabs]');
+      if (!(tabsBar instanceof HTMLElement)) return;
 
-      try {
-        const resp = await fetchApi(`/api/sim/launch/status?job_id=${encodeURIComponent(activeJobId)}&char_id=${encodeURIComponent(charId)}`, {
-          headers: { Accept: 'application/json' },
+      tabsBar.querySelectorAll('[data-diff-tab]').forEach((btn) => {
+        if (!(btn instanceof HTMLButtonElement)) return;
+        const diff = btn.getAttribute('data-diff-tab');
+        btn.style.display = available.includes(diff) ? '' : 'none';
+        btn.classList.toggle('is-active', diff === encounterDifficulty);
+      });
+
+      // If current encounterDifficulty has no data, switch to first available
+      if (available.length > 0 && !available.includes(encounterDifficulty)) {
+        encounterDifficulty = available[0];
+        tabsBar.querySelectorAll('[data-diff-tab]').forEach((btn) => {
+          if (!(btn instanceof HTMLButtonElement)) return;
+          btn.classList.toggle('is-active', btn.getAttribute('data-diff-tab') === encounterDifficulty);
         });
-
-        if (!resp.ok) {
-          const payload = await resp.json().catch(() => ({}));
-          setStatus(payload?.error || 'Status check failed.');
-          stopPolling();
-          return;
-        }
-
-        const payload = await resp.json();
-        const status = String(payload?.status || 'unknown');
-        const message = String(payload?.message || '').trim();
-        const pct = payload?.progress_percent;
-        if (pct !== null && pct !== undefined) setProgress(pct);
-
-        if (message) {
-          setStatus(message);
-        } else if (status === 'running') {
-          setStatus('LodgeSim is running your sim...');
-        } else if (status === 'queued') {
-          setStatus('Run queued in LodgeSim...');
-        }
-
-        if (payload?.latest) {
-          updateMeta();
-          buildRows();
-        }
-
-        if (status === 'finished') {
-          setProgress(100);
-          setStatus('Sim complete. Results refreshed.');
-          stopPolling();
-          await refreshLatest();
-          return;
-        }
-
-        if (status === 'failed') {
-          setStatus(message || 'LodgeSim reported a failed run.');
-          stopPolling();
-        }
-      } catch {
-        setStatus('Unable to reach sim status endpoint.');
-        stopPolling();
       }
     };
 
-    const launchRun = async () => {
-      const isOnline = await checkConnection();
-      if (!isOnline) {
-        if (remoteRunnerMode) {
-          setStatus('Remote runner mode is enabled. Manual website launch is unavailable from this environment.');
-          return;
-        }
-        setStatus('LodgeSim app is offline. Start LodgeSim before running.');
+    const buildEncounterView = () => {
+      const encounterBody = panel.querySelector('[data-encounter-body]');
+      if (!(encounterBody instanceof HTMLElement)) return;
+
+      const diffRows = getAllRows().filter((r) => r.runDifficulty === encounterDifficulty);
+      if (diffRows.length === 0) {
+        const available = getAvailableDifficulties();
+        encounterBody.innerHTML = available.length === 0
+          ? '<p class="sim-tools-empty">No recommendations yet for this raider.</p>'
+          : '<p class="sim-tools-empty">No recommendations for this difficulty.</p>';
         return;
       }
 
-      const mode = modeSelect.value === 'addon' ? 'addon' : 'site';
-      const addonExport = addonInput.value.trim();
-      const simRaid = raidSelect.value || 'all';
-      const simDifficulty = difficultySelect.value || 'all';
-
-      const raidLabels = {
-        all: 'All Raids',
-        voidspire: 'The Voidspire',
-        dreamrift: 'The Dreamrift',
-        queldanas: "March on Quel'Danas",
-      };
-
-      if (mode === 'addon' && !addonExport) {
-        setStatus('Paste your SimC addon export before starting addon mode.');
-        return;
+      // Group by boss/source
+      const byBoss = new Map();
+      for (const row of diffRows) {
+        const boss = row.sourceDetailText || 'Unknown Source';
+        if (!byBoss.has(boss)) byBoss.set(boss, []);
+        byBoss.get(boss).push(row);
       }
 
-      lastSimRaidLabel = raidLabels[simRaid] || 'All Raids';
-      lastSimDifficulty = simDifficulty;
-
-      setRunning(true);
-      setProgress(0);
-      setStatus('Submitting run to LodgeSim...');
-
-      try {
-        const resp = await fetchApi('/api/sim/launch', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            Accept: 'application/json',
-          },
-          body: JSON.stringify({
-            char_id: charId,
-            mode,
-            addon_export: mode === 'addon' ? addonExport : undefined,
-            sim_raid: simRaid,
-            sim_difficulty: simDifficulty,
-          }),
-        });
-
-        const payload = await resp.json().catch(() => ({}));
-        if (!resp.ok) {
-          setStatus(payload?.error || 'Failed to launch sim run.');
-          setRunning(false);
-          return;
-        }
-
-        const jobId = String(payload?.job_id || '').trim();
-        if (!jobId) {
-          setStatus('Launch succeeded but no job id was returned.');
-          setRunning(false);
-          return;
-        }
-
-        activeJobId = jobId;
-        setStatus(`Run submitted. Job ${jobId.slice(0, 8)}...`);
-        setProgress(3);
-
-        if (pollTimer) window.clearInterval(pollTimer);
-        pollTimer = window.setInterval(pollStatus, 5000);
-        await pollStatus();
-      } catch {
-        setStatus('Could not contact the launch endpoint.');
-        setRunning(false);
+      // Sort each group by delta descending
+      for (const items of byBoss.values()) {
+        items.sort((a, b) => (b.deltaNum ?? -Infinity) - (a.deltaNum ?? -Infinity));
       }
+
+      encounterBody.innerHTML = [...byBoss.entries()].map(([boss, items]) => {
+        const cards = items.map((row) => {
+          const delta = row.deltaNum;
+          const pct = row.pctNum;
+          const pctSuffix = pct != null ? ` (${formatPct(pct)})` : '';
+          const deltaLabel = delta == null ? '' : (delta >= 0 ? `+${formatNumber(delta)}${pctSuffix}` : `${formatNumber(delta)}${pctSuffix}`);
+          const deltaClass = delta == null ? '' : (delta >= 0 ? 'is-positive' : 'is-negative');
+          const itemId = Number(row.item_id ?? 0);
+          const wowhead = Number.isInteger(itemId) && itemId > 0 ? `https://www.wowhead.com/item=${itemId}` : null;
+          const metaParts = [];
+          if (row.ilvlNum != null) metaParts.push(String(row.ilvlNum));
+          if (row.slotText) metaParts.push(esc(row.slotText));
+          const sourceClass = row.dataOrigin === 'Raidbots' ? 'sim-item-card-source--raidbots' : 'sim-item-card-source--lodgesim';
+
+          return `
+            <div class="sim-item-card">
+              <div class="sim-item-card-body">
+                <div class="sim-item-card-head">
+                  <span class="sim-item-card-source ${esc(sourceClass)}">${esc(row.dataOrigin)}</span>
+                </div>
+                ${wowhead
+                  ? `<a class="sim-item-card-name" href="${esc(wowhead)}" target="_blank" rel="noopener noreferrer">${esc(row.itemText)}</a>`
+                  : `<span class="sim-item-card-name">${esc(row.itemText)}</span>`}
+                <span class="sim-item-card-meta">${metaParts.join(' · ')}</span>
+              </div>
+              ${delta != null ? `<span class="sim-item-card-delta ${esc(deltaClass)}">${esc(deltaLabel)}</span>` : ''}
+            </div>
+          `;
+        }).join('');
+
+        return `
+          <section class="sim-boss-section">
+            <h4 class="sim-boss-name">${esc(boss)}</h4>
+            <div class="sim-item-cards">${cards}</div>
+          </section>
+        `;
+      }).join('');
     };
 
-    const purgeHistory = async () => {
-      const confirmed = window.confirm('Purge all saved sim history for this character? This cannot be undone.');
-      if (!confirmed) return;
-
-      if (purgeButton instanceof HTMLButtonElement) purgeButton.disabled = true;
-      setStatus('Purging sim history...');
-
-      try {
-        const resp = await fetchApi('/api/sim/latest', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            Accept: 'application/json',
-          },
-          body: JSON.stringify({ char_id: charId }),
-        });
-
-        const raw = await resp.text();
-        let payload = {};
-        try {
-          payload = raw ? JSON.parse(raw) : {};
-        } catch {
-          payload = {};
-        }
-
-        if (!resp.ok) {
-          const message =
-            (payload && typeof payload === 'object' && 'error' in payload && typeof payload.error === 'string' && payload.error)
-            || (raw ? raw.slice(0, 240) : '')
-            || `Failed to purge sim history (HTTP ${resp.status}).`;
-          setStatus(message);
-          return;
-        }
-
-        const record = payload && typeof payload === 'object' ? payload : {};
-        latestRuns = Array.isArray(record?.data_by_difficulty) ? record.data_by_difficulty : [];
-        updateMeta();
+    const buildActiveView = () => {
+      if (viewMode === 'encounter') {
+        updateDiffTabs();
+        buildEncounterView();
+      } else {
         buildRows();
-
-        const deleted = record?.deleted || {};
-        const totalDeleted = Number(deleted.deleted_item_winners ?? 0);
-        setStatus(`Sim history purged (${totalDeleted} item entries removed).`);
-      } catch {
-        setStatus('Could not reach purge endpoint.');
-      } finally {
-        if (purgeButton instanceof HTMLButtonElement) purgeButton.disabled = false;
       }
     };
 
-    modeSelect.addEventListener('change', () => {
-      syncAddonModeVisibility();
-    });
-
-    const selectAddonExport = () => {
-      if (!addonInput.value) return;
-      addonInput.select();
+    const setViewMode = (mode) => {
+      viewMode = mode;
+      panel.querySelectorAll('[data-view-mode-btn]').forEach((btn) => {
+        if (!(btn instanceof HTMLButtonElement)) return;
+        btn.classList.toggle('is-active', btn.getAttribute('data-view-mode-btn') === mode);
+      });
+      const encounterView = panel.querySelector('[data-encounter-view]');
+      const tableView = panel.querySelector('[data-table-view]');
+      const diffTabs = panel.querySelector('[data-diff-tabs]');
+      if (encounterView instanceof HTMLElement) encounterView.style.display = mode === 'encounter' ? '' : 'none';
+      if (tableView instanceof HTMLElement) tableView.style.display = mode === 'table' ? '' : 'none';
+      if (diffTabs instanceof HTMLElement) diffTabs.style.display = mode === 'encounter' ? '' : 'none';
+      buildActiveView();
     };
-
-    addonInput.addEventListener('focus', () => {
-      selectAddonExport();
-    });
-
-    addonInput.addEventListener('click', () => {
-      selectAddonExport();
-    });
 
     const sortButtons = panel.querySelectorAll('[data-sort-key]');
     sortButtons.forEach((button) => {
@@ -864,28 +788,44 @@ const latestByDifficulty = await getLatestSimsForRaiderByDifficulty((env as any)
       });
     });
 
-    runButton.addEventListener('click', () => {
-      setStatus('Manual launches are disabled. Droptimizer sims are automated in the background.');
+    panel.querySelectorAll('[data-view-mode-btn]').forEach((btn) => {
+      if (!(btn instanceof HTMLButtonElement)) return;
+      btn.addEventListener('click', () => {
+        const mode = btn.getAttribute('data-view-mode-btn');
+        if (mode === 'encounter' || mode === 'table') setViewMode(mode);
+      });
     });
 
-    if (purgeButton instanceof HTMLButtonElement) {
-      purgeButton.addEventListener('click', () => {
-        void purgeHistory();
+    panel.querySelectorAll('[data-diff-tab]').forEach((btn) => {
+      if (!(btn instanceof HTMLButtonElement)) return;
+      btn.addEventListener('click', () => {
+        const diff = btn.getAttribute('data-diff-tab');
+        if (diff === 'heroic' || diff === 'mythic') {
+          encounterDifficulty = diff;
+          updateDiffTabs();
+          buildEncounterView();
+        }
       });
-    }
+    });
 
-    window.addEventListener('resize', syncPurgeButtonWidth);
+    window.addEventListener('hl-raidbots-updated', (e) => {
+      const detail = (e instanceof CustomEvent) ? e.detail : {};
+      const newData = Array.isArray(detail?.tableData) ? detail.tableData : [];
+      raidbotsRuns = newData;
+      updateSourceSummary();
+      renderSourceDebug();
+      buildActiveView();
+    });
 
     try {
-      syncAddonModeVisibility();
-      syncPurgeButtonWidth();
-      updateMeta();
-      buildRows();
+      updateSourceSummary();
+      renderSourceDebug();
+      const initDiffs = getAvailableDifficulties();
+      if (initDiffs.length > 0) encounterDifficulty = initDiffs[0];
+      setViewMode('encounter');
       void refreshLatest();
-      void checkConnection();
     } catch {
-      window.clearTimeout(watchdog);
-      forceOffline('Connection check failed in UI. Refresh page.');
+      // Keep panel stable even if one render helper fails.
     }
   };
 
@@ -943,216 +883,288 @@ const latestByDifficulty = await getLatestSimsForRaiderByDifficulty((env as any)
     width: 1rem;
     height: 1rem;
   }
-
-  .sim-tools-subtitle {
-    margin: 0;
-    color: #a7c0d0;
-    font-size: 0.86rem;
-  }
-
-  .sim-tools-controls {
-    display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr)) auto;
-    gap: 0.6rem;
-    align-items: end;
-  }
-
-  .sim-tools-field {
-    display: grid;
-    gap: 0.3rem;
-  }
-
-  .sim-tools-field span {
-    color: #b3c6d3;
+  .sim-source-summary {
+    margin: 0 0 0.65rem;
+    color: #9bb2c2;
     font-size: 0.8rem;
-    letter-spacing: 0.03em;
-    text-transform: uppercase;
   }
 
-  .sim-tools-field select {
-    padding: 0.5rem 0.55rem;
+  .sim-source-debug {
+    margin: 0 0 0.75rem;
+    border: 1px solid rgba(214, 176, 106, 0.22);
     border-radius: 0.45rem;
-    border: 1px solid rgba(109, 172, 229, 0.35);
-    background: rgba(7, 15, 25, 0.8);
-    color: #e6eff6;
+    background: rgba(4, 10, 17, 0.45);
   }
 
-  .sim-tools-run {
-    padding: 0.52rem 0.78rem;
-    border-radius: 0.45rem;
-    border: 1px solid rgba(214, 176, 106, 0.4);
-    background: rgba(214, 176, 106, 0.15);
-    color: #f4ddb1;
-    font-weight: 700;
+  .sim-source-debug > summary {
     cursor: pointer;
+    list-style: none;
   }
 
-  .sim-tools-purge {
-    padding: 0.52rem 0.78rem;
-    border-radius: 0.45rem;
-    border: 1px solid rgba(248, 81, 73, 0.45);
-    background: rgba(248, 81, 73, 0.12);
-    color: #ffb4ae;
-    font-weight: 700;
-    cursor: pointer;
-  }
-
-  .sim-tools-purge:hover {
-    background: rgba(248, 81, 73, 0.2);
-    border-color: rgba(248, 81, 73, 0.62);
-  }
-
-  .sim-tools-purge:disabled {
-    opacity: 0.65;
-    cursor: wait;
-  }
-
-  .sim-tools-run:disabled {
-    opacity: 0.65;
-    cursor: wait;
-  }
-
-  .sim-tools-addon-wrap {
-    display: grid;
-    gap: 0.35rem;
-  }
-
-  .sim-tools-addon-wrap span {
-    color: #b3c6d3;
-    font-size: 0.8rem;
-    letter-spacing: 0.03em;
-    text-transform: uppercase;
-  }
-
-  .sim-tools-addon-wrap textarea {
-    width: 100%;
-    border-radius: 0.5rem;
-    border: 1px solid rgba(109, 172, 229, 0.28);
-    background: rgba(4, 10, 17, 0.8);
-    color: #d8e7f4;
-    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-    font-size: 0.78rem;
-    padding: 0.6rem;
-    resize: vertical;
-  }
-
-  .is-hidden {
+  .sim-source-debug > summary::-webkit-details-marker {
     display: none;
   }
 
-  .sim-tools-status {
-    display: grid;
-    gap: 0.35rem;
+  .sim-source-debug > summary::marker {
+    content: '';
   }
 
-  .sim-tools-status-row {
+  .sim-source-debug-summary {
+    display: flex;
+    align-items: center;
+    gap: 0.45rem;
+    width: 100%;
+    box-sizing: border-box;
+    padding: 0.45rem 0.55rem;
+    color: #c8d9e0;
+    font-size: 0.82rem;
+    font-weight: 700;
+    border-radius: 0;
+  }
+
+  .sim-source-debug .collapse-chevron {
+    width: 1rem;
+    height: 1rem;
+    margin-left: auto;
+    flex-shrink: 0;
+    transition: transform 0.2s ease;
+  }
+
+  .sim-source-debug[open] .sim-source-debug-summary {
+    border-bottom: 1px solid rgba(214, 176, 106, 0.15);
+  }
+
+  .sim-source-debug[open] .collapse-chevron {
+    transform: rotate(180deg);
+  }
+
+  .sim-source-debug-wrap {
+    padding: 0 0.55rem 0.55rem;
+    overflow-x: auto;
+  }
+
+  .sim-source-debug-table {
+    width: 100%;
+    min-width: 640px;
+    border-collapse: collapse;
+    font-size: 0.76rem;
+    color: #a9c0ce;
+  }
+
+  .sim-source-debug-table th,
+  .sim-source-debug-table td {
+    border-bottom: 1px solid rgba(214, 176, 106, 0.15);
+    padding: 0.3rem 0.4rem;
+    text-align: left;
+    white-space: nowrap;
+  }
+
+  .sim-source-debug-table th {
+    color: #f4ddb1;
+    font-size: 0.72rem;
+    letter-spacing: 0.03em;
+    text-transform: uppercase;
+  }
+
+  /* ── View mode bar ──────────────────────────────────────────────────── */
+  .sim-view-bar {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    flex-wrap: wrap;
+    margin-top: 0.2rem;
+    margin-bottom: 0.6rem;
+  }
+
+  .sim-view-mode-toggle {
+    display: flex;
+    gap: 0;
+    border: 1px solid rgba(214, 176, 106, 0.3);
+    border-radius: 0.45rem;
+    overflow: hidden;
+  }
+
+  .sim-view-mode-btn {
+    padding: 0.3rem 0.7rem;
+    border: none;
+    border-right: 1px solid rgba(214, 176, 106, 0.3);
+    background: rgba(7, 15, 25, 0.6);
+    color: #8fa4ad;
+    font-size: 0.8rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.15s, color 0.15s;
+  }
+
+  .sim-view-mode-btn:last-child {
+    border-right: none;
+  }
+
+  .sim-view-mode-btn.is-active {
+    background: rgba(214, 176, 106, 0.14);
+    color: #f4ddb1;
+  }
+
+  .sim-view-mode-btn:hover:not(.is-active) {
+    background: rgba(214, 176, 106, 0.07);
+    color: #c8d9e0;
+  }
+
+  /* ── Encounter / boss list ───────────────────────────────────────────── */
+  .sim-boss-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.1rem;
+  }
+
+  .sim-boss-section {
+    padding: 0.5rem 0 0.35rem;
+    border-top: 1px solid rgba(214, 176, 106, 0.12);
+  }
+
+  .sim-boss-section:first-child {
+    border-top: none;
+    padding-top: 0;
+  }
+
+  .sim-boss-name {
+    margin: 0 0 0.4rem;
+    font-family: 'Cinzel', Georgia, 'Times New Roman', serif;
+    font-size: 0.78rem;
+    font-weight: 700;
+    letter-spacing: 0.09em;
+    text-transform: uppercase;
+    color: #c8a85a;
+  }
+
+  /* ── Item cards ──────────────────────────────────────────────────────── */
+  .sim-item-cards {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 0.4rem;
+  }
+
+  .sim-item-card {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    gap: 0.75rem;
+    gap: 0.5rem;
+    padding: 0.38rem 0.55rem;
+    border-radius: 0.4rem;
+    border: 1px solid rgba(214, 176, 106, 0.15);
+    background: rgba(5, 10, 16, 0.5);
+    min-width: 0;
+    transition: border-color 0.12s, background 0.12s;
   }
 
-  .sim-tools-status-line {
-    margin: 0;
-    color: #d9e7f2;
-    font-size: 0.88rem;
+  .sim-item-card:hover {
+    border-color: rgba(214, 176, 106, 0.3);
+    background: rgba(214, 176, 106, 0.05);
   }
 
-  .sim-tools-connection {
-    margin: 0;
+  .sim-item-card-body {
+    display: flex;
+    flex-direction: column;
+    gap: 0.1rem;
+    min-width: 0;
+    flex: 1;
+  }
+
+  .sim-item-card-head {
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+    min-height: 1rem;
+  }
+
+  .sim-item-card-source {
     display: inline-flex;
     align-items: center;
-    gap: 0.4rem;
-    font-size: 0.78rem;
+    padding: 0.06rem 0.38rem;
+    border-radius: 999px;
+    font-size: 0.62rem;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+  }
+
+  .sim-item-card-source--raidbots {
+    color: #f4ddb1;
+    background: rgba(214, 176, 106, 0.13);
+    border: 1px solid rgba(214, 176, 106, 0.34);
+  }
+
+  .sim-item-card-source--lodgesim {
+    color: #a9d1ff;
+    background: rgba(76, 132, 201, 0.14);
+    border: 1px solid rgba(98, 154, 222, 0.3);
+  }
+
+  .sim-item-card-name {
+    font-size: 0.82rem;
     font-weight: 600;
-    letter-spacing: 0.02em;
-    color: #a5bed0;
-  }
-
-  .sim-tools-connection .dot {
-    flex-shrink: 0;
-    width: 0.5rem;
-    height: 0.5rem;
-    border-radius: 50%;
-    background: #9bb2c1;
-    box-shadow: 0 0 0.35rem rgba(155, 178, 193, 0.8);
-  }
-
-  .sim-tools-connection.checking {
-    color: #f2cc60;
-  }
-  .sim-tools-connection.checking .dot {
-    background: #f2cc60;
-    box-shadow: 0 0 0.5rem rgba(242, 204, 96, 0.9);
-  }
-
-  .sim-tools-connection.online {
-    color: #3fb950;
-  }
-  .sim-tools-connection.online .dot {
-    background: #3fb950;
-    box-shadow: 0 0 0.7rem 0.1rem rgba(63, 185, 80, 0.9);
-    animation: dot-pulse 2s ease-in-out infinite;
-  }
-
-  .sim-tools-connection.offline {
-    color: #f85149;
-  }
-  .sim-tools-connection.offline .dot {
-    background: #f85149;
-    box-shadow: 0 0 0.7rem 0.1rem rgba(248, 81, 73, 0.9);
-  }
-
-  @keyframes dot-pulse {
-    0%, 100% { box-shadow: 0 0 0.4rem 0.05rem rgba(63, 185, 80, 0.7); }
-    50%       { box-shadow: 0 0 1rem 0.15rem rgba(63, 185, 80, 1); }
-  }
-
-  .sim-tools-progress-track {
-    height: 0.55rem;
-    border-radius: 999px;
-    border: 1px solid rgba(109, 172, 229, 0.35);
+    color: #d9e8f0;
+    white-space: nowrap;
     overflow: hidden;
-    background: rgba(3, 9, 14, 0.9);
+    text-overflow: ellipsis;
+    text-decoration: none;
+    border-bottom: 1px dotted rgba(214, 176, 106, 0.35);
   }
 
-  .sim-tools-progress-fill {
-    height: 100%;
-    width: 0;
-    background: linear-gradient(90deg, rgba(109, 172, 229, 0.85), rgba(214, 176, 106, 0.85));
-    transition: width 0.25s ease;
+  a.sim-item-card-name:hover {
+    color: #f4ddb1;
+    border-bottom-color: rgba(214, 176, 106, 0.7);
   }
 
-  .sim-tools-meta {
-    color: #abc1d0;
-    font-size: 0.86rem;
+  .sim-item-card-meta {
+    font-size: 0.72rem;
+    color: #7a97a6;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 
-  .sim-tools-meta p {
-    margin: 0;
+  .sim-item-card-delta {
+    flex-shrink: 0;
+    font-size: 0.82rem;
+    font-weight: 700;
+    letter-spacing: 0.01em;
+    white-space: nowrap;
   }
 
-  .sim-tools-assumption {
-    margin-top: 0.4rem !important;
-    color: #c6d7e2;
-    font-size: 0.79rem;
-    line-height: 1.35;
-    border: 1px solid rgba(109, 172, 229, 0.25);
-    border-radius: 0.45rem;
-    padding: 0.38rem 0.46rem;
-    background: rgba(4, 10, 17, 0.6);
+  .sim-table-source-cell {
+    display: flex;
+    flex-direction: column;
+    gap: 0.18rem;
+    min-width: 0;
   }
 
-  .sim-meta-badge {
-    display: inline-block;
-    margin-top: 0.35rem;
-    padding: 0.2rem 0.45rem;
-    border-radius: 999px;
-    border: 1px solid rgba(242, 204, 96, 0.45);
-    background: rgba(242, 204, 96, 0.12);
-    color: #f2cc60;
-    font-size: 0.73rem;
-    letter-spacing: 0.02em;
+  .sim-table-source-detail {
+    font-size: 0.72rem;
+    color: #7a97a6;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .sim-item-card-delta.is-positive { color: #4cc764; }
+  .sim-item-card-delta.is-negative { color: #f85149; }
+
+  @media (max-width: 900px) {
+    .sim-item-cards {
+      grid-template-columns: repeat(2, 1fr);
+    }
+  }
+
+  @media (max-width: 560px) {
+    .sim-item-cards {
+      grid-template-columns: 1fr;
+    }
+
+    .sim-view-bar {
+      flex-direction: column;
+      align-items: flex-start;
+    }
   }
 
   .sim-tools-table-wrap {
@@ -1166,30 +1178,33 @@ const latestByDifficulty = await getLatestSimsForRaiderByDifficulty((env as any)
   .sim-tools-table {
     width: 100%;
     border-collapse: collapse;
-    min-width: 960px;
+    min-width: 900px;
     table-layout: fixed;
   }
 
   .sim-tools-table th:nth-child(1),
-  .sim-tools-table td:nth-child(1) { width: 80px; }
+  .sim-tools-table td:nth-child(1) { width: 90px; }
 
   .sim-tools-table th:nth-child(2),
-  .sim-tools-table td:nth-child(2) { width: 220px; }
+  .sim-tools-table td:nth-child(2) { width: 110px; }
 
   .sim-tools-table th:nth-child(3),
-  .sim-tools-table td:nth-child(3) { width: 250px; }
+  .sim-tools-table td:nth-child(3) { width: 220px; }
 
   .sim-tools-table th:nth-child(4),
-  .sim-tools-table td:nth-child(4) { width: 110px; }
+  .sim-tools-table td:nth-child(4) { width: 160px; }
 
   .sim-tools-table th:nth-child(5),
-  .sim-tools-table td:nth-child(5) { width: 55px; }
+  .sim-tools-table td:nth-child(5) { width: 80px; }
 
   .sim-tools-table th:nth-child(6),
-  .sim-tools-table td:nth-child(6) { width: 95px; }
+  .sim-tools-table td:nth-child(6) { width: 60px; }
 
   .sim-tools-table th:nth-child(7),
-  .sim-tools-table td:nth-child(7) { width: 70px; }
+  .sim-tools-table td:nth-child(7) { width: 90px; }
+
+  .sim-tools-table th:nth-child(8),
+  .sim-tools-table td:nth-child(8) { width: 90px; }
 
   .sim-tools-table td {
     overflow: hidden;
@@ -1291,20 +1306,6 @@ const latestByDifficulty = await getLatestSimsForRaiderByDifficulty((env as any)
   }
 
   @media (max-width: 760px) {
-    .sim-tools-controls {
-      grid-template-columns: 1fr 1fr;
-    }
-
-    .sim-tools-run {
-      grid-column: 1 / -1;
-      width: 100%;
-    }
-
-    .sim-tools-status-row {
-      flex-direction: column;
-      align-items: flex-start;
-    }
-
     .sim-tools-table {
       min-width: 42rem;
     }

@@ -22,6 +22,10 @@ export async function GET(context: APIContext): Promise<Response> {
       pctGain: entry.pctGain,
       difficulty: entry.difficulty,
       updatedAt: entry.updatedAt,
+      source: entry.source,
+      sourceReportId: entry.sourceReportId,
+      sourceRaid: entry.sourceRaid,
+      sourceDifficulty: entry.sourceDifficulty,
     })),
     {
       headers: {

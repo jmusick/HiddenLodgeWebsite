@@ -7,7 +7,7 @@ import { env } from 'cloudflare:workers';
 import { classColor } from '../../lib/wow';
 import { getRaiderByCharId, getRaiderGear, getRaiderMedia, getPreparednessHistory, getProgressionHistory, getVaultHistory } from '../../lib/raiders';
 import { isCharacterOwner } from '../../lib/auth';
-import { getLatestSingleTargetForRaiders, getLatestSimsForRaiderByDifficulty } from '../../lib/sim-api';
+import { getLatestSingleTargetForRaiders, getLatestSimsForRaiderByDifficulty, getRaiderRaidbotsTableData } from '../../lib/sim-api';
 import { attendanceScoringStartUtc, attendanceStatusLabel, getAttendanceSummaryMap } from '../../lib/attendance';
 import { RAID_PROGRESS_TARGET_GROUPS } from '../../data/raidProgressTargets';
 import RaiderSimTools from '../../components/RaiderSimTools.astro';
@@ -32,11 +32,10 @@ if (!raider) {
 const { portrait, fullBody } = media;
 const nowEpoch = Math.floor(Date.now() / 1000);
 
-const [singleTargetMap, droptimizerSnapshots] = await Promise.all([
+await Promise.all([
   getLatestSingleTargetForRaiders((env as any).DB, [id], { maxAgeSeconds: 14 * 24 * 60 * 60 }),
   getLatestSimsForRaiderByDifficulty((env as any).DB, id, { maxAgeSeconds: 14 * 24 * 60 * 60 }),
 ]);
-const singleTargetSnapshot = singleTargetMap.get(id) ?? null;
 
 const attendanceSummaryMap = await getAttendanceSummaryMap((env as any).DB, { includeBreakdownFor: [id] });
 const attendanceSummary = attendanceSummaryMap.get(id) ?? null;
@@ -48,10 +47,41 @@ const attendanceStartLabel = new Date(attendanceScoringStartUtc() * 1000).toLoca
 });
 
 function authLabel(state: string): string {
-  if (state === 'ready') return 'Loaded';
-  if (state === 'expired') return 'Stale';
-  if (state === 'unavailable') return 'Unavailable';
-  return 'Pending';
+  if (state === 'ready') return 'Profile Ready';
+  if (state === 'expired') return 'Profile Stale';
+  if (state === 'unavailable') return 'Profile Unavailable';
+  return 'Profile Pending';
+}
+
+function authStatusTitle(state: string): string {
+  if (state === 'ready') return 'Blizzard profile and equipment data were fetched successfully.';
+  if (state === 'expired') return 'Blizzard profile data exists, but it is stale and needs refresh.';
+  if (state === 'unavailable') return 'Blizzard profile data could not be fetched.';
+  return 'Blizzard profile data has not been fetched yet.';
+}
+
+function formatProfileFetchedAt(timestamp: number | null): string | null {
+  if (!timestamp) return null;
+
+  return new Date(timestamp * 1000).toLocaleString(undefined, {
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+  });
+}
+
+function formatProfileFetchedAtTitle(timestamp: number | null): string | null {
+  if (!timestamp) return null;
+
+  return new Date(timestamp * 1000).toLocaleString(undefined, {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+    second: '2-digit',
+  });
 }
 
 function scoreColor(filled: number | null, total: number | null): string {
@@ -61,14 +91,6 @@ function scoreColor(filled: number | null, total: number | null): string {
   if (pct >= 0.75) return '#0070dd';
   if (pct >= 0.5)  return '#1eff00';
   return '#ffffff';
-}
-
-function freshnessBadge(updatedAt: number | null): { label: string; className: string } {
-  if (!updatedAt || updatedAt <= 0) return { label: 'missing', className: 'missing' };
-  const age = Math.max(0, nowEpoch - updatedAt);
-  if (age <= 24 * 60 * 60) return { label: 'fresh', className: 'fresh' };
-  if (age <= 2 * 24 * 60 * 60) return { label: 'aging', className: 'aging' };
-  return { label: 'stale', className: 'stale' };
 }
 
 function simDifficultyLabel(value: string): string {
@@ -451,13 +473,6 @@ function formatVaultWeekLabel(weekStartTs: number, weekEndTs: number): string {
 
 const color = classColor(raider.className);
 const pageTitle = `${raider.name} — ${raider.realm} | The Hidden Lodge`;
-const stFresh = freshnessBadge(singleTargetSnapshot?.updated_at ?? null);
-const droptimizerFreshness = droptimizerSnapshots.length > 0
-  ? droptimizerSnapshots.map((snapshot) => ({
-      difficulty: simDifficultyLabel(snapshot.difficulty),
-      ...freshnessBadge(snapshot.updated_at),
-    }))
-  : [{ difficulty: 'Droptimizer', ...freshnessBadge(null) }];
 const raidProgressMatrix = parseRaidProgressMatrix(raider.raidProgressLabel);
 const warcraftLogsUrl = `https://www.warcraftlogs.com/character/id/${raider.blizzardCharId}`;
 const canManageSim = Boolean(
@@ -465,12 +480,16 @@ const canManageSim = Boolean(
     Astro.locals.isAdmin || await isCharacterOwner((env as any).DB, Astro.locals.user.id, raider.blizzardCharId)
   )
 );
+const raidbotsTableData = await getRaiderRaidbotsTableData((env as any).DB, raider.blizzardCharId).catch(() => []);
 const blizzardArmoryUrl = raider.realmSlug
   ? `https://worldofwarcraft.blizzard.com/en-us/character/us/${encodeURIComponent(raider.realmSlug)}/${encodeURIComponent(raider.name.toLowerCase())}/`
   : null;
 const raiderIoUrl = raider.realmSlug
   ? `https://raider.io/characters/us/${encodeURIComponent(raider.realmSlug)}/${encodeURIComponent(raider.name)}`
   : null;
+const profileFetchedAtLabel = formatProfileFetchedAt(raider.lastCheckedAt);
+const profileFetchedAtTitle = formatProfileFetchedAtTitle(raider.lastCheckedAt);
+const profileFetchedAtIso = raider.lastCheckedAt ? new Date(raider.lastCheckedAt * 1000).toISOString() : null;
 const leftGearSlots = ['HEAD', 'NECK', 'SHOULDER', 'BACK', 'CHEST', 'WRIST'];
 const rightGearSlots = ['HANDS', 'WAIST', 'LEGS', 'FEET', 'FINGER_1', 'FINGER_2', 'TRINKET_1', 'TRINKET_2'];
 const weaponSlots = ['MAIN_HAND', 'OFF_HAND'];
@@ -521,7 +540,16 @@ function gemAffixState(item: (typeof gear)[number] | undefined): { missing: bool
         )}
       </div>
       <div class="raider-status">
-        <span class:list={['status-badge', raider.authState]}>{authLabel(raider.authState)}</span>
+        <span
+          class:list={['status-badge', raider.authState]}
+          data-tooltip={authStatusTitle(raider.authState)}
+          tabindex="0"
+        >{authLabel(raider.authState)}</span>
+        {profileFetchedAtLabel && profileFetchedAtIso && (
+          <p class="status-meta">
+            Profile fetched <time datetime={profileFetchedAtIso} title={profileFetchedAtTitle ?? undefined}>{profileFetchedAtLabel}</time>
+          </p>
+        )}
       </div>
     </header>
   </section>
@@ -1072,7 +1100,7 @@ function gemAffixState(item: (typeof gear)[number] | undefined): { missing: bool
         </div>
       </section>
 
-      <details class="preparedness-history-panel panel" open>
+      <details class="preparedness-history-panel panel">
         <summary class="prep-history-summary" aria-label="Attendance breakdown">
           <Icon name="lucide:user-check" class="raid-progress-icon" aria-hidden="true" />
           Attendance Breakdown
@@ -1408,36 +1436,17 @@ function gemAffixState(item: (typeof gear)[number] | undefined): { missing: bool
         )}
       </details>
 
-      <section class="sync-info panel" aria-label="Sync info">
-        <p class="sync-text">
-          <Icon name="lucide:activity" class="sync-icon" aria-hidden="true" />
-          Sim Freshness:&nbsp;
-          <span class="sim-freshness-wrap">
-            <span class:list={['freshness-chip', stFresh.className]}>Sim DPS: {stFresh.label}</span>
-            {droptimizerFreshness.map((entry) => (
-              <span class:list={['freshness-chip', entry.className]}>{entry.difficulty}: {entry.label}</span>
-            ))}
-          </span>
-        </p>
-        <p class="sync-text">
-          <Icon name="lucide:clock" class="sync-icon" aria-hidden="true" />
-          Last detail sync:&nbsp;
-          <strong>
-            {raider.lastCheckedAt
-              ? new Date(raider.lastCheckedAt * 1000).toLocaleString()
-              : 'Never'}
-          </strong>
-        </p>
-      </section>
     </div>
   </section>
 
   <section>
-    <RaiderSimTools 
+    <RaiderSimTools
       charId={raider.blizzardCharId}
       charName={raider.name}
       charClass={raider.className}
       canManageSim={canManageSim}
+      showSourceDebug={Boolean(Astro.locals.isAdmin)}
+      raidbotsTableData={raidbotsTableData}
     />
   </section>
 </Layout>
@@ -1565,9 +1574,14 @@ function gemAffixState(item: (typeof gear)[number] | undefined): { missing: bool
   .raider-status {
     margin-left: auto;
     flex-shrink: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 0.35rem;
   }
 
   .status-badge {
+    position: relative;
     display: inline-flex;
     align-items: center;
     padding: 0.3rem 0.7rem;
@@ -1577,6 +1591,47 @@ function gemAffixState(item: (typeof gear)[number] | undefined): { missing: bool
     letter-spacing: 0.03em;
     text-transform: uppercase;
     border: 1px solid rgba(255, 255, 255, 0.14);
+  }
+
+  .status-badge[data-tooltip] {
+    cursor: help;
+  }
+
+  .status-badge[data-tooltip]:hover::after,
+  .status-badge[data-tooltip]:focus-visible::after {
+    content: attr(data-tooltip);
+    position: absolute;
+    right: 0;
+    bottom: calc(100% + 0.45rem);
+    min-width: 13rem;
+    max-width: 20rem;
+    padding: 0.35rem 0.45rem;
+    border-radius: 0.35rem;
+    border: 1px solid rgba(214, 176, 106, 0.45);
+    background: rgba(2, 7, 12, 0.95);
+    color: #dfeef9;
+    font-size: 0.72rem;
+    line-height: 1.25;
+    text-align: left;
+    text-transform: none;
+    letter-spacing: normal;
+    white-space: normal;
+    z-index: 20;
+    pointer-events: none;
+    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.45);
+  }
+
+  .status-badge[data-tooltip]:hover::before,
+  .status-badge[data-tooltip]:focus-visible::before {
+    content: '';
+    position: absolute;
+    right: 0.9rem;
+    bottom: calc(100% + 0.16rem);
+    border-left: 0.3rem solid transparent;
+    border-right: 0.3rem solid transparent;
+    border-top: 0.3rem solid rgba(214, 176, 106, 0.45);
+    z-index: 21;
+    pointer-events: none;
   }
 
   .status-badge.ready {
@@ -1598,42 +1653,16 @@ function gemAffixState(item: (typeof gear)[number] | undefined): { missing: bool
     border-color: rgba(190, 205, 215, 0.26);
   }
 
-  .sim-freshness-wrap {
-    display: inline-flex;
-    flex-wrap: wrap;
-    gap: 0.35rem;
-    vertical-align: middle;
+  .status-meta {
+    margin: 0;
+    font-size: 0.76rem;
+    color: #93a9b7;
+    text-align: right;
+    white-space: nowrap;
   }
 
-  .freshness-chip {
-    display: inline-flex;
-    align-items: center;
-    padding: 0.14rem 0.45rem;
-    border-radius: 999px;
-    font-size: 0.75rem;
-    font-weight: 700;
-    border: 1px solid rgba(255, 255, 255, 0.14);
-    text-transform: uppercase;
-    letter-spacing: 0.02em;
-  }
-
-  .freshness-chip.fresh {
-    color: #9ce5b0;
-    background: rgba(56, 142, 81, 0.18);
-    border-color: rgba(109, 202, 138, 0.34);
-  }
-
-  .freshness-chip.aging {
-    color: #f0c07f;
-    background: rgba(173, 96, 31, 0.16);
-    border-color: rgba(240, 192, 127, 0.3);
-  }
-
-  .freshness-chip.stale,
-  .freshness-chip.missing {
-    color: #cfdae2;
-    background: rgba(132, 154, 171, 0.14);
-    border-color: rgba(190, 205, 215, 0.26);
+  .status-meta time {
+    color: #d7e4eb;
   }
 
   /* ── Body: full-body image + stats ── */
@@ -2402,6 +2431,8 @@ function gemAffixState(item: (typeof gear)[number] | undefined): { missing: bool
     display: flex;
     align-items: center;
     gap: 0.45rem;
+    width: 100%;
+    box-sizing: border-box;
     padding: 1rem 1.1rem;
     cursor: pointer;
     list-style: none;
@@ -2416,6 +2447,10 @@ function gemAffixState(item: (typeof gear)[number] | undefined): { missing: bool
 
   .prep-history-summary::-webkit-details-marker {
     display: none;
+  }
+
+  .prep-history-summary::marker {
+    content: '';
   }
 
   .prep-history-summary:hover {
@@ -2643,6 +2678,22 @@ function gemAffixState(item: (typeof gear)[number] | undefined): { missing: bool
   }
 
   @media (max-width: 800px) {
+    .raider-header {
+      flex-wrap: wrap;
+      align-items: flex-start;
+    }
+
+    .raider-status {
+      width: 100%;
+      margin-left: 0;
+      align-items: flex-start;
+    }
+
+    .status-meta {
+      text-align: left;
+      white-space: normal;
+    }
+
     .body-layout {
       flex-direction: column;
     }

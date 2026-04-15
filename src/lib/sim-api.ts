@@ -200,6 +200,10 @@ export interface DesktopDroptimizerUpgradeEntry {
   pctGain: number | null;
   difficulty: SimDifficulty;
   updatedAt: number;
+  source: 'Raidbots' | 'LodgeSim';
+  sourceReportId: string | null;
+  sourceRaid: string | null;
+  sourceDifficulty: SimDifficulty | null;
 }
 
 interface SimRunsSchema {
@@ -1212,42 +1216,14 @@ export async function getDesktopDroptimizerUpgrades(
   db: D1Database,
   options?: { maxAgeSeconds?: number }
 ): Promise<DesktopDroptimizerUpgradeEntry[]> {
-  if (!(await hasSimRunsTable(db))) return [];
-
   const tables = await getTableNames(db);
-  if (!tables.has('sim_item_scores')) return [];
+  const canUseLodgeSim = tables.has('sim_runs') && (tables.has('sim_item_scores') || tables.has('sim_item_winners'));
+  const canUseRaidbots = tables.has('sim_raidbots_item_scores') && tables.has('sim_raidbots_reports');
+  if (!canUseLodgeSim && !canUseRaidbots) return [];
 
-  const maxAgeSeconds = Math.max(60 * 60, Math.min(30 * 24 * 60 * 60, options?.maxAgeSeconds ?? 14 * 24 * 60 * 60));
-  const cutoff = nowSeconds() - maxAgeSeconds;
-
-  const runRowsResult = await db
-    .prepare(
-      `SELECT sr.id, sr.difficulty, sr.updated_at
-       FROM sim_runs sr
-       WHERE sr.status = 'finished'
-         AND sr.updated_at >= ?
-         AND (sr.runner_version IS NULL OR (${SINGLE_TARGET_RUNNER_SQL}) = 0)
-       ORDER BY COALESCE(sr.finished_at_utc, '') DESC, sr.updated_at DESC, sr.id DESC`
-    )
-    .bind(cutoff)
-    .all<{ id: number; difficulty: string; updated_at: number }>();
-
-  const latestRunByDifficulty = new Map<SimDifficulty, { id: number; updated_at: number }>();
-  for (const row of runRowsResult.results ?? []) {
-    const normalized = normalizeDifficulty(row.difficulty);
-    if (normalized === 'unknown') continue;
-    if (!latestRunByDifficulty.has(normalized)) {
-      latestRunByDifficulty.set(normalized, { id: row.id, updated_at: row.updated_at });
-    }
-    if (latestRunByDifficulty.has('heroic') && latestRunByDifficulty.has('mythic')) {
-      break;
-    }
-  }
-
-  const runIds = [...latestRunByDifficulty.values()].map((row) => row.id);
-  if (runIds.length === 0) return [];
-
-  const placeholders = runIds.map(() => '?').join(', ');
+  const lodgeSimMaxAgeSeconds = Math.max(60 * 60, Math.min(30 * 24 * 60 * 60, options?.maxAgeSeconds ?? 14 * 24 * 60 * 60));
+  const lodgeSimCutoff = nowSeconds() - lodgeSimMaxAgeSeconds;
+  const raidbotsCutoff = nowSeconds() - (7 * 24 * 60 * 60);
 
   type ScoreRow = {
     blizzard_char_id: number;
@@ -1258,85 +1234,172 @@ export async function getDesktopDroptimizerUpgrades(
     pct_gain: number | null;
     difficulty: string;
     updated_at: number;
+    report_id?: string | null;
+    raid_slug?: string | null;
   };
 
-  // Primary source: per-character per-item scores (populated by LodgeSim v1.4.0+).
-  const itemScoreRowsResult = await db
-    .prepare(
-      `SELECT
-         sis.blizzard_char_id,
-         c.name,
-         c.realm,
-         sis.item_id,
-         sis.delta_dps,
-         sis.pct_gain,
-         sr.difficulty,
-         sr.updated_at
-       FROM sim_item_scores sis
-       JOIN sim_runs sr ON sr.id = sis.sim_run_id
-       JOIN roster_members_cache c ON c.blizzard_char_id = sis.blizzard_char_id
-       WHERE sis.sim_run_id IN (${placeholders})
-         AND sis.item_id IS NOT NULL
-       ORDER BY sr.updated_at DESC, sis.delta_dps DESC`
-    )
-    .bind(...runIds)
-    .all<ScoreRow>();
+  const deduped = new Map<string, DesktopDroptimizerUpgradeEntry>();
 
-  // Fallback: when sim_item_scores is empty for the selected runs (older LodgeSim
-  // versions did not submit item_scores), use sim_item_winners which stores the
-  // per-item best winner. This gives one entry per item rather than per character,
-  // but avoids a completely empty droptimizer sync until a fresh run populates scores.
-  const useWinnerFallback = (itemScoreRowsResult.results ?? []).length === 0;
-
-  let rawRows: ScoreRow[];
-  if (useWinnerFallback) {
-    const winnerRowsResult = await db
+  // Raidbots is the primary source when fresh (<= 7 days old).
+  if (canUseRaidbots) {
+    const rbRowsResult = await db
       .prepare(
         `SELECT
-           siw.best_blizzard_char_id AS blizzard_char_id,
+           sis.blizzard_char_id,
            c.name,
            c.realm,
-           siw.item_id,
-           siw.delta_dps,
-           siw.pct_gain,
-           sr.difficulty,
-           sr.updated_at
-         FROM sim_item_winners siw
-         JOIN sim_runs sr ON sr.id = siw.sim_run_id
-         JOIN roster_members_cache c ON c.blizzard_char_id = siw.best_blizzard_char_id
-         WHERE siw.sim_run_id IN (${placeholders})
-           AND siw.item_id IS NOT NULL
-           AND siw.best_blizzard_char_id IS NOT NULL
-         ORDER BY sr.updated_at DESC, siw.delta_dps DESC`
+           sis.item_id,
+           sis.delta_dps,
+           sis.pct_gain,
+           COALESCE(sis.difficulty, srr.difficulty) AS difficulty,
+           srr.fetched_at AS updated_at,
+           srr.report_id,
+           srr.raid_slug
+         FROM sim_raidbots_item_scores sis
+         JOIN sim_raidbots_reports srr ON srr.id = sis.raidbots_report_id
+         JOIN roster_members_cache c ON c.blizzard_char_id = sis.blizzard_char_id
+         WHERE srr.status = 'ok'
+           AND srr.fetched_at >= ?
+           AND sis.item_id IS NOT NULL
+         ORDER BY srr.fetched_at DESC, sis.delta_dps DESC`
       )
-      .bind(...runIds)
+      .bind(raidbotsCutoff)
       .all<ScoreRow>();
-    rawRows = winnerRowsResult.results ?? [];
-  } else {
-    rawRows = itemScoreRowsResult.results ?? [];
+
+    for (const row of rbRowsResult.results ?? []) {
+      const difficulty = normalizeDifficulty(row.difficulty);
+      if (difficulty === 'unknown') continue;
+      const itemId = Number(row.item_id ?? NaN);
+      const delta = Number(row.delta_dps ?? NaN);
+      if (!Number.isFinite(itemId) || itemId <= 0 || !Number.isFinite(delta)) continue;
+
+      const key = `${difficulty}|${row.blizzard_char_id}|${itemId}`;
+      if (deduped.has(key)) continue;
+
+      deduped.set(key, {
+        blizzardCharId: Number(row.blizzard_char_id),
+        character: String(row.name ?? ''),
+        realm: String(row.realm ?? ''),
+        itemId,
+        deltaDps: delta,
+        pctGain: row.pct_gain == null ? null : Number(row.pct_gain),
+        difficulty,
+        updatedAt: Number(row.updated_at ?? 0),
+        source: 'Raidbots',
+        sourceReportId: row.report_id ? String(row.report_id) : null,
+        sourceRaid: row.raid_slug ? String(row.raid_slug) : null,
+        sourceDifficulty: difficulty,
+      });
+    }
   }
 
-  const deduped = new Map<string, DesktopDroptimizerUpgradeEntry>();
-  for (const row of rawRows) {
-    const difficulty = normalizeDifficulty(row.difficulty);
-    if (difficulty === 'unknown') continue;
-    const itemId = Number(row.item_id ?? NaN);
-    const delta = Number(row.delta_dps ?? NaN);
-    if (!Number.isFinite(itemId) || itemId <= 0 || !Number.isFinite(delta)) continue;
+  // LodgeSim remains the fallback source for gaps where no fresh Raidbots entry exists.
+  if (canUseLodgeSim && (await hasSimRunsTable(db))) {
+    const runRowsResult = await db
+      .prepare(
+        `SELECT sr.id, sr.difficulty, sr.updated_at
+         FROM sim_runs sr
+         WHERE sr.status = 'finished'
+           AND sr.updated_at >= ?
+           AND (sr.runner_version IS NULL OR (${SINGLE_TARGET_RUNNER_SQL}) = 0)
+         ORDER BY COALESCE(sr.finished_at_utc, '') DESC, sr.updated_at DESC, sr.id DESC`
+      )
+      .bind(lodgeSimCutoff)
+      .all<{ id: number; difficulty: string; updated_at: number }>();
 
-    const key = `${difficulty}|${row.blizzard_char_id}|${itemId}`;
-    if (deduped.has(key)) continue;
+    const latestRunByDifficulty = new Map<SimDifficulty, { id: number; updated_at: number }>();
+    for (const row of runRowsResult.results ?? []) {
+      const normalized = normalizeDifficulty(row.difficulty);
+      if (normalized === 'unknown') continue;
+      if (!latestRunByDifficulty.has(normalized)) {
+        latestRunByDifficulty.set(normalized, { id: row.id, updated_at: row.updated_at });
+      }
+      if (latestRunByDifficulty.has('heroic') && latestRunByDifficulty.has('mythic')) {
+        break;
+      }
+    }
 
-    deduped.set(key, {
-      blizzardCharId: Number(row.blizzard_char_id),
-      character: String(row.name ?? ''),
-      realm: String(row.realm ?? ''),
-      itemId: itemId,
-      deltaDps: delta,
-      pctGain: row.pct_gain == null ? null : Number(row.pct_gain),
-      difficulty,
-      updatedAt: Number(row.updated_at ?? 0),
-    });
+    const runIds = [...latestRunByDifficulty.values()].map((row) => row.id);
+    if (runIds.length > 0) {
+      const placeholders = runIds.map(() => '?').join(', ');
+
+      let itemScoreRows: ScoreRow[] = [];
+      if (tables.has('sim_item_scores')) {
+        const itemScoreRowsResult = await db
+          .prepare(
+            `SELECT
+               sis.blizzard_char_id,
+               c.name,
+               c.realm,
+               sis.item_id,
+               sis.delta_dps,
+               sis.pct_gain,
+               sr.difficulty,
+               sr.updated_at
+             FROM sim_item_scores sis
+             JOIN sim_runs sr ON sr.id = sis.sim_run_id
+             JOIN roster_members_cache c ON c.blizzard_char_id = sis.blizzard_char_id
+             WHERE sis.sim_run_id IN (${placeholders})
+               AND sis.item_id IS NOT NULL
+             ORDER BY sr.updated_at DESC, sis.delta_dps DESC`
+          )
+          .bind(...runIds)
+          .all<ScoreRow>();
+        itemScoreRows = itemScoreRowsResult.results ?? [];
+      }
+
+      let rawRows: ScoreRow[] = itemScoreRows;
+      if (rawRows.length === 0 && tables.has('sim_item_winners')) {
+        const winnerRowsResult = await db
+          .prepare(
+            `SELECT
+               siw.best_blizzard_char_id AS blizzard_char_id,
+               c.name,
+               c.realm,
+               siw.item_id,
+               siw.delta_dps,
+               siw.pct_gain,
+               sr.difficulty,
+               sr.updated_at
+             FROM sim_item_winners siw
+             JOIN sim_runs sr ON sr.id = siw.sim_run_id
+             JOIN roster_members_cache c ON c.blizzard_char_id = siw.best_blizzard_char_id
+             WHERE siw.sim_run_id IN (${placeholders})
+               AND siw.item_id IS NOT NULL
+               AND siw.best_blizzard_char_id IS NOT NULL
+             ORDER BY sr.updated_at DESC, siw.delta_dps DESC`
+          )
+          .bind(...runIds)
+          .all<ScoreRow>();
+        rawRows = winnerRowsResult.results ?? [];
+      }
+
+      for (const row of rawRows) {
+        const difficulty = normalizeDifficulty(row.difficulty);
+        if (difficulty === 'unknown') continue;
+        const itemId = Number(row.item_id ?? NaN);
+        const delta = Number(row.delta_dps ?? NaN);
+        if (!Number.isFinite(itemId) || itemId <= 0 || !Number.isFinite(delta)) continue;
+
+        const key = `${difficulty}|${row.blizzard_char_id}|${itemId}`;
+        if (deduped.has(key)) continue;
+
+        deduped.set(key, {
+          blizzardCharId: Number(row.blizzard_char_id),
+          character: String(row.name ?? ''),
+          realm: String(row.realm ?? ''),
+          itemId,
+          deltaDps: delta,
+          pctGain: row.pct_gain == null ? null : Number(row.pct_gain),
+          difficulty,
+          updatedAt: Number(row.updated_at ?? 0),
+          source: 'LodgeSim',
+          sourceReportId: null,
+          sourceRaid: null,
+          sourceDifficulty: difficulty,
+        });
+      }
+    }
   }
 
   const entries = [...deduped.values()];
@@ -1347,6 +1410,180 @@ export async function getDesktopDroptimizerUpgrades(
   });
 
   return entries;
+}
+
+export interface RaiderRaidbotsReportSummary {
+  id: number;
+  reportId: string;
+  raidSlug: string | null;
+  difficulty: string | null;
+  title: string | null;
+  status: string;
+  errorMessage: string | null;
+  fetchedAt: number | null;
+}
+
+export async function getRaiderRaidbotsReports(
+  db: D1Database,
+  charId: number
+): Promise<RaiderRaidbotsReportSummary[]> {
+  const tables = await getTableNames(db);
+  if (!tables.has('sim_raidbots_reports')) return [];
+
+  const rows = await db
+    .prepare(
+      `SELECT id, report_id, raid_slug, difficulty, report_title, status, error_message, fetched_at
+       FROM sim_raidbots_reports
+       WHERE blizzard_char_id = ?
+       ORDER BY updated_at DESC`
+    )
+    .bind(charId)
+    .all<{
+      id: number;
+      report_id: string;
+      raid_slug: string | null;
+      difficulty: string | null;
+      report_title: string | null;
+      status: string;
+      error_message: string | null;
+      fetched_at: number | null;
+    }>();
+
+  return (rows.results ?? []).map((r) => ({
+    id: r.id,
+    reportId: r.report_id,
+    raidSlug: r.raid_slug,
+    difficulty: r.difficulty,
+    title: r.report_title,
+    status: r.status,
+    errorMessage: r.error_message,
+    fetchedAt: r.fetched_at,
+  }));
+}
+
+export interface RaidbotsTableWinner {
+  slot: string | null;
+  item_id: number;
+  item_label: string | null;
+  ilvl: number | null;
+  source: string;
+  delta_dps: number;
+  pct_gain: number | null;
+  simc: null;
+}
+
+export interface RaidbotsTableRun {
+  run_id: string;
+  difficulty: 'heroic' | 'mythic';
+  updated_at: number;
+  winners: RaidbotsTableWinner[];
+}
+
+const RAID_SLUG_LABELS: Record<string, string> = {
+  queldanas: "March on Quel'Danas",
+  voidspire:  'The Voidspire',
+  dreamrift:  'The Dreamrift',
+};
+
+async function getTableColumns(db: D1Database, tableName: string): Promise<Set<string>> {
+  const rows = await db.prepare(`PRAGMA table_info(${tableName})`).all<{ name: string }>();
+  return new Set((rows.results ?? []).map((row) => row.name));
+}
+
+export async function getRaiderRaidbotsTableData(
+  db: D1Database,
+  charId: number
+): Promise<RaidbotsTableRun[]> {
+  const tables = await getTableNames(db);
+  if (!tables.has('sim_raidbots_item_scores') || !tables.has('sim_raidbots_reports')) return [];
+  const raidbotsItemScoreColumns = await getTableColumns(db, 'sim_raidbots_item_scores');
+  const hasItemLabelColumn = raidbotsItemScoreColumns.has('item_label');
+
+  type RbRow = {
+    item_id: number;
+    item_label: string | null;
+    delta_dps: number;
+    pct_gain: number | null;
+    slot: string | null;
+    ilvl: number | null;
+    report_id: string;
+    difficulty: string;
+    raid_slug: string | null;
+    fetched_at: number;
+  };
+
+  const rowsResult = await db
+    .prepare(
+      `SELECT
+         sis.item_id,
+        ${hasItemLabelColumn ? 'sis.item_label,' : 'NULL AS item_label,'}
+         sis.delta_dps,
+         sis.pct_gain,
+         sis.slot,
+         sis.ilvl,
+         srr.report_id,
+         srr.difficulty,
+         srr.raid_slug,
+         srr.fetched_at
+       FROM sim_raidbots_item_scores sis
+       JOIN sim_raidbots_reports srr ON srr.id = sis.raidbots_report_id
+       WHERE srr.blizzard_char_id = ?
+         AND srr.status = 'ok'
+         AND srr.fetched_at >= ?
+       ORDER BY srr.fetched_at DESC, sis.delta_dps DESC`
+    )
+    .bind(charId, nowSeconds() - (7 * 24 * 60 * 60))
+    .all<RbRow>();
+
+  // Group by difficulty; deduplicate by item_id (keep highest delta across all raids)
+  type Group = { updatedAt: number; bestByItemId: Map<number, RbRow> };
+  const byDifficulty = new Map<SimDifficulty, Group>();
+
+  for (const row of rowsResult.results ?? []) {
+    const diff = normalizeDifficulty(row.difficulty);
+    if (diff === 'unknown') continue;
+    const itemId = Number(row.item_id ?? NaN);
+    if (!Number.isFinite(itemId) || itemId <= 0) continue;
+    const delta = Number(row.delta_dps ?? NaN);
+    if (!Number.isFinite(delta)) continue;
+
+    if (!byDifficulty.has(diff)) {
+      byDifficulty.set(diff, { updatedAt: row.fetched_at, bestByItemId: new Map() });
+    }
+    const group = byDifficulty.get(diff)!;
+    if (row.fetched_at > group.updatedAt) group.updatedAt = row.fetched_at;
+
+    const existing = group.bestByItemId.get(itemId);
+    if (!existing || delta > Number(existing.delta_dps)) {
+      group.bestByItemId.set(itemId, row);
+    }
+  }
+
+  const runs: RaidbotsTableRun[] = [];
+  for (const [diff, group] of byDifficulty) {
+    const difficulty = diff as 'heroic' | 'mythic';
+    const diffLabel = difficulty === 'heroic' ? 'Heroic' : 'Mythic';
+
+    const winners: RaidbotsTableWinner[] = [...group.bestByItemId.values()].map((row) => {
+      const raidName = (row.raid_slug && RAID_SLUG_LABELS[row.raid_slug]) || 'Raidbots';
+      return {
+        slot:      row.slot,
+        item_id:   Number(row.item_id),
+        item_label: row.item_label ? String(row.item_label) : null,
+        ilvl:      row.ilvl != null ? Number(row.ilvl) : null,
+        source:    `${raidName} - ${diffLabel}`,
+        delta_dps: Number(row.delta_dps),
+        pct_gain:  row.pct_gain != null ? Number(row.pct_gain) : null,
+        simc:      null,
+      };
+    });
+
+    winners.sort((a, b) => b.delta_dps - a.delta_dps);
+    runs.push({ run_id: `raidbots-${difficulty}`, difficulty, updated_at: group.updatedAt, winners });
+  }
+
+  runs.sort((a, b) => difficultySortOrder(a.difficulty) - difficultySortOrder(b.difficulty));
+  return runs;
 }
 
 export async function purgeSimHistoryForRaider(
