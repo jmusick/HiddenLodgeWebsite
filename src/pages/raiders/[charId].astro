@@ -491,13 +491,15 @@ type RaidbotsDbDiag = {
   tableNamesHasReports: boolean; tableNamesHasScores: boolean;
   statuses: string; joinedRowsAll: number; joinedRowsOk: number;
   joinedRowsOkFresh: number; difficulties: string;
+  allResultsLength: number; allResultsUndefined: boolean;
+  sample: string;
 };
 let raidbotsDbDiag: RaidbotsDbDiag | null = null;
 if (Astro.locals.isAdmin) {
   try {
     const diagDb = (env as any).DB as import('@cloudflare/workers-types').D1Database;
     const cutoff = Math.floor(Date.now() / 1000) - 7 * 24 * 60 * 60;
-    const [reportRow, scoreRow, tableNamesResult, statusResult, joinedAll, joinedOk, joinedOkFresh, diffResult] = await Promise.all([
+    const [reportRow, scoreRow, tableNamesResult, statusResult, joinedAll, joinedOk, joinedOkFresh, diffResult, allResult] = await Promise.all([
       diagDb.prepare('SELECT COUNT(*) AS cnt, MAX(fetched_at) AS latest FROM sim_raidbots_reports WHERE blizzard_char_id = ?')
         .bind(raider.blizzardCharId).first<{ cnt: number; latest: number | null }>(),
       diagDb.prepare('SELECT COUNT(*) AS cnt FROM sim_raidbots_item_scores WHERE blizzard_char_id = ?')
@@ -513,8 +515,11 @@ if (Astro.locals.isAdmin) {
         .bind(raider.blizzardCharId, raider.blizzardCharId, cutoff).first<{ cnt: number }>(),
       diagDb.prepare('SELECT COALESCE(sis.difficulty, srr.difficulty) AS diff, COUNT(*) AS cnt FROM sim_raidbots_item_scores sis JOIN sim_raidbots_reports srr ON srr.id = sis.raidbots_report_id WHERE sis.blizzard_char_id = ? GROUP BY diff')
         .bind(raider.blizzardCharId).all<{ diff: string | null; cnt: number }>(),
+      diagDb.prepare("SELECT sis.item_id, sis.delta_dps, COALESCE(sis.difficulty, srr.difficulty) AS difficulty, srr.fetched_at FROM sim_raidbots_item_scores sis JOIN sim_raidbots_reports srr ON srr.id = sis.raidbots_report_id WHERE (sis.blizzard_char_id = ? OR srr.blizzard_char_id = ?) AND srr.status = 'ok' AND srr.fetched_at >= ? LIMIT 3")
+        .bind(raider.blizzardCharId, raider.blizzardCharId, cutoff).all<{ item_id: unknown; delta_dps: unknown; difficulty: unknown; fetched_at: unknown }>(),
     ]);
     const tableNames = new Set((tableNamesResult.results ?? []).map((r) => r.name));
+    const allRows = allResult.results;
     raidbotsDbDiag = {
       reportCount: reportRow?.cnt ?? 0,
       scoreCount: scoreRow?.cnt ?? 0,
@@ -526,6 +531,11 @@ if (Astro.locals.isAdmin) {
       joinedRowsOk: joinedOk?.cnt ?? 0,
       joinedRowsOkFresh: joinedOkFresh?.cnt ?? 0,
       difficulties: (diffResult.results ?? []).map((r) => `${r.diff ?? 'null'}:${r.cnt}`).join(', ') || 'none',
+      allResultsUndefined: allRows === undefined || allRows === null,
+      allResultsLength: Array.isArray(allRows) ? allRows.length : -1,
+      sample: Array.isArray(allRows) && allRows.length > 0
+        ? allRows.slice(0, 2).map((r) => `item=${r.item_id} dps=${r.delta_dps} diff=${r.difficulty} fat=${r.fetched_at}`).join(' | ')
+        : 'none',
     };
   } catch { /* ignore diagnostic errors */ }
 }
@@ -1488,20 +1498,22 @@ function gemAffixState(item: (typeof gear)[number] | undefined): { missing: bool
   </section>
 
   {Astro.locals.isAdmin && (raidbotsDbDiag !== null || raidbotsTableError !== null) && (
-    <div style="font-size: 11px; color: #8ea4b2; margin: 4px 16px 0; font-family: monospace; line-height: 1.6;">
-      <strong>Raidbots DB diag (charId={raider.blizzardCharId}):</strong>
+    <div style="font-size: 11px; color: #8ea4b2; margin: 4px 16px 0; font-family: monospace; line-height: 1.8; word-break: break-all;">
+      <strong>Raidbots DB diag (charId={raider.blizzardCharId}):</strong><br/>
       {raidbotsDbDiag !== null && (
-        <span>
-          {' '}reports={raidbotsDbDiag.reportCount} scores={raidbotsDbDiag.scoreCount}
+        <>
+          reports={raidbotsDbDiag.reportCount} scores={raidbotsDbDiag.scoreCount}
           latest={raidbotsDbDiag.latestFetchedAt !== null ? new Date(raidbotsDbDiag.latestFetchedAt * 1000).toLocaleString() : 'none'}
-          | tables-ok: reports={String(raidbotsDbDiag.tableNamesHasReports)} scores={String(raidbotsDbDiag.tableNamesHasScores)}
-          | statuses: {raidbotsDbDiag.statuses}
+          | tables: reports={String(raidbotsDbDiag.tableNamesHasReports)} scores={String(raidbotsDbDiag.tableNamesHasScores)}<br/>
+          statuses: {raidbotsDbDiag.statuses}
           | joined(all/ok/ok+fresh): {raidbotsDbDiag.joinedRowsAll}/{raidbotsDbDiag.joinedRowsOk}/{raidbotsDbDiag.joinedRowsOkFresh}
-          | difficulties: {raidbotsDbDiag.difficulties}
-        </span>
+          | difficulties: {raidbotsDbDiag.difficulties}<br/>
+          <strong>.all() results:</strong> undefined={String(raidbotsDbDiag.allResultsUndefined)} length={raidbotsDbDiag.allResultsLength}
+          | sample: {raidbotsDbDiag.sample}
+        </>
       )}
       {raidbotsTableError !== null && (
-        <span style="color: #ff6b6b;"> | tableData error: {raidbotsTableError}</span>
+        <span style="color: #ff6b6b;"><br/>tableData error: {raidbotsTableError}</span>
       )}
     </div>
   )}
