@@ -346,6 +346,7 @@ function getSlotOrder(slotLabel: string): number {
                               target="_blank"
                               rel="noopener noreferrer"
                               class="item-name-link"
+                              data-wowhead={`item=${item.itemId}`}
                             >
                               {itemDisplayName(item)}
                             </a>
@@ -529,6 +530,15 @@ function getSlotOrder(slotLabel: string): number {
 
   applyFilters();
 </script>
+
+<script is:inline>
+  window.whTooltips = {
+    colorLinks: true,
+    iconizeLinks: false,
+    renameLinks: false,
+  };
+</script>
+<script is:inline src="https://wow.zamimg.com/js/tooltips.js"></script>
 
 <style>
   .upgrades-page {

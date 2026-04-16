@@ -101,6 +101,22 @@ type BlizzardTokenCache = {
 const itemIconMemoryCache = new Map<number, string>();
 let tokenCache: BlizzardTokenCache | null = null;
 
+async function fetchWowheadIconUrl(itemId: number): Promise<string | null> {
+  try {
+    const res = await fetch(`https://www.wowhead.com/item=${itemId}&xml`);
+    if (!res.ok) return null;
+
+    const xml = await res.text();
+    const iconMatch = xml.match(/<icon(?:\s[^>]*)?>([^<]+)<\/icon>/i);
+    const iconName = iconMatch?.[1]?.trim();
+    if (!iconName) return null;
+
+    return `https://wow.zamimg.com/images/wow/icons/large/${iconName.toLowerCase()}.jpg`;
+  } catch {
+    return null;
+  }
+}
+
 async function getBlizzardAccessToken(
   clientId: string,
   clientSecret: string
@@ -217,6 +233,20 @@ async function fetchItemIconUrls(
       }
     })
   );
+
+  // 4. Fallback to Wowhead XML icon metadata for any unresolved IDs.
+  const stillMissing = needsApi.filter((id) => !result.has(id));
+  if (stillMissing.length > 0) {
+    await Promise.all(
+      stillMissing.map(async (itemId) => {
+        const wowheadIcon = await fetchWowheadIconUrl(itemId);
+        if (!wowheadIcon) return;
+        result.set(itemId, wowheadIcon);
+        itemIconMemoryCache.set(itemId, wowheadIcon);
+        freshIcons.push({ item_id: itemId, icon_url: wowheadIcon });
+      })
+    );
+  }
 
   // Persist fresh icons to DB so they don't need to be fetched again.
   if (hasIconTable && freshIcons.length > 0) {
