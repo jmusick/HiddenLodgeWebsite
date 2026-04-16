@@ -544,6 +544,7 @@ async function getExistingSimResultCounts(
 
 async function purgeStaleSimData(db: D1Database, simTables: SimTableNames): Promise<void> {
   const cutoff = nowSeconds() - SIM_HISTORY_RETENTION_SECONDS;
+  const tables = await getTableNames(db);
 
   await db
     .prepare(
@@ -564,6 +565,18 @@ async function purgeStaleSimData(db: D1Database, simTables: SimTableNames): Prom
     )
     .bind(cutoff)
     .run();
+
+  if (tables.has('sim_item_scores')) {
+    await db
+      .prepare(
+        `DELETE FROM sim_item_scores
+         WHERE sim_run_id IN (
+           SELECT id FROM sim_runs WHERE updated_at < ?
+         )`
+      )
+      .bind(cutoff)
+      .run();
+  }
 
   await db
     .prepare('DELETE FROM sim_runs WHERE updated_at < ?')

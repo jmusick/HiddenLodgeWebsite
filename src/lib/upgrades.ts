@@ -317,191 +317,206 @@ export async function getAllRaiderUpgrades(
   }
 
   // ─── Step 2: LodgeSim (fallback for gaps) ────────────────────────────────
+  // Each passive sim run contains only one raider's data, so we must aggregate
+  // across all recent runs — taking the most recent run per raider — rather
+  // than querying a single run that would only show one raider.
   if (canUseLodgeSim) {
-    const runRow = await db
-      .prepare(
-        `SELECT sr.id
-         FROM sim_runs sr
-         WHERE sr.status = 'finished'
-           AND sr.updated_at >= ?
-           AND LOWER(sr.difficulty) = ?
-           AND NOT (${SINGLE_TARGET_RUNNER_SQL})
-         ORDER BY COALESCE(sr.finished_at_utc, '') DESC, sr.updated_at DESC
-         LIMIT 1`
-      )
-      .bind(now - LODGESIM_MAX_AGE_SECONDS, difficulty)
-      .first<{ id: number }>();
+    let addedFromScores = false;
 
-    if (runRow) {
-      let addedFromScores = false;
+    if (tables.has('sim_item_scores')) {
+      // Deduplicate per char+item, keeping best delta.
+      type LsRow = {
+        blizzard_char_id: number;
+        char_name: string;
+        class_name: string;
+        item_id: number;
+        item_label: string | null;
+        delta_dps: number;
+        pct_gain: number | null;
+        slot: string | null;
+        ilvl: number | null;
+        source: string | null;
+      };
 
-      if (tables.has('sim_item_scores')) {
-        // Deduplicate per char+item, keeping best delta.
-        type LsRow = {
-          blizzard_char_id: number;
-          char_name: string;
-          class_name: string;
-          item_id: number;
-          item_label: string | null;
-          delta_dps: number;
-          pct_gain: number | null;
-          slot: string | null;
-          ilvl: number | null;
-          source: string | null;
-        };
+      // Subquery finds the most recently created run (MAX id) per raider, then
+      // joins back to retrieve that raider's item scores.
+      const lsResult = await db
+        .prepare(
+          `SELECT
+             sis.blizzard_char_id,
+             rmc.name AS char_name,
+             rmc.class_name,
+             sis.item_id,
+             sis.item_label,
+             sis.delta_dps,
+             sis.pct_gain,
+             sis.slot,
+             sis.ilvl,
+             sis.source
+           FROM sim_item_scores sis
+           JOIN sim_runs sr ON sr.id = sis.sim_run_id
+           JOIN roster_members_cache rmc ON rmc.blizzard_char_id = sis.blizzard_char_id
+           JOIN (
+             SELECT sis2.blizzard_char_id, MAX(sr2.id) AS latest_run_id
+             FROM sim_item_scores sis2
+             JOIN sim_runs sr2 ON sr2.id = sis2.sim_run_id
+             WHERE sr2.status = 'finished'
+               AND sr2.updated_at >= ?
+               AND LOWER(sr2.difficulty) = ?
+               AND NOT (${SINGLE_TARGET_RUNNER_SQL})
+             GROUP BY sis2.blizzard_char_id
+           ) latest_runs
+             ON latest_runs.blizzard_char_id = sis.blizzard_char_id
+            AND sr.id = latest_runs.latest_run_id
+           WHERE sis.item_id IS NOT NULL
+           ORDER BY sis.delta_dps DESC`
+        )
+        .bind(now - LODGESIM_MAX_AGE_SECONDS, difficulty)
+        .all<LsRow>();
 
-        const lsResult = await db
-          .prepare(
-            `SELECT
-               sis.blizzard_char_id,
-               rmc.name AS char_name,
-               rmc.class_name,
-               sis.item_id,
-               sis.item_label,
-               sis.delta_dps,
-               sis.pct_gain,
-               sis.slot,
-               sis.ilvl,
-               sis.source
-             FROM sim_item_scores sis
-             JOIN roster_members_cache rmc ON rmc.blizzard_char_id = sis.blizzard_char_id
-             WHERE sis.sim_run_id = ?
-               AND sis.item_id IS NOT NULL
-             ORDER BY sis.delta_dps DESC`
-          )
-          .bind(runRow.id)
-          .all<LsRow>();
-
-        const bestLsScores = new Map<string, LsRow>();
-        for (const row of lsResult.results ?? []) {
-          const key = `${row.blizzard_char_id}|${row.item_id}`;
-          const existing = bestLsScores.get(key);
-          if (!existing || Number(row.delta_dps) > Number(existing.delta_dps)) {
-            bestLsScores.set(key, row);
-          }
-        }
-
-        for (const row of bestLsScores.values()) {
-          const itemId = Number(row.item_id);
-          const delta = Number(row.delta_dps);
-          if (!Number.isFinite(delta) || itemId <= 0) continue;
-
-          const charItemKey = `${row.blizzard_char_id}|${itemId}`;
-          if (raidbotsCharItemKeys.has(charItemKey)) continue;
-
-          addedFromScores = true;
-          hasLodgeSimData = true;
-          const raidSlug = inferRaidSlugFromSource(row.source);
-
-          if (!itemsByItemId.has(itemId)) {
-            itemsByItemId.set(itemId, {
-              itemId,
-              itemLabel: row.item_label ? String(row.item_label) : null,
-              slot: row.slot ? String(row.slot) : null,
-              ilvl: row.ilvl != null ? Number(row.ilvl) : null,
-              itemIconUrl: null,
-              raidSlug,
-              raiders: [],
-              totalTeamDps: 0,
-            });
-          }
-          const item = itemsByItemId.get(itemId)!;
-          item.raiders.push({
-            charId: Number(row.blizzard_char_id),
-            charName: String(row.char_name ?? ''),
-            charClass: String(row.class_name ?? ''),
-            deltaDps: delta,
-            pctGain: row.pct_gain != null ? Number(row.pct_gain) : null,
-            source: 'LodgeSim',
-            raidSlug,
-          });
-          item.totalTeamDps += delta;
+      const bestLsScores = new Map<string, LsRow>();
+      for (const row of lsResult.results ?? []) {
+        const key = `${row.blizzard_char_id}|${row.item_id}`;
+        const existing = bestLsScores.get(key);
+        if (!existing || Number(row.delta_dps) > Number(existing.delta_dps)) {
+          bestLsScores.set(key, row);
         }
       }
 
-      // Fallback to sim_item_winners if sim_item_scores had nothing useful.
-      if (!addedFromScores && tables.has('sim_item_winners')) {
-        type WinRow = {
-          best_blizzard_char_id: number;
-          char_name: string;
-          class_name: string;
-          item_id: number;
-          item_label: string | null;
-          delta_dps: number;
-          pct_gain: number | null;
-          slot: string | null;
-          ilvl: number | null;
-          source: string | null;
-        };
+      for (const row of bestLsScores.values()) {
+        const itemId = Number(row.item_id);
+        const delta = Number(row.delta_dps);
+        if (!Number.isFinite(delta) || itemId <= 0) continue;
 
-        const winResult = await db
-          .prepare(
-            `SELECT
-               siw.best_blizzard_char_id,
-               rmc.name AS char_name,
-               rmc.class_name,
-               siw.item_id,
-               siw.item_label,
-               siw.delta_dps,
-               siw.pct_gain,
-               siw.slot,
-               siw.ilvl,
-               siw.source
-             FROM sim_item_winners siw
-             JOIN roster_members_cache rmc ON rmc.blizzard_char_id = siw.best_blizzard_char_id
-             WHERE siw.sim_run_id = ?
-               AND siw.item_id IS NOT NULL
-               AND siw.best_blizzard_char_id IS NOT NULL
-             ORDER BY siw.delta_dps DESC`
-          )
-          .bind(runRow.id)
-          .all<WinRow>();
+        const charItemKey = `${row.blizzard_char_id}|${itemId}`;
+        if (raidbotsCharItemKeys.has(charItemKey)) continue;
 
-        const bestWinScores = new Map<string, WinRow>();
-        for (const row of winResult.results ?? []) {
-          const itemId = Number(row.item_id);
-          const charId = Number(row.best_blizzard_char_id);
-          const delta = Number(row.delta_dps);
-          if (!Number.isFinite(delta) || itemId <= 0 || !Number.isFinite(charId)) continue;
-          const charItemKey = `${charId}|${itemId}`;
-          if (raidbotsCharItemKeys.has(charItemKey)) continue;
-          const existing = bestWinScores.get(charItemKey);
-          if (!existing || delta > Number(existing.delta_dps)) {
-            bestWinScores.set(charItemKey, row);
-          }
-        }
+        addedFromScores = true;
+        hasLodgeSimData = true;
+        const raidSlug = inferRaidSlugFromSource(row.source);
 
-        for (const [, row] of bestWinScores) {
-          const itemId = Number(row.item_id);
-          const charId = Number(row.best_blizzard_char_id);
-          const delta = Number(row.delta_dps);
-          hasLodgeSimData = true;
-          const raidSlug = inferRaidSlugFromSource(row.source);
-
-          if (!itemsByItemId.has(itemId)) {
-            itemsByItemId.set(itemId, {
-              itemId,
-              itemLabel: row.item_label ? String(row.item_label) : null,
-              slot: row.slot ? String(row.slot) : null,
-              ilvl: row.ilvl != null ? Number(row.ilvl) : null,
-              itemIconUrl: null,
-              raidSlug,
-              raiders: [],
-              totalTeamDps: 0,
-            });
-          }
-          const item = itemsByItemId.get(itemId)!;
-          item.raiders.push({
-            charId,
-            charName: String(row.char_name ?? ''),
-            charClass: String(row.class_name ?? ''),
-            deltaDps: delta,
-            pctGain: row.pct_gain != null ? Number(row.pct_gain) : null,
-            source: 'LodgeSim',
+        if (!itemsByItemId.has(itemId)) {
+          itemsByItemId.set(itemId, {
+            itemId,
+            itemLabel: row.item_label ? String(row.item_label) : null,
+            slot: row.slot ? String(row.slot) : null,
+            ilvl: row.ilvl != null ? Number(row.ilvl) : null,
+            itemIconUrl: null,
             raidSlug,
+            raiders: [],
+            totalTeamDps: 0,
           });
-          item.totalTeamDps += delta;
         }
+        const item = itemsByItemId.get(itemId)!;
+        item.raiders.push({
+          charId: Number(row.blizzard_char_id),
+          charName: String(row.char_name ?? ''),
+          charClass: String(row.class_name ?? ''),
+          deltaDps: delta,
+          pctGain: row.pct_gain != null ? Number(row.pct_gain) : null,
+          source: 'LodgeSim',
+          raidSlug,
+        });
+        item.totalTeamDps += delta;
+      }
+    }
+
+    // Fallback to sim_item_winners if sim_item_scores had nothing useful.
+    if (!addedFromScores && tables.has('sim_item_winners')) {
+      type WinRow = {
+        best_blizzard_char_id: number;
+        char_name: string;
+        class_name: string;
+        item_id: number;
+        item_label: string | null;
+        delta_dps: number;
+        pct_gain: number | null;
+        slot: string | null;
+        ilvl: number | null;
+        source: string | null;
+      };
+
+      // Same per-raider latest-run approach for winners.
+      const winResult = await db
+        .prepare(
+          `SELECT
+             siw.best_blizzard_char_id,
+             rmc.name AS char_name,
+             rmc.class_name,
+             siw.item_id,
+             siw.item_label,
+             siw.delta_dps,
+             siw.pct_gain,
+             siw.slot,
+             siw.ilvl,
+             siw.source
+           FROM sim_item_winners siw
+           JOIN sim_runs sr ON sr.id = siw.sim_run_id
+           JOIN roster_members_cache rmc ON rmc.blizzard_char_id = siw.best_blizzard_char_id
+           JOIN (
+             SELECT siw2.best_blizzard_char_id, MAX(sr2.id) AS latest_run_id
+             FROM sim_item_winners siw2
+             JOIN sim_runs sr2 ON sr2.id = siw2.sim_run_id
+             WHERE sr2.status = 'finished'
+               AND sr2.updated_at >= ?
+               AND LOWER(sr2.difficulty) = ?
+               AND NOT (${SINGLE_TARGET_RUNNER_SQL})
+               AND siw2.best_blizzard_char_id IS NOT NULL
+             GROUP BY siw2.best_blizzard_char_id
+           ) latest_runs
+             ON latest_runs.best_blizzard_char_id = siw.best_blizzard_char_id
+            AND sr.id = latest_runs.latest_run_id
+           WHERE siw.item_id IS NOT NULL
+             AND siw.best_blizzard_char_id IS NOT NULL
+           ORDER BY siw.delta_dps DESC`
+        )
+        .bind(now - LODGESIM_MAX_AGE_SECONDS, difficulty)
+        .all<WinRow>();
+
+      const bestWinScores = new Map<string, WinRow>();
+      for (const row of winResult.results ?? []) {
+        const itemId = Number(row.item_id);
+        const charId = Number(row.best_blizzard_char_id);
+        const delta = Number(row.delta_dps);
+        if (!Number.isFinite(delta) || itemId <= 0 || !Number.isFinite(charId)) continue;
+        const charItemKey = `${charId}|${itemId}`;
+        if (raidbotsCharItemKeys.has(charItemKey)) continue;
+        const existing = bestWinScores.get(charItemKey);
+        if (!existing || delta > Number(existing.delta_dps)) {
+          bestWinScores.set(charItemKey, row);
+        }
+      }
+
+      for (const [, row] of bestWinScores) {
+        const itemId = Number(row.item_id);
+        const charId = Number(row.best_blizzard_char_id);
+        const delta = Number(row.delta_dps);
+        hasLodgeSimData = true;
+        const raidSlug = inferRaidSlugFromSource(row.source);
+
+        if (!itemsByItemId.has(itemId)) {
+          itemsByItemId.set(itemId, {
+            itemId,
+            itemLabel: row.item_label ? String(row.item_label) : null,
+            slot: row.slot ? String(row.slot) : null,
+            ilvl: row.ilvl != null ? Number(row.ilvl) : null,
+            itemIconUrl: null,
+            raidSlug,
+            raiders: [],
+            totalTeamDps: 0,
+          });
+        }
+        const item = itemsByItemId.get(itemId)!;
+        item.raiders.push({
+          charId,
+          charName: String(row.char_name ?? ''),
+          charClass: String(row.class_name ?? ''),
+          deltaDps: delta,
+          pctGain: row.pct_gain != null ? Number(row.pct_gain) : null,
+          source: 'LodgeSim',
+          raidSlug,
+        });
+        item.totalTeamDps += delta;
       }
     }
   }
