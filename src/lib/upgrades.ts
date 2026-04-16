@@ -98,8 +98,7 @@ type BlizzardTokenCache = {
   expiresAtMs: number;
 };
 
-const itemIconCache = new Map<number, string>();
-const itemIconNegativeCache = new Set<number>();
+const itemIconMemoryCache = new Map<number, string>();
 let tokenCache: BlizzardTokenCache | null = null;
 
 async function getBlizzardAccessToken(
@@ -139,64 +138,94 @@ async function getBlizzardAccessToken(
 }
 
 async function fetchItemIconUrls(
+  db: D1Database,
   itemIds: number[],
   clientId: string | undefined,
   clientSecret: string | undefined
 ): Promise<Map<number, string>> {
   const result = new Map<number, string>();
   const validIds = itemIds.filter((id) => Number.isFinite(id) && id > 0);
-  if (!clientId || !clientSecret || validIds.length === 0) return result;
+  if (validIds.length === 0) return result;
 
+  // 1. Serve from in-memory cache (within-request deduplication).
   for (const id of validIds) {
-    if (itemIconCache.has(id)) {
-      result.set(id, itemIconCache.get(id)!);
+    if (itemIconMemoryCache.has(id)) result.set(id, itemIconMemoryCache.get(id)!);
+  }
+  const notInMemory = validIds.filter((id) => !itemIconMemoryCache.has(id));
+  if (notInMemory.length === 0) return result;
+
+  // 2. Check persistent DB cache (survives worker restarts, avoids repeat API calls).
+  const hasIconTable = await db
+    .prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='item_icon_cache' LIMIT 1")
+    .first<{ '1': number }>();
+
+  if (hasIconTable) {
+    const placeholders = notInMemory.map(() => '?').join(',');
+    const dbRows = await db
+      .prepare(`SELECT item_id, icon_url FROM item_icon_cache WHERE item_id IN (${placeholders})`)
+      .bind(...notInMemory)
+      .all<{ item_id: number; icon_url: string }>();
+
+    for (const row of dbRows.results ?? []) {
+      result.set(row.item_id, row.icon_url);
+      itemIconMemoryCache.set(row.item_id, row.icon_url);
     }
   }
 
-  const unresolved = validIds.filter(
-    (id) => !itemIconCache.has(id) && !itemIconNegativeCache.has(id)
-  );
-  if (unresolved.length === 0) return result;
+  // 3. Fetch remaining items from Blizzard API and persist them.
+  const needsApi = notInMemory.filter((id) => !result.has(id));
+  if (needsApi.length === 0 || !clientId || !clientSecret) return result;
 
   const token = await getBlizzardAccessToken(clientId, clientSecret);
   if (!token) return result;
 
+  const freshIcons: Array<{ item_id: number; icon_url: string }> = [];
+
   await Promise.all(
-    unresolved.map(async (itemId) => {
+    needsApi.map(async (itemId) => {
       try {
         const mediaRes = await fetch(
           `https://us.api.blizzard.com/data/wow/media/item/${itemId}?namespace=static-us&locale=en_US`,
-          {
-            headers: {
-              Authorization: `Bearer ${token}`,
-            },
-          }
+          { headers: { Authorization: `Bearer ${token}` } }
         );
-        if (!mediaRes.ok) {
-          itemIconNegativeCache.add(itemId);
-          return;
-        }
+        if (!mediaRes.ok) return;
 
         const mediaJson = (await mediaRes.json()) as {
           assets?: Array<{ key?: string; value?: string }>;
         };
-        const iconUrl =
+        const rawUrl =
           mediaJson.assets?.find((asset) => asset.key === 'icon')?.value ??
           mediaJson.assets?.[0]?.value ??
           null;
+        if (!rawUrl) return;
 
-        if (!iconUrl) {
-          itemIconNegativeCache.add(itemId);
-          return;
-        }
+        // Normalise to zamimg CDN — more reliably publicly accessible.
+        const match = rawUrl.match(/\/icons\/\d+\/([^/?#]+)/);
+        const iconUrl = match
+          ? `https://wow.zamimg.com/images/wow/icons/large/${match[1]}`
+          : rawUrl;
 
-        itemIconCache.set(itemId, iconUrl);
         result.set(itemId, iconUrl);
+        itemIconMemoryCache.set(itemId, iconUrl);
+        freshIcons.push({ item_id: itemId, icon_url: iconUrl });
       } catch {
-        itemIconNegativeCache.add(itemId);
+        // Leave this item without an icon for this request; it'll be retried next time.
       }
     })
   );
+
+  // Persist fresh icons to DB so they don't need to be fetched again.
+  if (hasIconTable && freshIcons.length > 0) {
+    const now = nowSeconds();
+    for (const icon of freshIcons) {
+      await db
+        .prepare(
+          'INSERT OR REPLACE INTO item_icon_cache (item_id, icon_url, fetched_at) VALUES (?, ?, ?)'
+        )
+        .bind(icon.item_id, icon.icon_url, now)
+        .run();
+    }
+  }
 
   return result;
 }
@@ -363,7 +392,7 @@ export async function getAllRaiderUpgrades(
              WHERE sr2.status = 'finished'
                AND sr2.updated_at >= ?
                AND LOWER(sr2.difficulty) = ?
-               AND NOT (${SINGLE_TARGET_RUNNER_SQL})
+               AND NOT (sr2.runner_version = 'wowsim-website-runner-v1-single-target' OR sr2.runner_version LIKE '%single-target%' OR sr2.runner_version LIKE '%single_target%')
              GROUP BY sis2.blizzard_char_id
            ) latest_runs
              ON latest_runs.blizzard_char_id = sis.blizzard_char_id
@@ -460,7 +489,7 @@ export async function getAllRaiderUpgrades(
              WHERE sr2.status = 'finished'
                AND sr2.updated_at >= ?
                AND LOWER(sr2.difficulty) = ?
-               AND NOT (${SINGLE_TARGET_RUNNER_SQL})
+               AND NOT (sr2.runner_version = 'wowsim-website-runner-v1-single-target' OR sr2.runner_version LIKE '%single-target%' OR sr2.runner_version LIKE '%single_target%')
                AND siw2.best_blizzard_char_id IS NOT NULL
              GROUP BY siw2.best_blizzard_char_id
            ) latest_runs
@@ -547,6 +576,7 @@ export async function loadUpgradesPageData(
   ]);
 
   const iconMap = await fetchItemIconUrls(
+    db,
     upgradeData.items.map((item) => item.itemId),
     blizzardClientId,
     blizzardClientSecret

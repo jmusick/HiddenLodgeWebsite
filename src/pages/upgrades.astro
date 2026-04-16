@@ -145,63 +145,6 @@ function displaySlot(slot: string | null | undefined): string {
   return slot.charAt(0).toUpperCase() + slot.slice(1).toLowerCase().replace(/_/g, ' ').replace(/-/g, ' ');
 }
 
-// Helper: get icon for slot type
-function getSlotIcon(slot: string | null | undefined): string {
-  if (!slot) return '⚙️';
-  const normalized = slot.trim().toLowerCase().replace(/-/g, '_');
-  const iconMap: Record<string, string> = {
-    'head': '👑',
-    'helm': '👑',
-    'helmet': '👑',
-    'neck': '📿',
-    'amulet': '📿',
-    'necklace': '📿',
-    'shoulder': '🎯',
-    'shoulders': '🎯',
-    'mantle': '🎯',
-    'chest': '🛡️',
-    'robe': '🛡️',
-    'waist': '⌚',
-    'belt': '⌚',
-    'legs': '👖',
-    'leg': '👖',
-    'feet': '👟',
-    'foot': '👟',
-    'boots': '👟',
-    'wrist': '🔗',
-    'bracer': '🔗',
-    'bracers': '🔗',
-    'hands': '✋',
-    'hand': '✋',
-    'back': '🧥',
-    'cloak': '🧥',
-    'finger': '💍',
-    'finger1': '💍',
-    'finger2': '💍',
-    'ring': '💍',
-    'trinket': '💎',
-    'trinket1': '💎',
-    'trinket2': '💎',
-    'mainhand': '⚔️',
-    'main_hand': '⚔️',
-    'main hand': '⚔️',
-    'offhand': '🗡️',
-    'off_hand': '🗡️',
-    'off hand': '🗡️',
-    'twohand': '🗡️',
-    'two_hand': '🗡️',
-    'two hand': '🗡️',
-    'onehand': '⚔️',
-    'one_hand': '⚔️',
-    'one hand': '⚔️',
-    'ranged': '🏹',
-    'bow': '🏹',
-    'gun': '🔫',
-    'wand': '🪄',
-  };
-  return iconMap[normalized] || '⚙️';
-}
-
 // Helper: format DPS delta as "28,500".
 function formatDps(value: number): string {
   return Math.round(value).toLocaleString('en-US');
@@ -222,6 +165,8 @@ function wowheadUrl(itemId: number): string {
 function itemDisplayName(item: (typeof data.items)[number]): string {
   return item.itemLabel ?? `Item #${item.itemId}`;
 }
+
+const FALLBACK_ICON = 'https://wow.zamimg.com/images/wow/icons/large/inv_misc_questionmark.jpg';
 
 function slotGroupLabel(slot: string | null | undefined): string {
   return displaySlot(slot) || 'Other';
@@ -377,7 +322,6 @@ function getSlotOrder(slotLabel: string): number {
             {itemGroups.map((group) => (
               <section class="slot-section" data-slot-section={group.slotLabel}>
                 <h2 class="slot-section-title" data-slot-title>
-                  <span class="slot-icon">{getSlotIcon(group.slot)}</span>
                   {group.slotLabel}
                 </h2>
                 <div class="slot-section-items">
@@ -391,10 +335,11 @@ function getSlotOrder(slotLabel: string): number {
                         <div class="item-card-title-row">
                           <div class="item-name-with-icon">
                             <img
-                              src={item.itemIconUrl ?? 'https://wow.zamimg.com/images/wow/icons/large/inv_misc_questionmark.jpg'}
+                              src={item.itemIconUrl ?? FALLBACK_ICON}
                               alt={itemDisplayName(item)}
                               class="item-icon"
                               loading="lazy"
+                              onerror={`this.src='${FALLBACK_ICON}'`}
                             />
                             <a
                               href={wowheadUrl(item.itemId)}
