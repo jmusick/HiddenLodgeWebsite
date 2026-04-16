@@ -757,6 +757,8 @@ function getSlotOrder(slotLabel: string): number {
     font-size: 0.72rem;
     letter-spacing: 0.04em;
     text-transform: uppercase;
+    white-space: nowrap;
+    flex-shrink: 0;
   }
 
   .boss-raid-label {
@@ -769,7 +771,10 @@ function getSlotOrder(slotLabel: string): number {
     padding: 0;
     border-bottom: 0;
     margin-bottom: 0;
+    min-width: 0;
     white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 
   .boss-btn {

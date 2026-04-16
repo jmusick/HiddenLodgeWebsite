@@ -1522,7 +1522,7 @@ export async function getRaiderRaidbotsTableData(
          sis.slot,
          sis.ilvl,
          srr.report_id,
-         srr.difficulty,
+         COALESCE(sis.difficulty, srr.difficulty) AS difficulty,
          srr.raid_slug,
          srr.fetched_at
        FROM sim_raidbots_item_scores sis
