@@ -45,7 +45,7 @@ When production has data, the script copies every table shared by production and
 
 ### Prerequisites
 - You must have **Cloudflare API access** configured with credentials (`wrangler` must be authenticated)
-- Your **local database schema** must already exist (run `npm run db:setup` first if needed)
+- Your **local database schema** must already exist (run `npm run db:bootstrap:local` first if needed)
 - You need **write permissions** to your local database
 
 ### Check Your Setup
@@ -54,7 +54,7 @@ When production has data, the script copies every table shared by production and
 npx wrangler whoami
 
 # Check local database exists and has tables
-npm run db:setup
+npm run db:bootstrap:local
 ```
 
 ## Script Output
@@ -124,12 +124,12 @@ The script is safe to run repeatedly. It:
 - Verify you have access to the D1 database in your account
 
 **Error: `no such table`**
-- If local tables don't exist, run: `npm run db:setup`
+- If local tables don't exist, run: `npm run db:bootstrap:local`
 - The script will skip tables that don't exist on either side
 
 **Error: `duplicate column`**
 - This means your local database schema is partially initialized
-- Run: `npm run db:setup` to reset it properly
+- Run: `npm run db:bootstrap:local` to reset it properly
 
 ### Include Pre-seeded Tables
 

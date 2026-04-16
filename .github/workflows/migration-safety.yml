@@ -1,0 +1,55 @@
+name: Migration Safety
+
+on:
+  pull_request:
+    paths:
+      - 'migrations/*.sql'
+      - 'scripts/check-migrations.mjs'
+      - 'scripts/d1-migration-helpers.mjs'
+      - '.github/workflows/migration-safety.yml'
+  push:
+    branches:
+      - main
+    paths:
+      - 'migrations/*.sql'
+      - 'scripts/check-migrations.mjs'
+      - 'scripts/d1-migration-helpers.mjs'
+      - '.github/workflows/migration-safety.yml'
+
+jobs:
+  check-migrations:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22.12.0'
+
+      - name: Determine changed migration files
+        id: changes
+        shell: bash
+        run: |
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            base="${{ github.event.pull_request.base.sha }}"
+            head="${{ github.event.pull_request.head.sha }}"
+          else
+            base="${{ github.event.before }}"
+            head="${{ github.sha }}"
+          fi
+
+          files=$(git diff --name-only "$base" "$head" -- 'migrations/*.sql' | tr '\n' ' ' | xargs)
+          echo "files=$files" >> "$GITHUB_OUTPUT"
+
+      - name: Check changed migrations
+        if: steps.changes.outputs.files != ''
+        run: node scripts/check-migrations.mjs ${{ steps.changes.outputs.files }}
+
+      - name: No migration changes
+        if: steps.changes.outputs.files == ''
+        run: echo "No migration file changes detected."

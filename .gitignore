@@ -9,6 +9,7 @@ node_modules/
 
 # local Cloudflare/Wrangler state
 .wrangler/
+.migration-backups/
 
 # logs
 npm-debug.log*

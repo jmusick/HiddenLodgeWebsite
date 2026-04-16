@@ -376,11 +376,18 @@ npm run preview
 Available helper scripts:
 
 ```sh
-npm run db:setup
-npm run db:setup:prod
+npm run db:bootstrap:local
+npm run db:migrate:local -- migrations/0061_preserve_raider_notes.sql
+npm run db:migrate:prod -- migrations/0061_preserve_raider_notes.sql
 ```
 
-Migrations are stored in `migrations/` and should be applied in order.
+Bootstrap and live migrations are intentionally separate now.
+
+- `db:bootstrap:local` is for building a fresh local schema from the full historical migration chain.
+- `db:bootstrap:prod:empty` exists only for an intentionally empty remote database and refuses to run if user tables already exist.
+- `db:migrate:local` and `db:migrate:prod` apply a single named migration file.
+- `db:migrate:prod` creates protected-table backups before applying a migration that touches protected data and blocks destructive SQL by default.
+- `db:setup:prod` was removed to avoid replaying historical destructive migrations against live production data.
 
 For existing production databases, apply only newly introduced migrations instead of replaying the full chain.
 
@@ -453,6 +460,13 @@ When a tag matching `v*` is pushed:
 - Patch: small fixes, copy changes, layout tweaks, minor feature polish
 - Minor: new site features, new admin capabilities, new public pages or major sections
 - Major: breaking workflow, data model, or deployment changes
+
+## Migration Safety
+
+- Historical migrations can contain destructive SQL for one-time schema repairs. They are preserved for bootstrap reproducibility, not for replay against live production.
+- New production migrations should be forward-only and data-preserving whenever possible.
+- The migration safety checker blocks destructive SQL in new migrations unless the file is explicitly annotated or part of the legacy allowlist.
+- Protected tables are backed up automatically before a production migration touches them. Backup artifacts are written to `.migration-backups/`.
 
 ## Notes
 
