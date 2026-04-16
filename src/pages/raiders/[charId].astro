@@ -480,7 +480,34 @@ const canManageSim = Boolean(
     Astro.locals.isAdmin || await isCharacterOwner((env as any).DB, Astro.locals.user.id, raider.blizzardCharId)
   )
 );
-const raidbotsTableData = await getRaiderRaidbotsTableData((env as any).DB, raider.blizzardCharId).catch(() => []);
+let raidbotsTableError: string | null = null;
+const raidbotsTableData = await getRaiderRaidbotsTableData((env as any).DB, raider.blizzardCharId).catch((e: unknown) => {
+  raidbotsTableError = String((e instanceof Error ? e.message : null) ?? e ?? 'unknown error');
+  return [] as Awaited<ReturnType<typeof getRaiderRaidbotsTableData>>;
+});
+
+type RaidbotsDbDiag = { reportCount: number; scoreCount: number; latestFetchedAt: number | null };
+let raidbotsDbDiag: RaidbotsDbDiag | null = null;
+if (Astro.locals.isAdmin) {
+  try {
+    const diagDb = (env as any).DB as import('@cloudflare/workers-types').D1Database;
+    const [reportRow, scoreRow] = await Promise.all([
+      diagDb
+        .prepare('SELECT COUNT(*) AS cnt, MAX(fetched_at) AS latest FROM sim_raidbots_reports WHERE blizzard_char_id = ?')
+        .bind(raider.blizzardCharId)
+        .first<{ cnt: number; latest: number | null }>(),
+      diagDb
+        .prepare('SELECT COUNT(*) AS cnt FROM sim_raidbots_item_scores WHERE blizzard_char_id = ?')
+        .bind(raider.blizzardCharId)
+        .first<{ cnt: number }>(),
+    ]);
+    raidbotsDbDiag = {
+      reportCount: reportRow?.cnt ?? 0,
+      scoreCount: scoreRow?.cnt ?? 0,
+      latestFetchedAt: reportRow?.latest ?? null,
+    };
+  } catch { /* ignore diagnostic errors */ }
+}
 const blizzardArmoryUrl = raider.realmSlug
   ? `https://worldofwarcraft.blizzard.com/en-us/character/us/${encodeURIComponent(raider.realmSlug)}/${encodeURIComponent(raider.name.toLowerCase())}/`
   : null;
@@ -1439,6 +1466,22 @@ function gemAffixState(item: (typeof gear)[number] | undefined): { missing: bool
     </div>
   </section>
 
+  {Astro.locals.isAdmin && (raidbotsDbDiag !== null || raidbotsTableError !== null) && (
+    <div style="font-size: 11px; color: #8ea4b2; margin: 4px 16px 0; font-family: monospace; line-height: 1.6;">
+      <strong>Raidbots DB (charId={raider.blizzardCharId}):</strong>
+      {raidbotsDbDiag !== null && (
+        <span>
+          {' '}reports={raidbotsDbDiag.reportCount}, scores={raidbotsDbDiag.scoreCount},
+          latest={raidbotsDbDiag.latestFetchedAt !== null
+            ? new Date(raidbotsDbDiag.latestFetchedAt * 1000).toLocaleString()
+            : 'none'}
+        </span>
+      )}
+      {raidbotsTableError !== null && (
+        <span style="color: #ff6b6b;"> | tableData error: {raidbotsTableError}</span>
+      )}
+    </div>
+  )}
   <section>
     <RaiderSimTools
       charId={raider.blizzardCharId}
