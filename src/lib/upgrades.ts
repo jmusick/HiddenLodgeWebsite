@@ -159,16 +159,20 @@ async function fetchItemIconUrls(
     .prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='item_icon_cache' LIMIT 1")
     .first<{ '1': number }>();
 
+  // D1 limits bound parameters to 100 per query — chunk the lookup.
   if (hasIconTable) {
-    const placeholders = notInMemory.map(() => '?').join(',');
-    const dbRows = await db
-      .prepare(`SELECT item_id, icon_url FROM item_icon_cache WHERE item_id IN (${placeholders})`)
-      .bind(...notInMemory)
-      .all<{ item_id: number; icon_url: string }>();
-
-    for (const row of dbRows.results ?? []) {
-      result.set(row.item_id, row.icon_url);
-      itemIconMemoryCache.set(row.item_id, row.icon_url);
+    const CHUNK = 90;
+    for (let i = 0; i < notInMemory.length; i += CHUNK) {
+      const chunk = notInMemory.slice(i, i + CHUNK);
+      const placeholders = chunk.map(() => '?').join(',');
+      const dbRows = await db
+        .prepare(`SELECT item_id, icon_url FROM item_icon_cache WHERE item_id IN (${placeholders})`)
+        .bind(...chunk)
+        .all<{ item_id: number; icon_url: string }>();
+      for (const row of dbRows.results ?? []) {
+        result.set(row.item_id, row.icon_url);
+        itemIconMemoryCache.set(row.item_id, row.icon_url);
+      }
     }
   }
 
