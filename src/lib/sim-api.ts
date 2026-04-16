@@ -1527,12 +1527,12 @@ export async function getRaiderRaidbotsTableData(
          srr.fetched_at
        FROM sim_raidbots_item_scores sis
        JOIN sim_raidbots_reports srr ON srr.id = sis.raidbots_report_id
-       WHERE srr.blizzard_char_id = ?
+       WHERE (sis.blizzard_char_id = ? OR srr.blizzard_char_id = ?)
          AND srr.status = 'ok'
          AND srr.fetched_at >= ?
        ORDER BY srr.fetched_at DESC, sis.delta_dps DESC`
     )
-    .bind(charId, nowSeconds() - (7 * 24 * 60 * 60))
+     .bind(charId, charId, nowSeconds() - (7 * 24 * 60 * 60))
     .all<RbRow>();
 
   // Group by difficulty; deduplicate by item_id (keep highest delta across all raids)
