@@ -633,6 +633,25 @@ const latestByDifficulty = await getLatestSimsForRaiderByDifficulty((env as any)
       }
     };
 
+    const refreshRaidbotsTable = async () => {
+      try {
+        const resp = await fetchApi(`/api/raiders/${encodeURIComponent(charId)}/raidbots-table`, {
+          headers: { Accept: 'application/json' },
+        });
+        if (!resp.ok) return;
+        const payload = await resp.json();
+        const data = Array.isArray(payload?.data) ? payload.data : [];
+        if (data.length === 0) return;
+
+        raidbotsRuns = data;
+        updateSourceSummary();
+        renderSourceDebug();
+        buildActiveView();
+      } catch {
+        // Keep existing Raidbots data when refresh fails.
+      }
+    };
+
     const getAvailableDifficulties = () => {
       const diffs = new Set(
         getActiveRuns()
@@ -825,6 +844,7 @@ const latestByDifficulty = await getLatestSimsForRaiderByDifficulty((env as any)
       if (initDiffs.length > 0) encounterDifficulty = initDiffs[0];
       setViewMode('encounter');
       void refreshLatest();
+      void refreshRaidbotsTable();
     } catch {
       // Keep panel stable even if one render helper fails.
     }
