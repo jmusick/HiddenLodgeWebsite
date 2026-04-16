@@ -480,75 +480,7 @@ const canManageSim = Boolean(
     Astro.locals.isAdmin || await isCharacterOwner((env as any).DB, Astro.locals.user.id, raider.blizzardCharId)
   )
 );
-let raidbotsTableError: string | null = null;
-const raidbotsTableData = await getRaiderRaidbotsTableData((env as any).DB, raider.blizzardCharId).catch((e: unknown) => {
-  raidbotsTableError = String((e instanceof Error ? e.message : null) ?? e ?? 'unknown error');
-  return [] as Awaited<ReturnType<typeof getRaiderRaidbotsTableData>>;
-});
-
-type RaidbotsDbDiag = {
-  statuses: string; joinedRowsOkFresh: number; difficulties: string;
-  pragmaColCount: number; hasItemLabel: boolean;
-  fullSelLen: number; fullSelUndef: boolean;
-  filterDiag: string; tableDataLen: number;
-};
-let raidbotsDbDiag: RaidbotsDbDiag | null = null;
-if (Astro.locals.isAdmin) {
-  try {
-    const diagDb = (env as any).DB as import('@cloudflare/workers-types').D1Database;
-    const cutoff = Math.floor(Date.now() / 1000) - 7 * 24 * 60 * 60;
-
-    // Step 1: replicate getTableColumns (PRAGMA)
-    const pragmaResult = await diagDb.prepare('PRAGMA table_info(sim_raidbots_item_scores)').all<{ name: string }>();
-    const pragmaColCount = (pragmaResult.results ?? []).length;
-    const hasItemLabel = (pragmaResult.results ?? []).some((r) => r.name === 'item_label');
-
-    // Step 2: replicate the exact full SELECT from getRaiderRaidbotsTableData (no LIMIT)
-    const fullSel = await diagDb
-      .prepare(`SELECT sis.item_id, ${hasItemLabel ? 'sis.item_label,' : 'NULL AS item_label,'} sis.delta_dps, sis.pct_gain, sis.slot, sis.ilvl, srr.report_id, COALESCE(sis.difficulty, srr.difficulty) AS difficulty, srr.raid_slug, srr.fetched_at FROM sim_raidbots_item_scores sis JOIN sim_raidbots_reports srr ON srr.id = sis.raidbots_report_id WHERE (sis.blizzard_char_id = ? OR srr.blizzard_char_id = ?) AND srr.status = 'ok' AND srr.fetched_at >= ? ORDER BY srr.fetched_at DESC, sis.delta_dps DESC`)
-      .bind(raider.blizzardCharId, raider.blizzardCharId, cutoff)
-      .all<{ item_id: unknown; delta_dps: unknown; difficulty: unknown; fetched_at: unknown }>();
-
-    const fullSelLen = Array.isArray(fullSel.results) ? fullSel.results.length : -1;
-    const fullSelUndef = fullSel.results === undefined || fullSel.results === null;
-
-    // Step 3: walk first row through every filter condition the function applies
-    let filterDiag = 'no rows';
-    if (Array.isArray(fullSel.results) && fullSel.results.length > 0) {
-      const r = fullSel.results[0];
-      const rawDiff = r.difficulty;
-      const diffStr = String(rawDiff ?? '').trim().toLowerCase();
-      const normDiff = diffStr === 'mythic' ? 'mythic' : (diffStr === 'heroic' || diffStr === 'flex') ? 'heroic' : 'unknown';
-      const itemId = Number(r.item_id ?? NaN);
-      const delta = Number(r.delta_dps ?? NaN);
-      filterDiag = `typeof_diff=${typeof rawDiff} rawDiff="${rawDiff}"→${normDiff} ` +
-        `itemId=${itemId}(fin=${Number.isFinite(itemId)},pos=${itemId > 0}) ` +
-        `delta=${delta}(fin=${Number.isFinite(delta)})`;
-    }
-
-    // Step 4: status + fresh counts
-    const [statusResult, freshCount, diffResult] = await Promise.all([
-      diagDb.prepare('SELECT status, COUNT(*) AS cnt FROM sim_raidbots_reports WHERE blizzard_char_id = ? GROUP BY status')
-        .bind(raider.blizzardCharId).all<{ status: string; cnt: number }>(),
-      diagDb.prepare("SELECT COUNT(*) AS cnt FROM sim_raidbots_item_scores sis JOIN sim_raidbots_reports srr ON srr.id = sis.raidbots_report_id WHERE (sis.blizzard_char_id = ? OR srr.blizzard_char_id = ?) AND srr.status = 'ok' AND srr.fetched_at >= ?")
-        .bind(raider.blizzardCharId, raider.blizzardCharId, cutoff).first<{ cnt: number }>(),
-      diagDb.prepare('SELECT COALESCE(sis.difficulty, srr.difficulty) AS diff, COUNT(*) AS cnt FROM sim_raidbots_item_scores sis JOIN sim_raidbots_reports srr ON srr.id = sis.raidbots_report_id WHERE sis.blizzard_char_id = ? GROUP BY diff')
-        .bind(raider.blizzardCharId).all<{ diff: string | null; cnt: number }>(),
-    ]);
-
-    raidbotsDbDiag = {
-      statuses: (statusResult.results ?? []).map((r) => `${r.status}:${r.cnt}`).join(', ') || 'none',
-      joinedRowsOkFresh: freshCount?.cnt ?? 0,
-      difficulties: (diffResult.results ?? []).map((r) => `${r.diff ?? 'null'}:${r.cnt}`).join(', ') || 'none',
-      pragmaColCount,
-      hasItemLabel,
-      fullSelLen,
-      fullSelUndef,
-      filterDiag,
-      tableDataLen: raidbotsTableData.length,
-    };
-  } catch { /* ignore diagnostic errors */ }
-}
+const raidbotsTableData = await getRaiderRaidbotsTableData((env as any).DB, raider.blizzardCharId).catch(() => []);
 const blizzardArmoryUrl = raider.realmSlug
   ? `https://worldofwarcraft.blizzard.com/en-us/character/us/${encodeURIComponent(raider.realmSlug)}/${encodeURIComponent(raider.name.toLowerCase())}/`
   : null;
@@ -1507,23 +1439,6 @@ function gemAffixState(item: (typeof gear)[number] | undefined): { missing: bool
     </div>
   </section>
 
-  {Astro.locals.isAdmin && (raidbotsDbDiag !== null || raidbotsTableError !== null) && (
-    <div style="font-size: 11px; color: #8ea4b2; margin: 4px 16px 0; font-family: monospace; line-height: 1.8; word-break: break-all;">
-      <strong>Raidbots diag (charId={raider.blizzardCharId}):</strong><br/>
-      {raidbotsDbDiag !== null && (
-        <>
-          statuses={raidbotsDbDiag.statuses} ok+fresh={raidbotsDbDiag.joinedRowsOkFresh} difficulties={raidbotsDbDiag.difficulties}<br/>
-          pragma cols={raidbotsDbDiag.pragmaColCount} hasItemLabel={String(raidbotsDbDiag.hasItemLabel)}<br/>
-          <strong>fullSel (exact fn query, no LIMIT):</strong> undef={String(raidbotsDbDiag.fullSelUndef)} len={raidbotsDbDiag.fullSelLen}<br/>
-          <strong>filter row[0]:</strong> {raidbotsDbDiag.filterDiag}<br/>
-          <strong>tableData.length (fn output):</strong> {raidbotsDbDiag.tableDataLen}
-        </>
-      )}
-      {raidbotsTableError !== null && (
-        <span style="color: #ff6b6b;"><br/>tableData error: {raidbotsTableError}</span>
-      )}
-    </div>
-  )}
   <section>
     <RaiderSimTools
       charId={raider.blizzardCharId}

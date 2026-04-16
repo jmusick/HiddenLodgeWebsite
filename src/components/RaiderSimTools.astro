@@ -180,8 +180,9 @@ const latestByDifficulty = await getLatestSimsForRaiderByDifficulty((env as any)
       }
     }
     const getFreshRaidbotsRuns = () => {
-      const cutoff = Math.floor(Date.now() / 1000) - (7 * 24 * 60 * 60);
-      return raidbotsRuns.filter((run) => Number(run?.updated_at ?? 0) >= cutoff);
+      // Freshness is already enforced server-side when raidbotsTableData is built.
+      // Do not re-filter by browser clock to avoid client clock-skew hiding valid data.
+      return raidbotsRuns;
     };
 
     let sortKey = 'delta';
