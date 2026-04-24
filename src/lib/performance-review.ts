@@ -138,6 +138,8 @@ export async function getExcessiveDeathReviewSummary(
       `WITH scoped_reports AS (
          SELECT
            r.id,
+           r.raid_ref_key,
+           r.occurrence_start_utc,
            r.report_code,
            r.total_boss_fights,
            r.death_stats_synced_at
@@ -151,7 +153,11 @@ export async function getExcessiveDeathReviewSummary(
        normalized_reports AS (
          SELECT
            id,
+           raid_ref_key,
+           occurrence_start_utc,
            CASE
+             WHEN TRIM(COALESCE(raid_ref_key, '')) <> '' AND occurrence_start_utc > 0
+               THEN LOWER(TRIM(raid_ref_key)) || '|' || CAST(occurrence_start_utc AS TEXT)
              WHEN TRIM(COALESCE(report_code, '')) <> '' THEN LOWER(TRIM(report_code))
              ELSE 'id:' || CAST(id AS TEXT)
            END AS dedupe_key,
@@ -179,6 +185,8 @@ export async function getExcessiveDeathReviewSummary(
       `WITH scoped_reports AS (
          SELECT
            r.id,
+           r.raid_ref_key,
+           r.occurrence_start_utc,
            r.report_code,
            r.death_stats_synced_at
          FROM raid_attendance_reports r
@@ -191,7 +199,11 @@ export async function getExcessiveDeathReviewSummary(
        normalized_reports AS (
          SELECT
            id,
+           raid_ref_key,
+           occurrence_start_utc,
            CASE
+             WHEN TRIM(COALESCE(raid_ref_key, '')) <> '' AND occurrence_start_utc > 0
+               THEN LOWER(TRIM(raid_ref_key)) || '|' || CAST(occurrence_start_utc AS TEXT)
              WHEN TRIM(COALESCE(report_code, '')) <> '' THEN LOWER(TRIM(report_code))
              ELSE 'id:' || CAST(id AS TEXT)
            END AS dedupe_key,
@@ -313,6 +325,8 @@ export async function getExcessiveDeathReviewSummary(
          SELECT
            *,
            CASE
+             WHEN TRIM(COALESCE(raid_ref_key, '')) <> '' AND occurrence_start_utc > 0
+               THEN LOWER(TRIM(raid_ref_key)) || '|' || CAST(occurrence_start_utc AS TEXT)
              WHEN TRIM(COALESCE(report_code, '')) <> '' THEN LOWER(TRIM(report_code))
              ELSE 'id:' || CAST(id AS TEXT)
            END AS dedupe_key
