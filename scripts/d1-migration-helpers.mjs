@@ -23,6 +23,7 @@ export const LEGACY_DESTRUCTIVE_ALLOWLIST = new Set([
   '0053_loot_history_season1_cutoff.sql',
   '0054_loot_history_canonical_dedupe.sql',
   '0058_loot_history_content_dedupe.sql',
+  '0063_loot_history_midnight_s1_raids_only.sql',
   '0061_preserve_raider_notes.sql',
 ]);
 export const PROTECTED_TABLES = [

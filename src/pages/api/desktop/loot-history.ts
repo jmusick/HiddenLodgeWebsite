@@ -3,6 +3,7 @@ export const prerender = false;
 import type { APIContext } from 'astro';
 import { env } from 'cloudflare:workers';
 import { isAuthorizedDesktopRequest } from '../../../lib/desktop-auth';
+import { isMidnightSeasonOneRaid } from '../../../lib/midnight-season-one';
 
 interface LootHistoryInputEntry {
 	entryKey?: string;
@@ -240,6 +241,7 @@ export async function POST(context: APIContext): Promise<Response> {
 	const statements = validated.map((entry) => {
 		const ownerName = asString(entry.ownerName);
 		const ownerRealm = asString(entry.ownerRealm);
+		const instanceName = asString(entry.instance);
 		const fullKey = normalizedOwnerKey(ownerName, ownerRealm);
 		let charId = charIdByOwner.get(fullKey) ?? null;
 		if (charId === null) {
@@ -250,6 +252,9 @@ export async function POST(context: APIContext): Promise<Response> {
 		}
 		const awardedAtEpoch = parseAwardedAtEpoch(asString(entry.date), asString(entry.time));
 		if (!isOnOrAfterSeasonOneCutoff(asString(entry.date), asString(entry.time), awardedAtEpoch)) {
+			return null;
+		}
+		if (!isMidnightSeasonOneRaid(instanceName)) {
 			return null;
 		}
 
@@ -335,7 +340,7 @@ export async function POST(context: APIContext): Promise<Response> {
 			asString(entry.class),
 			entry.mapId,
 			entry.difficultyId,
-			asString(entry.instance),
+			instanceName,
 			asString(entry.boss),
 			entry.groupSize,
 			asString(entry.date),
