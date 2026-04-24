@@ -303,6 +303,7 @@ export async function getExcessiveDeathReviewSummary(
       `WITH scoped_reports AS (
          SELECT
            r.id,
+           r.raid_ref_key,
            r.occurrence_start_utc,
            prs.name AS schedule_name,
            prs.weekday_utc,
