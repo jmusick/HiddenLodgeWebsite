@@ -238,8 +238,17 @@ curl -sS \
 
 | Endpoint | Method | Description |
 |---|---|---|
-| `/api/cron/refresh-roster` | GET | Refreshes both roster and raiders caches; requires `X-Cron-Secret` |
+| `/api/cron/refresh-roster` | GET | Refreshes roster, raiders, attendance, professions, and warms trinket cache in small class batches; requires `X-Cron-Secret` |
 | `/api/cron/refresh-attendance` | GET | Refreshes Warcraft Logs attendance report cache and participant scoring data; requires `X-Cron-Secret` |
+
+`/api/cron/refresh-roster` optional query params:
+
+- `detailBatchSize`: override roster detail batch size for this run.
+- `backfillBatchSize`: override roster quest/death/critter backfill batch size for this run.
+- `professionBatchSize`: override professions sync batch size for this run.
+- `trinketBatchSize`: number of classes to pre-warm in trinkets cache for this run (defaults to `1`, rotates classes between runs).
+
+You can also set `TRINKET_CACHE_WARM_BATCH_SIZE` in runtime env for the default trinket warm class count per cron run.
 
 ### Local Dev Cron Refresher
 

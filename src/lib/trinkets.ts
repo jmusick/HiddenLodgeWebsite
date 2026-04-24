@@ -5,6 +5,7 @@ const WCL_OAUTH_URL = 'https://www.warcraftlogs.com/oauth/token';
 const WCL_GRAPHQL_URL = 'https://www.warcraftlogs.com/api/v2/client';
 const CACHE_KEY_PREFIX = 'trinket_tier_data_v9';
 const CACHE_SCHEMA_VERSION = 9;
+const CACHE_WARM_CURSOR_KEY = 'trinket_tier_warm_cursor_v1';
 const CACHE_TTL_SECONDS = 6 * 60 * 60;
 const ZONE_CACHE_TTL_SECONDS = 24 * 60 * 60;
 const ZONE_CACHE_KEY = 'trinket_resolved_zone_v2';
@@ -19,6 +20,30 @@ const WCL_QUERY_RETRY_DELAYS_MS = [600, 2000];
 const WCL_AGGREGATE_INTER_ENCOUNTER_SLEEP_MS = 150;
 const WCL_AGGREGATE_INTER_SPEC_SLEEP_MS = 1200;
 const WCL_MISSING_SPEC_RETRY_DELAY_MS = 1200;
+
+const DEFAULT_TRINKET_WARM_BATCH_SIZE = 1;
+const DEFAULT_TRINKET_WARM_CLASS_ORDER = [
+  'death knight',
+  'demon hunter',
+  'druid',
+  'evoker',
+  'hunter',
+  'mage',
+  'monk',
+  'paladin',
+  'priest',
+  'rogue',
+  'shaman',
+  'warlock',
+  'warrior',
+];
+
+export const TRINKET_CACHE_KEY_PREFIX = CACHE_KEY_PREFIX;
+export const TRINKET_CACHE_SCHEMA_VERSION = CACHE_SCHEMA_VERSION;
+export const TRINKET_MAX_PARSE_ROWS = MAX_PARSE_ROWS;
+export const TRINKET_MAX_PARSE_SCAN_ROWS = MAX_PARSE_SCAN_ROWS;
+export const TRINKET_INITIAL_RANKING_PAGES = INITIAL_RANKING_PAGES;
+export const TRINKET_EXTENDED_RANKING_PAGES = EXTENDED_RANKING_PAGES;
 
 interface WclAuthConfig {
   clientId: string;
@@ -89,6 +114,24 @@ export interface TrinketTierPageData {
   availableEncounters: Array<{ id: number; name: string }>;
   specs: SpecTrinketTierResult[];
   warning: string | null;
+}
+
+interface SiteSettingCursorRow {
+  value: string | null;
+}
+
+export interface TrinketCacheWarmOptions {
+  db?: D1Database;
+  batchSize?: number;
+}
+
+export interface TrinketCacheWarmResult {
+  cursorStart: number;
+  cursorEnd: number;
+  batchSize: number;
+  classesAttempted: string[];
+  classesWarmed: string[];
+  failedClasses: string[];
 }
 
 interface SiteSettingRow {
@@ -276,6 +319,16 @@ function toPositiveInt(value: unknown): number | null {
   const parsed = Number(value ?? 0);
   if (!Number.isFinite(parsed) || parsed <= 0) return null;
   return Math.floor(parsed);
+}
+
+function clampPositiveInteger(value: unknown, fallback: number, max: number): number {
+  const parsed = Number(value ?? fallback);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return fallback;
+  }
+
+  const normalized = Math.floor(parsed);
+  return Math.min(Math.max(1, normalized), max);
 }
 
 function toRankingAmount(value: unknown): number {
@@ -1336,4 +1389,85 @@ export async function loadTrinketTierPageData(options?: {
   } catch {
     return buildUnavailablePayload('Warcraft Logs returned an unexpected response while loading trinkets.');
   }
+}
+
+async function readWarmCursor(db: D1Database): Promise<number> {
+  const row = await db
+    .prepare(`SELECT value FROM site_settings WHERE key = ? LIMIT 1`)
+    .bind(CACHE_WARM_CURSOR_KEY)
+    .first<SiteSettingCursorRow>();
+  const parsed = Number.parseInt(String(row?.value ?? ''), 10);
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    return 0;
+  }
+
+  return Math.floor(parsed);
+}
+
+async function writeWarmCursor(db: D1Database, cursor: number): Promise<void> {
+  await db
+    .prepare(
+      `INSERT INTO site_settings (key, value, updated_at)
+       VALUES (?, ?, unixepoch())
+       ON CONFLICT(key) DO UPDATE SET
+         value = excluded.value,
+         updated_at = excluded.updated_at`
+    )
+    .bind(CACHE_WARM_CURSOR_KEY, String(Math.max(0, Math.floor(cursor))))
+    .run();
+}
+
+export async function warmTrinketTierCacheChunk(options?: TrinketCacheWarmOptions): Promise<TrinketCacheWarmResult> {
+  const db = getDatabase(options?.db);
+  const classOrder = [...DEFAULT_TRINKET_WARM_CLASS_ORDER];
+  if (classOrder.length === 0) {
+    return {
+      cursorStart: 0,
+      cursorEnd: 0,
+      batchSize: 0,
+      classesAttempted: [],
+      classesWarmed: [],
+      failedClasses: [],
+    };
+  }
+
+  const batchSize = clampPositiveInteger(
+    options?.batchSize ?? env.TRINKET_CACHE_WARM_BATCH_SIZE,
+    DEFAULT_TRINKET_WARM_BATCH_SIZE,
+    classOrder.length
+  );
+
+  const cursorStart = (await readWarmCursor(db)) % classOrder.length;
+  const classesAttempted: string[] = [];
+  const classesWarmed: string[] = [];
+  const failedClasses: string[] = [];
+
+  for (let index = 0; index < batchSize; index += 1) {
+    const classNameFilter = classOrder[(cursorStart + index) % classOrder.length];
+    classesAttempted.push(classNameFilter);
+
+    const payload = await loadTrinketTierPageData({
+      db,
+      encounterId: null,
+      classNameFilter,
+    });
+
+    if (payload.zoneId > 0 && payload.specs.some((spec) => spec.parseCount > 0 || spec.trinketRows.length > 0)) {
+      classesWarmed.push(classNameFilter);
+    } else {
+      failedClasses.push(classNameFilter);
+    }
+  }
+
+  const cursorEnd = (cursorStart + batchSize) % classOrder.length;
+  await writeWarmCursor(db, cursorEnd);
+
+  return {
+    cursorStart,
+    cursorEnd,
+    batchSize,
+    classesAttempted,
+    classesWarmed,
+    failedClasses,
+  };
 }

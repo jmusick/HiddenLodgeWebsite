@@ -18,6 +18,7 @@ interface CloudflareEnv {
 	RAIDER_IO_ACCESS_KEY?: string;
 	ROSTER_DETAIL_BATCH_SIZE?: string;
 	ROSTER_BACKFILL_BATCH_SIZE?: string;
+	TRINKET_CACHE_WARM_BATCH_SIZE?: string;
 }
 
 interface Env extends CloudflareEnv {}

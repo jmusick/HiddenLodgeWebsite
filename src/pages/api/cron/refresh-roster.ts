@@ -4,6 +4,7 @@ import { getRosterRefreshOptions, refreshRosterCache } from '../../../lib/roster
 import { refreshRaidersCache } from '../../../lib/raiders';
 import { refreshAttendanceCache } from '../../../lib/attendance';
 import { refreshProfessionsCache } from '../../../lib/professions-cache';
+import { warmTrinketTierCacheChunk } from '../../../lib/trinkets';
 
 export const GET: APIRoute = async ({ request }) => {
   const provided = request.headers.get('X-Cron-Secret');
@@ -19,12 +20,16 @@ export const GET: APIRoute = async ({ request }) => {
   const professionBatchSize = url.searchParams.get('professionBatchSize')
     ? Number.parseInt(url.searchParams.get('professionBatchSize')!, 10)
     : undefined;
+  const trinketBatchSize = url.searchParams.get('trinketBatchSize')
+    ? Number.parseInt(url.searchParams.get('trinketBatchSize')!, 10)
+    : undefined;
 
-  const [rosterResult, raidersResult, attendanceResult, professionsResult] = await Promise.allSettled([
+  const [rosterResult, raidersResult, attendanceResult, professionsResult, trinketsResult] = await Promise.allSettled([
     refreshRosterCache(undefined, rosterOptions),
     refreshRaidersCache(),
     refreshAttendanceCache(),
     refreshProfessionsCache(undefined, { batchSize: professionBatchSize }),
+    warmTrinketTierCacheChunk({ batchSize: trinketBatchSize }),
   ]);
 
   const failures: string[] = [];
@@ -44,6 +49,10 @@ export const GET: APIRoute = async ({ request }) => {
     console.error('Cron professions refresh failed', professionsResult.reason);
     failures.push('professions');
   }
+  if (trinketsResult.status === 'rejected') {
+    console.error('Cron trinkets refresh failed', trinketsResult.reason);
+    failures.push('trinkets');
+  }
 
   const attendanceSummary = await env.DB
     .prepare(
@@ -62,6 +71,7 @@ export const GET: APIRoute = async ({ request }) => {
     roster: rosterResult.status === 'fulfilled' ? rosterResult.value : null,
     raiders: raidersResult.status === 'fulfilled' ? raidersResult.value : null,
     professions: professionsResult.status === 'fulfilled' ? professionsResult.value : null,
+    trinkets: trinketsResult.status === 'fulfilled' ? trinketsResult.value : null,
     attendance: {
       totalReports: Number(attendanceSummary?.total_reports ?? 0),
       reportsWithKills: Number(attendanceSummary?.reports_with_kills ?? 0),
@@ -69,5 +79,6 @@ export const GET: APIRoute = async ({ request }) => {
     },
     requestedRosterOptions: rosterOptions,
     requestedProfessionBatchSize: professionBatchSize,
+    requestedTrinketBatchSize: trinketBatchSize,
   });
 };
