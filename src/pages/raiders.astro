@@ -4,17 +4,63 @@ export const prerender = false;
 import Layout from '../layouts/Layout.astro';
 import { Icon } from 'astro-icon/components';
 import { classColor } from '../lib/wow';
-import { loadRaidersViewData } from '../lib/raiders';
+import { loadRaidersViewData, type RaiderRecord } from '../lib/raiders';
 import BlinkyWalker from '../components/BlinkyWalker.astro';
 
 const { raiders, totalMembers, readyCount } = await loadRaidersViewData();
 
-const sortedRaiders = [...raiders].sort((a, b) => {
+function compareRaiders(a: RaiderRecord, b: RaiderRecord): number {
   const scoreA = a.mythicScore ?? -1;
   const scoreB = b.mythicScore ?? -1;
   if (scoreA !== scoreB) return scoreB - scoreA;
   return a.name.localeCompare(b.name);
-});
+}
+
+const sortedRaiders = [...raiders].sort(compareRaiders);
+
+interface RaiderGroup {
+  primary: RaiderRecord;
+  characters: RaiderRecord[];
+  altCharacters: RaiderRecord[];
+  classNames: string[];
+  teamNames: string[];
+  searchNames: string;
+}
+
+const raiderGroups = Array.from(
+  sortedRaiders.reduce((groups, raider) => {
+    const existing = groups.get(raider.mainCharId) ?? [];
+    existing.push(raider);
+    groups.set(raider.mainCharId, existing);
+    return groups;
+  }, new Map<number, RaiderRecord[]>())
+)
+  .map(([, characters]): RaiderGroup => {
+    const primary =
+      characters.find((raider) => raider.blizzardCharId === raider.mainCharId) ??
+      characters.find((raider) => raider.isMain) ??
+      [...characters].sort(compareRaiders)[0];
+
+    const orderedCharacters = [...characters].sort((a, b) => {
+      if (a.blizzardCharId === primary.blizzardCharId) return -1;
+      if (b.blizzardCharId === primary.blizzardCharId) return 1;
+      return a.name.localeCompare(b.name);
+    });
+
+    return {
+      primary,
+      characters: orderedCharacters,
+      altCharacters: orderedCharacters.filter((raider) => raider.blizzardCharId !== primary.blizzardCharId),
+      classNames: [...new Set(orderedCharacters.map((raider) => raider.className))].sort((a, b) =>
+        a.localeCompare(b)
+      ),
+      teamNames: [...new Set(orderedCharacters.flatMap((raider) => raider.teamNames))].sort((a, b) =>
+        a.localeCompare(b)
+      ),
+      searchNames: orderedCharacters.map((raider) => raider.name.toLowerCase()).join(' '),
+    };
+  })
+  .sort((a, b) => compareRaiders(a.primary, b.primary));
 
 const classOptions = [...new Set(sortedRaiders.map((raider) => raider.className))].sort((a, b) =>
   a.localeCompare(b)
@@ -396,7 +442,7 @@ const mplusWinnerData = {
   </section>
 
   <section class="panel">
-    <h2 class="title-row"><Icon name="lucide:list" class="title-icon" aria-hidden="true" />Roster Team Raiders ({sortedRaiders.length})</h2>
+    <h2 class="title-row"><Icon name="lucide:list" class="title-icon" aria-hidden="true" />Roster Team Raiders ({raiderGroups.length} people / {sortedRaiders.length} characters)</h2>
     <div class="controls" aria-label="Raiders controls">
       <label>
         Search
@@ -431,7 +477,7 @@ const mplusWinnerData = {
         <button id="raiders-prev-page" type="button">Prev</button>
         <span id="raiders-page-info">Page 1</span>
         <button id="raiders-next-page" type="button">Next</button>
-        <p id="raiders-count" class="results-count" aria-live="polite">Showing {sortedRaiders.length} raiders</p>
+        <p id="raiders-count" class="results-count" aria-live="polite">Showing {raiderGroups.length} people</p>
       </div>
       <div class="raiders-table-scroll">
       <table class="raiders-table" id="raiders-table">
@@ -466,114 +512,161 @@ const mplusWinnerData = {
             <th class="tooltip-priority-col"><button class="sort-btn" type="button" data-sort-key="attendanceScore" data-tooltip="Attendance score starts on 2026-04-02 and is based on signup intent versus Warcraft Logs boss kill participation, normalized per raid night (for example, 1 out of 1 and 6 out of 6 are both full credit). Wipes still count for no-show validation. Bench grants full credit plus bonus." data-tooltip-dir="right" aria-label="Attendance score since April second 2026 from signup intent and Warcraft Logs boss kill participation, normalized per raid night. One out of one and six out of six both grant full credit. Wipes still count for no-show validation. Bench grants full credit plus bonus.">Attendance <Icon name="lucide:info" class="col-help-icon" aria-hidden="true" /></button></th>
           </tr>
         </thead>
-        <tbody>
-          {sortedRaiders.map((raider) => {
-            const color = classColor(raider.className);
-            const teamList = raider.teamNames.join(', ');
-            const isUnknownClass = raider.className.trim().toLowerCase() === 'unknown';
-            const preparedness = preparednessTotals(raider);
-            const preparednessTier = preparednessTierDisplay(preparedness.filled, preparedness.total);
-            const vaultScore = greatVaultScoreForRaider(raider);
-            return (
-              <tr
-                data-name={raider.name.toLowerCase()}
-                data-class={raider.className}
-                data-team={teamList}
-                data-equipped-item-level={String(raider.equippedItemLevel ?? -1)}
-                data-raid-progress-kills={String(raider.raidProgressKills ?? -1)}
-                data-mythic-score={String(raider.mythicScore ?? -1)}
-                data-attendance-score={String(raider.attendanceScorePercent ?? -1)}
-                data-mythic-plus-run-count={String(raider.mythicPlusRunCount ?? -1)}
-                data-mythic-plus-weekly-runs={String(raider.mythicPlusWeeklyRuns ?? -1)}
-                data-mythic-plus-prev-weekly-runs={String(raider.mythicPlusPrevWeeklyRuns ?? -1)}
-                data-single-target-dps={String(raider.singleTargetDps ?? -1)}
-                data-tier-pieces-equipped={String(raider.tierPiecesEquipped ?? -1)}
-                data-crest-sort={String(crestSortValue(raider))}
-                data-total-upgrades-missing={String(raider.totalUpgradesMissing ?? -1)}
-                data-preparedness-score={String(preparednessSortValue(raider))}
-                data-vault-score={String(vaultScore.score)}
-                data-vault-score-prev={String(raider.prevVaultScore ?? -1)}
-                data-href={`/raiders/${raider.blizzardCharId}`}
-                class="clickable-row"
-              >
-                <td><a href={`/raiders/${raider.blizzardCharId}`} class="name-link"><span class="name-pill" style={`--class-color: ${color}`}>{raider.name}</span></a></td>
-                <td>
-                  {isUnknownClass ? (
-                    <span class="class-icon-wrap" aria-hidden="true"></span>
-                  ) : (
-                    <span class="class-icon-wrap" title={raider.className} aria-label={raider.className}>
-                      {raider.classIconUrl ? (
-                        <img
-                          src={raider.classIconUrl}
-                          alt={raider.className}
-                          loading="lazy"
-                          decoding="async"
-                          class="class-icon-img"
-                        />
+        {raiderGroups.map((group) => {
+          const raider = group.primary;
+          const teamList = group.teamNames.join(', ');
+          const preparedness = preparednessTotals(raider);
+          const vaultScore = greatVaultScoreForRaider(raider);
+          return (
+            <tbody
+              data-raider-group
+              data-name={raider.name.toLowerCase()}
+              data-search-name={group.searchNames}
+              data-class={raider.className}
+              data-classes={group.classNames.join('||')}
+              data-team={teamList}
+              data-equipped-item-level={String(raider.equippedItemLevel ?? -1)}
+              data-raid-progress-kills={String(raider.raidProgressKills ?? -1)}
+              data-mythic-score={String(raider.mythicScore ?? -1)}
+              data-attendance-score={String(raider.attendanceScorePercent ?? -1)}
+              data-mythic-plus-run-count={String(raider.mythicPlusRunCount ?? -1)}
+              data-mythic-plus-weekly-runs={String(raider.mythicPlusWeeklyRuns ?? -1)}
+              data-mythic-plus-prev-weekly-runs={String(raider.mythicPlusPrevWeeklyRuns ?? -1)}
+              data-single-target-dps={String(raider.singleTargetDps ?? -1)}
+              data-tier-pieces-equipped={String(raider.tierPiecesEquipped ?? -1)}
+              data-crest-sort={String(crestSortValue(raider))}
+              data-total-upgrades-missing={String(raider.totalUpgradesMissing ?? -1)}
+              data-preparedness-score={String(preparednessSortValue(raider))}
+              data-vault-score={String(vaultScore.score)}
+              data-vault-score-prev={String(raider.prevVaultScore ?? -1)}
+              class="raider-group"
+            >
+              {group.characters.map((character) => {
+                const color = classColor(character.className);
+                const isPrimary = character.blizzardCharId === group.primary.blizzardCharId;
+                const isUnknownClass = character.className.trim().toLowerCase() === 'unknown';
+                const characterPreparedness = preparednessTotals(character);
+                const characterPreparednessTier = preparednessTierDisplay(characterPreparedness.filled, characterPreparedness.total);
+                const characterVaultScore = greatVaultScoreForRaider(character);
+                return (
+                  <tr
+                    data-href={`/raiders/${character.blizzardCharId}`}
+                    class:list={['clickable-row', 'raider-group-row', { 'is-primary': isPrimary, 'is-alt': !isPrimary }]}
+                  >
+                    <td class="raider-identity-cell">
+                      <div class="raider-name-stack">
+                        <div class="raider-name-primary">
+                          <a href={`/raiders/${character.blizzardCharId}`} class="name-link"><span class="name-pill" style={`--class-color: ${color}`}>{character.name}</span></a>
+                          <span class:list={['character-badge', isPrimary ? 'main-badge' : 'alt-badge']}>
+                            {isPrimary ? 'Main' : 'Alt'}
+                          </span>
+                        </div>
+                        {isPrimary && group.altCharacters.length > 0 && (
+                          <div class="character-note group-note">
+                            {group.altCharacters.length} linked alt{group.altCharacters.length === 1 ? '' : 's'} below
+                          </div>
+                        )}
+                        {!isPrimary && (
+                          <div class="character-note">Linked to main: {group.primary.name}</div>
+                        )}
+                      </div>
+                    </td>
+                    <td>
+                      {isUnknownClass ? (
+                        <span class="class-icon-wrap" aria-hidden="true"></span>
                       ) : (
-                        <span
-                          class="class-icon"
-                          style={`--class-color: ${color}`}
-                          aria-hidden="true"
-                        >
-                          {classAbbrev(raider.className)}
+                        <span class="class-icon-wrap" title={character.className} aria-label={character.className}>
+                          {character.classIconUrl ? (
+                            <img
+                              src={character.classIconUrl}
+                              alt={character.className}
+                              loading="lazy"
+                              decoding="async"
+                              class="class-icon-img"
+                            />
+                          ) : (
+                            <span
+                              class="class-icon"
+                              style={`--class-color: ${color}`}
+                              aria-hidden="true"
+                            >
+                              {classAbbrev(character.className)}
+                            </span>
+                          )}
                         </span>
                       )}
-                    </span>
-                  )}
-                </td>
-                <td>
-                  <div class="ilvl-cell">
-                    <span class="ilvl-main" style={`color: ${ilvlColor(raider.equippedItemLevel)}`}>
-                      {raider.equippedItemLevel ?? '—'}
-                    </span>
-                  </div>
-                </td>
-                <td>{raider.singleTargetDps ? raider.singleTargetDps.toLocaleString(undefined, { maximumFractionDigits: 0 }) : '—'}</td>
-                <td>{raider.mythicScore ? raider.mythicScore.toLocaleString(undefined, { maximumFractionDigits: 0 }) : '—'}</td>
-                <td class="mplus-cell" data-mplus-cell>{raider.mythicPlusWeeklyRuns !== null ? raider.mythicPlusWeeklyRuns.toLocaleString() : '—'}</td>
-                <td data-vault-cell>
-                  <a href={`/raiders/${raider.blizzardCharId}`} class="vault-score-link" title="View exact score formula and weighting details on profile">
-                    <span class="score-val" style={`color: ${vaultScore.color}`}>{vaultScore.score}</span>
-                  </a>
-                </td>
-                <td>
-                  {crestTotalValue(raider) !== null ? (
-                    <span
-                      class="crest-total"
-                      title={`Adventurer: ${raider.adventurerCrests ?? 0}, Veteran: ${raider.veteranCrests ?? 0}, Champion: ${raider.championCrests ?? 0}, Hero: ${raider.heroCrests ?? 0}, Myth: ${raider.mythCrests ?? 0}`}
-                    >
-                      {crestTotalValue(raider)}
-                      <span class="crest-tooltip" role="tooltip" aria-hidden="true">
-                        <span class="crest-token crest-token-a">A: {raider.adventurerCrests ?? 0}</span>
-                        <span class="crest-token crest-token-v">V: {raider.veteranCrests ?? 0}</span>
-                        <span class="crest-token crest-token-c">C: {raider.championCrests ?? 0}</span>
-                        <span class="crest-token crest-token-h">H: {raider.heroCrests ?? 0}</span>
-                        <span class="crest-token crest-token-m">M: {raider.mythCrests ?? 0}</span>
+                    </td>
+                    <td>
+                      <div class="ilvl-cell">
+                        <span class="ilvl-main" style={`color: ${ilvlColor(character.equippedItemLevel)}`}>
+                          {character.equippedItemLevel ?? '—'}
+                        </span>
+                      </div>
+                    </td>
+                    <td>{character.singleTargetDps ? character.singleTargetDps.toLocaleString(undefined, { maximumFractionDigits: 0 }) : '—'}</td>
+                    <td>{character.mythicScore ? character.mythicScore.toLocaleString(undefined, { maximumFractionDigits: 0 }) : '—'}</td>
+                    <td class="mplus-cell">
+                      <span
+                        data-mplus-value
+                        data-mythic-plus-run-count={String(character.mythicPlusRunCount ?? -1)}
+                        data-mythic-plus-weekly-runs={String(character.mythicPlusWeeklyRuns ?? -1)}
+                        data-mythic-plus-prev-weekly-runs={String(character.mythicPlusPrevWeeklyRuns ?? -1)}
+                      >
+                        {character.mythicPlusWeeklyRuns !== null ? character.mythicPlusWeeklyRuns.toLocaleString() : '—'}
                       </span>
-                    </span>
-                  ) : (
-                    '—'
-                  )}
-                </td>
-                <td><span class="score-val" style={`color: ${preparednessTier.color}`}>{preparednessTier.label}</span></td>
-                <td>
-                  {raider.attendanceScorePercent !== null ? (
-                    <span
-                      class="score-val"
-                      style={`color: ${attendanceColor(raider.attendanceScorePercent)}`}
-                      title={`${raider.attendanceScoredRaids} scored raids since 2026-04-02${raider.attendanceBenchBonusPoints > 0 ? `, bench bonus +${raider.attendanceBenchBonusPoints.toFixed(1)} points` : ''}`}
-                    >
-                      {raider.attendanceScorePercent.toFixed(1)}
-                    </span>
-                  ) : (
-                    '—'
-                  )}
-                </td>
-              </tr>
-            );
-          })}
-        </tbody>
+                    </td>
+                    <td>
+                      <a href={`/raiders/${character.blizzardCharId}`} class="vault-score-link" title="View exact score formula and weighting details on profile">
+                        <span
+                          class="score-val"
+                          data-vault-value
+                          data-vault-score={String(characterVaultScore.score)}
+                          data-vault-score-prev={String(character.prevVaultScore ?? -1)}
+                          style={`color: ${characterVaultScore.color}`}
+                        >
+                          {characterVaultScore.score}
+                        </span>
+                      </a>
+                    </td>
+                    <td>
+                      {crestTotalValue(character) !== null ? (
+                        <span
+                          class="crest-total"
+                          title={`Adventurer: ${character.adventurerCrests ?? 0}, Veteran: ${character.veteranCrests ?? 0}, Champion: ${character.championCrests ?? 0}, Hero: ${character.heroCrests ?? 0}, Myth: ${character.mythCrests ?? 0}`}
+                        >
+                          {crestTotalValue(character)}
+                          <span class="crest-tooltip" role="tooltip" aria-hidden="true">
+                            <span class="crest-token crest-token-a">A: {character.adventurerCrests ?? 0}</span>
+                            <span class="crest-token crest-token-v">V: {character.veteranCrests ?? 0}</span>
+                            <span class="crest-token crest-token-c">C: {character.championCrests ?? 0}</span>
+                            <span class="crest-token crest-token-h">H: {character.heroCrests ?? 0}</span>
+                            <span class="crest-token crest-token-m">M: {character.mythCrests ?? 0}</span>
+                          </span>
+                        </span>
+                      ) : (
+                        '—'
+                      )}
+                    </td>
+                    <td><span class="score-val" style={`color: ${characterPreparednessTier.color}`}>{characterPreparednessTier.label}</span></td>
+                    <td>
+                      {character.attendanceScorePercent !== null ? (
+                        <span
+                          class="score-val"
+                          style={`color: ${attendanceColor(character.attendanceScorePercent)}`}
+                          title={`${character.attendanceScoredRaids} scored raids since 2026-04-02${character.attendanceBenchBonusPoints > 0 ? `, bench bonus +${character.attendanceBenchBonusPoints.toFixed(1)} points` : ''}`}
+                        >
+                          {character.attendanceScorePercent.toFixed(1)}
+                        </span>
+                      ) : (
+                        '—'
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          );
+        })}
       </table>
       </div>
     </div>
@@ -605,7 +698,7 @@ const mplusWinnerData = {
   const mplusWinnerName = document.getElementById('mplus-winner-name') as HTMLParagraphElement | null;
   const countLabel = document.querySelector<HTMLParagraphElement>('#raiders-count');
   const table = document.querySelector<HTMLTableElement>('#raiders-table');
-  const tableBody = table?.querySelector('tbody');
+  const groupBodies = table ? [...table.querySelectorAll<HTMLTableSectionElement>('tbody[data-raider-group]')] : [];
   const sortButtons = [...document.querySelectorAll<HTMLButtonElement>('.sort-btn')];
 
   let sortKey = 'equippedItemLevel';
@@ -638,21 +731,18 @@ const mplusWinnerData = {
   }
 
   function syncVaultCells() {
-    if (!tableBody) return;
     const dataKey = getVaultDatasetKey();
-    [...tableBody.querySelectorAll('tr')].forEach((row) => {
-      const cell = row.querySelector<HTMLElement>('[data-vault-cell]');
-      if (!cell) return;
-      const score = Number((row as HTMLElement).dataset[dataKey] ?? -1);
-      const span = cell.querySelector<HTMLElement>('.score-val');
-      if (!span) return;
-      if (score >= 0) {
-        span.textContent = String(score);
-        span.style.color = vaultScoreColor(score);
-      } else {
-        span.textContent = '—';
-        span.style.color = '#ffffff';
-      }
+    groupBodies.forEach((group) => {
+      [...group.querySelectorAll<HTMLElement>('[data-vault-value]')].forEach((span) => {
+        const score = Number(span.dataset[dataKey] ?? -1);
+        if (score >= 0) {
+          span.textContent = String(score);
+          span.style.color = vaultScoreColor(score);
+        } else {
+          span.textContent = '—';
+          span.style.color = '#ffffff';
+        }
+      });
     });
   }
 
@@ -683,20 +773,17 @@ const mplusWinnerData = {
   }
 
   function syncMplusCells() {
-    if (!tableBody) return;
     const metricKey = getMplusDatasetKey();
-    const rows = [...tableBody.querySelectorAll('tr')];
-
-    rows.forEach((row) => {
-      const cell = row.querySelector<HTMLElement>('[data-mplus-cell]');
-      if (!cell) return;
-      const metricValue = Number(row.dataset[metricKey] ?? -1);
-      cell.textContent = formatMplusValue(metricValue);
+    groupBodies.forEach((group) => {
+      [...group.querySelectorAll<HTMLElement>('[data-mplus-value]')].forEach((cell) => {
+        const metricValue = Number(cell.dataset[metricKey] ?? -1);
+        cell.textContent = formatMplusValue(metricValue);
+      });
     });
   }
 
   function applyFiltersAndSort() {
-    if (!tableBody) return;
+    if (!table) return;
 
     syncMplusCells();
     syncVaultCells();
@@ -705,14 +792,14 @@ const mplusWinnerData = {
     const selectedClass = classFilter?.value ?? 'all';
     const selectedTeam = teamFilter?.value ?? 'all';
 
-    const rows = [...tableBody.querySelectorAll('tr')];
-    const visibleRows = rows.filter((row) => {
-      const rowName = row.dataset.name ?? '';
-      const rowClass = row.dataset.class ?? '';
-      const rowTeam = row.dataset.team ?? '';
+    const visibleGroups = groupBodies.filter((group) => {
+      const rowName = group.dataset.searchName ?? group.dataset.name ?? '';
+      const rowClass = group.dataset.class ?? '';
+      const rowClasses = (group.dataset.classes ?? rowClass).split('||').map((value) => value.trim()).filter(Boolean);
+      const rowTeam = group.dataset.team ?? '';
 
       const matchesSearch = query.length === 0 || rowName.includes(query);
-      const matchesClass = selectedClass === 'all' || rowClass === selectedClass;
+      const matchesClass = selectedClass === 'all' || rowClasses.includes(selectedClass);
       const matchesTeam = selectedTeam === 'all' || rowTeam.split(',').map((value) => value.trim()).includes(selectedTeam);
 
       return matchesSearch && matchesClass && matchesTeam;
@@ -720,7 +807,7 @@ const mplusWinnerData = {
 
     const numericKeys = new Set(['equippedItemLevel', 'raidProgressKills', 'mythicScore', 'attendanceScore', 'singleTargetDps', 'crestSort', 'preparednessScore']);
 
-    visibleRows.sort((rowA, rowB) => {
+    visibleGroups.sort((rowA, rowB) => {
       if (sortKey === 'mplusMetric') {
         const metricKey = getMplusDatasetKey();
         const valueA = Number(rowA.dataset[metricKey] ?? -1);
@@ -748,22 +835,22 @@ const mplusWinnerData = {
       return sortDirection === 'asc' ? order : order * -1;
     });
 
-    const totalPages = Math.max(1, Math.ceil(visibleRows.length / pageSize));
+    const totalPages = Math.max(1, Math.ceil(visibleGroups.length / pageSize));
     if (currentPage > totalPages) currentPage = totalPages;
     const startIdx = (currentPage - 1) * pageSize;
-    const pageRows = visibleRows.slice(startIdx, startIdx + pageSize);
+    const pageGroups = visibleGroups.slice(startIdx, startIdx + pageSize);
 
-    rows.forEach((row) => {
-      row.hidden = !pageRows.includes(row);
+    groupBodies.forEach((group) => {
+      group.hidden = !pageGroups.includes(group);
     });
 
-    visibleRows.forEach((row) => tableBody.appendChild(row));
+    visibleGroups.forEach((group) => table.appendChild(group));
 
     if (pageInfo) pageInfo.textContent = `Page ${currentPage} of ${totalPages}`;
     if (prevPageBtn) prevPageBtn.disabled = currentPage <= 1;
     if (nextPageBtn) nextPageBtn.disabled = currentPage >= totalPages;
     if (countLabel) {
-      countLabel.textContent = `Showing ${visibleRows.length} raider${visibleRows.length === 1 ? '' : 's'} (page ${currentPage})`;
+      countLabel.textContent = `Showing ${visibleGroups.length} ${visibleGroups.length === 1 ? 'person' : 'people'} (page ${currentPage})`;
     }
 
     sortButtons.forEach((button) => {
@@ -838,7 +925,7 @@ const mplusWinnerData = {
   applyFiltersAndSort();
 
   // Make entire rows clickable, but let clicks on existing links/buttons pass through
-  tableBody?.addEventListener('click', (event) => {
+  table?.addEventListener('click', (event) => {
     const target = event.target as HTMLElement;
     if (target.closest('a, button')) return;
     const row = target.closest<HTMLTableRowElement>('tr[data-href]');
@@ -1168,7 +1255,8 @@ const mplusWinnerData = {
 
   .raiders-table {
     width: 100%;
-    border-collapse: collapse;
+    border-collapse: separate;
+    border-spacing: 0;
     min-width: 860px;
   }
 
@@ -1193,8 +1281,51 @@ const mplusWinnerData = {
     z-index: 3;
   }
 
-  .raiders-table tbody tr:hover {
+  .raider-group-row:hover {
     background: rgba(214, 176, 106, 0.08);
+  }
+
+  .raider-group + .raider-group .raider-group-row:first-child td {
+    border-top: 1px solid rgba(214, 176, 106, 0.22);
+  }
+
+  .raider-group-row.is-primary td {
+    background:
+      linear-gradient(90deg, rgba(214, 176, 106, 0.12), rgba(15, 28, 43, 0.24) 18rem),
+      rgba(15, 28, 43, 0.24);
+  }
+
+  .raider-group-row.is-alt td {
+    background: rgba(8, 16, 25, 0.38);
+  }
+
+  .raider-group-row.is-alt td:first-child {
+    position: relative;
+    padding-left: 1.75rem;
+  }
+
+  .raider-group-row.is-alt td:first-child::before {
+    content: '';
+    position: absolute;
+    left: 0.9rem;
+    top: -1px;
+    bottom: -1px;
+    width: 2px;
+    background: linear-gradient(180deg, rgba(214, 176, 106, 0.45), rgba(142, 164, 178, 0.4));
+  }
+
+  .raider-group-row.is-alt td:first-child::after {
+    content: '';
+    position: absolute;
+    left: 0.9rem;
+    top: 1.35rem;
+    width: 0.7rem;
+    height: 2px;
+    background: rgba(214, 176, 106, 0.42);
+  }
+
+  .raider-group-row.is-alt:last-child td:first-child::before {
+    bottom: 1.35rem;
   }
 
   .clickable-row {
@@ -1295,6 +1426,7 @@ const mplusWinnerData = {
   }
 
   .name-link {
+    display: inline-flex;
     text-decoration: none;
   }
 
@@ -1306,6 +1438,71 @@ const mplusWinnerData = {
   .name-pill {
     color: var(--class-color, #d8e2e8);
     font-weight: 700;
+  }
+
+  .raider-identity-cell {
+    min-width: 15rem;
+  }
+
+  .raider-name-stack {
+    display: grid;
+    gap: 0.42rem;
+    position: relative;
+  }
+
+  .raider-name-primary {
+    display: flex;
+    align-items: center;
+    gap: 0.45rem;
+    flex-wrap: wrap;
+  }
+
+  .main-badge {
+    display: inline-flex;
+    align-items: center;
+    padding: 0.12rem 0.42rem;
+    border-radius: 999px;
+    border: 1px solid rgba(214, 176, 106, 0.35);
+    background: rgba(214, 176, 106, 0.12);
+    color: #f0d59b;
+    font-size: 0.7rem;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+  }
+
+  .character-badge {
+    display: inline-flex;
+    align-items: center;
+    padding: 0.12rem 0.42rem;
+    border-radius: 999px;
+    border: 1px solid rgba(214, 176, 106, 0.35);
+    background: rgba(214, 176, 106, 0.12);
+    font-size: 0.7rem;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+  }
+
+  .main-badge {
+    color: #f0d59b;
+    box-shadow: 0 0 0 1px rgba(214, 176, 106, 0.12);
+  }
+
+  .alt-badge {
+    border-color: rgba(142, 164, 178, 0.35);
+    background: rgba(142, 164, 178, 0.12);
+    color: #c8d7e0;
+  }
+
+  .character-note {
+    color: #8ea4b2;
+    font-size: 0.78rem;
+  }
+
+  .group-note {
+    color: #d9c28c;
+    font-weight: 600;
   }
 
   .class-icon {

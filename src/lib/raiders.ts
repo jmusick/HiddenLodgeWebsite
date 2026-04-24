@@ -296,6 +296,10 @@ interface CachedRaiderRow {
   realm: string;
   realm_slug: string;
   class_name: string;
+  user_id: number | null;
+  is_main: number | null;
+  main_char_id: number | null;
+  main_character_name: string | null;
   team_names: string;
   auth_state: RaiderAuthState;
   equipped_item_level: number | null;
@@ -599,6 +603,10 @@ function isEnchantableItem(slotType: string, item: BlizzardEquippedItem | null |
 
 export interface RaiderRecord {
   blizzardCharId: number;
+  userId: number | null;
+  isMain: boolean;
+  mainCharId: number;
+  mainCharacterName: string;
   name: string;
   realm: string;
   realmSlug: string;
@@ -1159,51 +1167,64 @@ async function listCachedRaiders(db: D1Database): Promise<RaiderRecord[]> {
   const result = await db
     .prepare(
       `SELECT
-          blizzard_char_id,
-          name,
-          realm,
-          realm_slug,
-          class_name,
-          team_names,
-          auth_state,
-          equipped_item_level,
-          average_item_level,
-          mythic_score,
-          tier_pieces_equipped,
-          socketed_gems,
-          total_sockets,
-          enchanted_slots,
-          enchantable_slots,
-          adventurer_crests,
-          veteran_crests,
-          champion_crests,
-          hero_crests,
-          myth_crests,
-          mythic_plus_run_count,
-          mythic_plus_weekly_runs,
-          mythic_plus_prev_weekly_runs,
-          mythic_plus_season_runs,
-          mythic_plus_vault_ilvl_1,
-          mythic_plus_vault_ilvl_2,
-          mythic_plus_vault_ilvl_3,
-          world_vault_weekly_objectives,
-          total_upgrades_missing,
-          raid_progress_raid_name,
-          raid_progress_label,
-          raid_progress_kills,
-          raid_progress_total,
-          details_synced_at,
-          avg_30d_socketed_gems,
-          avg_30d_total_sockets,
-          avg_30d_enchanted_slots,
-          avg_30d_enchantable_slots
-       FROM raider_metrics_cache
-       ORDER BY class_name ASC, name ASC`
+          rmc.blizzard_char_id,
+          rmc.name,
+          rmc.realm,
+          rmc.realm_slug,
+          rmc.class_name,
+          c.user_id,
+          c.is_main,
+          COALESCE(main_c.blizzard_char_id, rmc.blizzard_char_id) AS main_char_id,
+          COALESCE(main_c.name, rmc.name) AS main_character_name,
+          rmc.team_names,
+          rmc.auth_state,
+          rmc.equipped_item_level,
+          rmc.average_item_level,
+          rmc.mythic_score,
+          rmc.tier_pieces_equipped,
+          rmc.socketed_gems,
+          rmc.total_sockets,
+          rmc.enchanted_slots,
+          rmc.enchantable_slots,
+          rmc.adventurer_crests,
+          rmc.veteran_crests,
+          rmc.champion_crests,
+          rmc.hero_crests,
+          rmc.myth_crests,
+          rmc.mythic_plus_run_count,
+          rmc.mythic_plus_weekly_runs,
+          rmc.mythic_plus_prev_weekly_runs,
+          rmc.mythic_plus_season_runs,
+          rmc.mythic_plus_vault_ilvl_1,
+          rmc.mythic_plus_vault_ilvl_2,
+          rmc.mythic_plus_vault_ilvl_3,
+          rmc.world_vault_weekly_objectives,
+          rmc.total_upgrades_missing,
+          rmc.raid_progress_raid_name,
+          rmc.raid_progress_label,
+          rmc.raid_progress_kills,
+          rmc.raid_progress_total,
+          rmc.details_synced_at,
+          rmc.avg_30d_socketed_gems,
+          rmc.avg_30d_total_sockets,
+          rmc.avg_30d_enchanted_slots,
+          rmc.avg_30d_enchantable_slots
+       FROM raider_metrics_cache rmc
+       LEFT JOIN characters c
+         ON c.blizzard_char_id = rmc.blizzard_char_id
+       LEFT JOIN characters main_c
+         ON main_c.user_id = c.user_id
+        AND main_c.is_main = 1
+       ORDER BY main_character_name COLLATE NOCASE ASC, rmc.name COLLATE NOCASE ASC`
     )
     .all<CachedRaiderRow>();
 
   return ((result.results ?? []) as CachedRaiderRow[]).map((row) => ({
     blizzardCharId: row.blizzard_char_id,
+    userId: row.user_id,
+    isMain: row.is_main === 1 || row.main_char_id === row.blizzard_char_id,
+    mainCharId: row.main_char_id ?? row.blizzard_char_id,
+    mainCharacterName: toNonEmptyString(row.main_character_name, row.name),
     name: toNonEmptyString(row.name, `Unknown-${row.blizzard_char_id}`),
     realm: toNonEmptyString(row.realm, 'Unknown Realm'),
     realmSlug: toNonEmptyString(row.realm_slug, 'unknown-realm'),
