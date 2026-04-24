@@ -5,11 +5,13 @@ export const MIDNIGHT_SEASON_ONE_RAID_NAMES = [
 ] as const;
 
 export function normalizeMidnightSeasonOneRaidName(value: string | null | undefined): string {
-	return String(value ?? '')
+	const normalized = String(value ?? '')
 		.trim()
 		.toLowerCase()
 		.replace(/[’]/g, "'")
 		.replace(/\s+/g, ' ');
+
+	return normalized.replace(/-(normal|heroic|mythic|lfr)$/i, '');
 }
 
 export const MIDNIGHT_SEASON_ONE_NORMALIZED_RAID_NAMES = MIDNIGHT_SEASON_ONE_RAID_NAMES.map((name) =>

@@ -67,7 +67,6 @@ const pageRaw = Number.parseInt(searchParams.get('page') ?? '1', 10);
 const page = Number.isFinite(pageRaw) && pageRaw > 0 ? pageRaw : 1;
 const pageSize = 75;
 const offset = (page - 1) * pageSize;
-const midnightSeasonOneRaidPlaceholders = MIDNIGHT_SEASON_ONE_NORMALIZED_RAID_NAMES.map(() => '?').join(', ');
 
 const RAID_DIFFICULTIES = new Set([14, 15, 16]);
 const parsedDifficulty = Number.parseInt(rawDiff, 10);
@@ -75,15 +74,21 @@ const difficultyFilter = RAID_DIFFICULTIES.has(parsedDifficulty) ? parsedDifficu
 const hasDifficultyFilter = true;
 
 function midnightSeasonOneRaidScopeSql(alias = 'loot_history'): string {
-	return `LOWER(TRIM(COALESCE(${alias}.instance_name, ''))) IN (${midnightSeasonOneRaidPlaceholders})`;
+	const column = `LOWER(TRIM(COALESCE(${alias}.instance_name, '')))`;
+	return MIDNIGHT_SEASON_ONE_NORMALIZED_RAID_NAMES.map(() => `(${column} = ? OR ${column} LIKE ?)`)
+		.join(' OR ');
+}
+
+function midnightSeasonOneRaidScopeBinds(): string[] {
+	return MIDNIGHT_SEASON_ONE_NORMALIZED_RAID_NAMES.flatMap((name) => [name, `${name}-%`]);
 }
 
 const whereParts: string[] = [
 	'owner_blizzard_char_id IN (SELECT blizzard_char_id FROM roster_members_cache)',
 	'is_excluded = 0',
-	midnightSeasonOneRaidScopeSql(),
+	`(${midnightSeasonOneRaidScopeSql()})`,
 ];
-const binds: (string | number)[] = [...MIDNIGHT_SEASON_ONE_NORMALIZED_RAID_NAMES];
+const binds: (string | number)[] = [...midnightSeasonOneRaidScopeBinds()];
 
 if (rawQuery) {
 	whereParts.push(`(
@@ -145,10 +150,10 @@ const responseOptionsStmt = env.DB.prepare(
 	`SELECT DISTINCT TRIM(response_text) AS response_text
 	 FROM loot_history
 	 WHERE is_excluded = 0
-		AND ${midnightSeasonOneRaidScopeSql()}
+		AND (${midnightSeasonOneRaidScopeSql()})
 		AND response_text IS NOT NULL AND TRIM(response_text) != ''
 	 ORDER BY response_text COLLATE NOCASE ASC`
-).bind(...MIDNIGHT_SEASON_ONE_NORMALIZED_RAID_NAMES);
+).bind(...midnightSeasonOneRaidScopeBinds());
 
 const userSettingsStmt = env.DB.prepare(
 	`SELECT time_zone, time_zone_set
@@ -167,11 +172,11 @@ const raiderOptionsStmt = env.DB.prepare(
 		ON rmc.blizzard_char_id = lh.owner_blizzard_char_id
 	 WHERE lh.owner_blizzard_char_id IS NOT NULL
 		AND lh.is_excluded = 0
-		AND ${midnightSeasonOneRaidScopeSql('lh')}
+		AND (${midnightSeasonOneRaidScopeSql('lh')})
 	 GROUP BY lh.owner_blizzard_char_id
 	 HAVING TRIM(name) != ''
 	 ORDER BY LOWER(name) ASC, LOWER(realm) ASC`
-).bind(...MIDNIGHT_SEASON_ONE_NORMALIZED_RAID_NAMES);
+).bind(...midnightSeasonOneRaidScopeBinds());
 
 const [countResult, rowsResult, responseOptionsResult, userSettingsResult, raiderOptionsResult] = await env.DB.batch([
 	countStmt,
@@ -208,7 +213,7 @@ if (selectedMemberIds.length > 0) {
 	const placeholders = selectedMemberIds.map(() => '?').join(', ');
 	const comparisonBinds: (string | number)[] = [
 		...selectedMemberIds,
-		...MIDNIGHT_SEASON_ONE_NORMALIZED_RAID_NAMES,
+		...midnightSeasonOneRaidScopeBinds(),
 	];
 	let comparisonDifficultySql = '';
 	if (hasDifficultyFilter) {
@@ -223,7 +228,7 @@ if (selectedMemberIds.length > 0) {
 		 FROM loot_history
 		 WHERE owner_blizzard_char_id IN (${placeholders})
 			AND is_excluded = 0
-			AND ${midnightSeasonOneRaidScopeSql()}${comparisonDifficultySql}
+			AND (${midnightSeasonOneRaidScopeSql()})${comparisonDifficultySql}
 		 GROUP BY owner_blizzard_char_id, COALESCE(NULLIF(TRIM(response_text), ''), 'Unspecified')`
 	).bind(...comparisonBinds);
 
