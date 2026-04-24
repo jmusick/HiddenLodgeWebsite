@@ -153,7 +153,7 @@ async function getBlizzardAccessToken(
   }
 }
 
-async function fetchItemIconUrls(
+export async function fetchItemIconUrls(
   db: D1Database,
   itemIds: number[],
   clientId: string | undefined,

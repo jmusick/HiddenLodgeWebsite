@@ -5,6 +5,7 @@ import Layout from '../layouts/Layout.astro';
 import { env } from 'cloudflare:workers';
 import { resolveUserTimeZone } from '../lib/time-zones';
 import { MIDNIGHT_SEASON_ONE_NORMALIZED_RAID_NAMES } from '../lib/midnight-season-one';
+import { fetchItemIconUrls } from '../lib/upgrades';
 
 const user = Astro.locals.user;
 if (!user) {
@@ -31,6 +32,10 @@ interface LootHistoryRow {
 	is_excluded: number;
 	exclude_note: string | null;
 }
+
+type LootHistoryDisplayRow = LootHistoryRow & {
+	item_icon_url: string | null;
+};
 
 interface UserSettingsRow {
 	time_zone: string | null;
@@ -188,6 +193,18 @@ const [countResult, rowsResult, responseOptionsResult, userSettingsResult, raide
 
 const total = Number((countResult.results?.[0] as { total?: number } | undefined)?.total ?? 0);
 const rows = (rowsResult.results ?? []) as LootHistoryRow[];
+const blizzardClientId = (env as unknown as Record<string, string>)['BLIZZARD_CLIENT_ID'];
+const blizzardClientSecret = (env as unknown as Record<string, string>)['BLIZZARD_CLIENT_SECRET'];
+const itemIconMap = await fetchItemIconUrls(
+	env.DB,
+	rows.map((row) => row.item_id ?? 0),
+	blizzardClientId,
+	blizzardClientSecret
+);
+const displayRows: LootHistoryDisplayRow[] = rows.map((row) => ({
+	...row,
+	item_icon_url: row.item_id ? itemIconMap.get(row.item_id) ?? null : null,
+}));
 const responseOptions = (responseOptionsResult.results ?? []).map((row) => String((row as { response_text?: string }).response_text ?? '').trim()).filter((value) => value !== '');
 const userSettings = (userSettingsResult.results?.[0] as UserSettingsRow | undefined) ?? undefined;
 const raiderOptions = (raiderOptionsResult.results ?? []) as RaiderOptionRow[];
@@ -492,7 +509,7 @@ function comparisonTotalFor(memberId: number): number {
 							</tr>
 						</thead>
 						<tbody>
-							{rows.map((row) => (
+							{displayRows.map((row) => (
 								<tr data-loot-id={row.id}>
 									<td>{formatAwardedAt(row)}</td>
 									<td>
@@ -503,13 +520,22 @@ function comparisonTotalFor(memberId: number): number {
 										)}
 									</td>
 									<td>
-										{row.item_id ? (
-											<a href={`https://www.wowhead.com/item=${row.item_id}`} target="_blank" rel="noopener noreferrer">
-												{displayItemName(row)}
-											</a>
-										) : (
-											displayItemName(row)
-										)}
+										<div class="loot-item-cell">
+											{row.item_icon_url ? (
+												<img class="loot-item-icon" src={row.item_icon_url} alt="" loading="lazy" />
+											) : (
+												<span class="loot-item-icon-fallback" aria-hidden="true">?</span>
+											)}
+											<span>
+												{row.item_id ? (
+													<a href={`https://www.wowhead.com/item=${row.item_id}`} target="_blank" rel="noopener noreferrer">
+														{displayItemName(row)}
+													</a>
+												) : (
+													displayItemName(row)
+												)}
+											</span>
+										</div>
 									</td>
 									<td>{row.boss_name ?? '-'}</td>
 									<td>{row.instance_name ?? '-'}</td>
@@ -847,6 +873,43 @@ function comparisonTotalFor(memberId: number): number {
 		margin: 0;
 		font-size: 0.88rem;
 		color: var(--muted);
+	}
+
+	.loot-item-cell {
+		display: flex;
+		align-items: center;
+		gap: 0.55rem;
+		min-width: 0;
+	}
+
+	.loot-item-cell > span {
+		min-width: 0;
+	}
+
+	.loot-item-icon,
+	.loot-item-icon-fallback {
+		width: 1.5rem;
+		height: 1.5rem;
+		border-radius: 0.3rem;
+		flex: 0 0 1.5rem;
+	}
+
+	.loot-item-icon {
+		display: block;
+		object-fit: cover;
+		background: rgba(255, 255, 255, 0.06);
+		border: 1px solid rgba(214, 176, 106, 0.25);
+	}
+
+	.loot-item-icon-fallback {
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		font-size: 0.85rem;
+		font-weight: 700;
+		color: var(--muted);
+		background: rgba(255, 255, 255, 0.06);
+		border: 1px solid rgba(214, 176, 106, 0.18);
 	}
 
 	.comparison-head h2 {
