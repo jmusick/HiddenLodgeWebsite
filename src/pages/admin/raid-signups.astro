@@ -37,7 +37,7 @@ const [settingsResult, primaryResult, adHocResult, primaryCountResult, adHocCoun
   env.DB.prepare(
     `SELECT id, name, starts_at_utc, duration_minutes, notes, is_active
      FROM ad_hoc_raids
-     ORDER BY is_active DESC, starts_at_utc ASC, name ASC`
+      ORDER BY is_active DESC, starts_at_utc DESC, name ASC`
   ),
   env.DB.prepare(
     `SELECT primary_schedule_id, COUNT(*) AS signup_count
