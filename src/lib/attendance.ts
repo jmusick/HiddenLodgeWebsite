@@ -64,6 +64,11 @@ interface AttendanceOverrideRow {
   blizzard_char_id: number;
 }
 
+interface AttendanceRosterTeamMemberRow {
+  blizzard_char_id: number;
+  joined_at_utc: number;
+}
+
 interface AttendanceCharacterRow {
   blizzard_char_id: number;
   name: string;
@@ -1440,7 +1445,7 @@ export async function getAttendanceSummaryMap(
   const includeBreakdownFor = new Set((options?.includeBreakdownFor ?? []).filter((id) => Number.isFinite(id) && id > 0));
   const ownership = await loadAttendanceOwnership(db);
 
-  const [reportsResult, participantsResult, signupsResult, overridesResult] = await Promise.all([
+  const [reportsResult, participantsResult, signupsResult, overridesResult, rosterTeamMembersResult] = await Promise.all([
     db
       .prepare(
         `SELECT
@@ -1504,6 +1509,17 @@ export async function getAttendanceSummaryMap(
       )
       .bind(ATTENDANCE_SCORING_START_UTC)
       .all<AttendanceOverrideRow>(),
+    db
+      .prepare(
+        `SELECT
+           rtm.blizzard_char_id,
+           MIN(rtm.created_at) AS joined_at_utc
+         FROM raid_team_members rtm
+         JOIN raid_teams rt ON rt.id = rtm.team_id
+         WHERE rt.is_archived = 0
+         GROUP BY rtm.blizzard_char_id`
+      )
+      .all<AttendanceRosterTeamMemberRow>(),
   ]);
 
   const targetCharIds = [...new Set([
@@ -1586,6 +1602,31 @@ export async function getAttendanceSummaryMap(
     benchByRaidAndOwner.add(`${report.id}|${ownerKey}`);
   }
 
+  const rosterJoinByCharId = new Map<number, number>();
+  for (const row of rosterTeamMembersResult.results ?? []) {
+    const blizzardCharId = Number(row.blizzard_char_id);
+    const joinedAtUtc = Number(row.joined_at_utc);
+    if (!Number.isInteger(blizzardCharId) || blizzardCharId <= 0) continue;
+    if (!Number.isInteger(joinedAtUtc) || joinedAtUtc <= 0) continue;
+    rosterJoinByCharId.set(blizzardCharId, joinedAtUtc);
+  }
+
+  const attendanceStartByOwnerKey = new Map<string, number>();
+  for (const [ownerKey, ownerCharIds] of ownership.charIdsByOwnerKey.entries()) {
+    let ownerJoinStartUtc: number | null = null;
+    for (const blizzardCharId of ownerCharIds) {
+      const joinStartUtc = rosterJoinByCharId.get(blizzardCharId);
+      if (!Number.isInteger(joinStartUtc) || (joinStartUtc ?? 0) <= 0) continue;
+      if (ownerJoinStartUtc === null || joinStartUtc < ownerJoinStartUtc) {
+        ownerJoinStartUtc = joinStartUtc;
+      }
+    }
+
+    if (ownerJoinStartUtc !== null) {
+      attendanceStartByOwnerKey.set(ownerKey, Math.max(ATTENDANCE_SCORING_START_UTC, ownerJoinStartUtc));
+    }
+  }
+
   const summaryMap = new Map<number, AttendanceSummary>();
   const targetOwnerKeys = [...new Set(targetCharIds.map((blizzardCharId) => ownership.ownerKeyByCharId.get(blizzardCharId) ?? attendanceOwnerKey(null, blizzardCharId)))];
   const includeBreakdownForOwners = new Set([...includeBreakdownFor].map((blizzardCharId) => ownership.ownerKeyByCharId.get(blizzardCharId) ?? attendanceOwnerKey(null, blizzardCharId)));
@@ -1596,8 +1637,11 @@ export async function getAttendanceSummaryMap(
     let benchBonusTotal = 0;
     let scoredRaidCount = 0;
     const breakdown: AttendanceRaidBreakdown[] = [];
+    const ownerAttendanceStartUtc = attendanceStartByOwnerKey.get(ownerKey) ?? ATTENDANCE_SCORING_START_UTC;
 
     for (const report of reportsById.values()) {
+      if (report.occurrence_start_utc < ownerAttendanceStartUtc) continue;
+
       const lookupKey = `${report.id}|${ownerKey}`;
       const totalBosses = reportScorableBosses(report);
       const participationTotalBosses = reportTotalBosses(report);
