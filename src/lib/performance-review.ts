@@ -157,7 +157,7 @@ export async function getExcessiveDeathReviewSummary(
            occurrence_start_utc,
            CASE
              WHEN TRIM(COALESCE(raid_ref_key, '')) <> '' AND occurrence_start_utc > 0
-               THEN LOWER(TRIM(raid_ref_key)) || '|' || CAST(occurrence_start_utc AS TEXT)
+               THEN LOWER(TRIM(raid_ref_key)) || '|' || date((occurrence_start_utc - 18000), 'unixepoch')
              WHEN TRIM(COALESCE(report_code, '')) <> '' THEN LOWER(TRIM(report_code))
              ELSE 'id:' || CAST(id AS TEXT)
            END AS dedupe_key,
@@ -203,7 +203,7 @@ export async function getExcessiveDeathReviewSummary(
            occurrence_start_utc,
            CASE
              WHEN TRIM(COALESCE(raid_ref_key, '')) <> '' AND occurrence_start_utc > 0
-               THEN LOWER(TRIM(raid_ref_key)) || '|' || CAST(occurrence_start_utc AS TEXT)
+               THEN LOWER(TRIM(raid_ref_key)) || '|' || date((occurrence_start_utc - 18000), 'unixepoch')
              WHEN TRIM(COALESCE(report_code, '')) <> '' THEN LOWER(TRIM(report_code))
              ELSE 'id:' || CAST(id AS TEXT)
            END AS dedupe_key,
@@ -327,7 +327,7 @@ export async function getExcessiveDeathReviewSummary(
            *,
            CASE
              WHEN TRIM(COALESCE(raid_ref_key, '')) <> '' AND occurrence_start_utc > 0
-               THEN LOWER(TRIM(raid_ref_key)) || '|' || CAST(occurrence_start_utc AS TEXT)
+               THEN LOWER(TRIM(raid_ref_key)) || '|' || date((occurrence_start_utc - 18000), 'unixepoch')
              WHEN TRIM(COALESCE(report_code, '')) <> '' THEN LOWER(TRIM(report_code))
              ELSE 'id:' || CAST(id AS TEXT)
            END AS dedupe_key
