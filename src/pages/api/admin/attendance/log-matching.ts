@@ -125,7 +125,9 @@ export async function POST(context: APIContext): Promise<Response> {
     } catch (syncError) {
       console.error('Saved attendance log override but rematch failed', syncError);
       const syncMessage = syncError instanceof Error ? syncError.message : '';
-      const isBackoff = syncMessage.toLowerCase().includes('backoff active until');
+      const isBackoff =
+        syncMessage.toLowerCase().includes('backoff active until') ||
+        syncMessage.toLowerCase().includes('rate limit');
       if (isBackoff) {
         return statusRedirect(selectedReportCode ? 'log-match-updated-sync-backoff' : 'log-match-cleared-sync-backoff', returnTo);
       }
