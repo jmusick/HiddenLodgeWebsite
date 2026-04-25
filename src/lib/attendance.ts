@@ -119,6 +119,12 @@ interface WclReportSummary {
   endTime: number;
 }
 
+export interface AttendanceLogCandidate {
+  code: string;
+  startUtc: number;
+  endUtc: number;
+}
+
 interface WclFightRow {
   id: number;
   startTime: number;
@@ -492,6 +498,8 @@ async function listCandidateReportsForOccurrence(
   occurrenceStartUtc: number,
   scheduledDurationMinutes: number
 ): Promise<WclReportSummary[]> {
+  const REPORT_PAGE_SIZE = 50;
+  const REPORT_MAX_PAGES = 6;
   const safeDurationMinutes = Number.isFinite(scheduledDurationMinutes) && scheduledDurationMinutes > 0
     ? scheduledDurationMinutes
     : 180;
@@ -502,38 +510,51 @@ async function listCandidateReportsForOccurrence(
   const startTimeMs = (occurrenceEndUtc - 8 * 60 * 60) * 1000;
   const endTimeMs = (occurrenceEndUtc + 8 * 60 * 60) * 1000;
 
-  const payload = await queryWcl<{
-    reportData?: {
-      reports?: {
-        data?: Array<{ code?: string; startTime?: number; endTime?: number }>;
+  const allRows: Array<{ code?: string; startTime?: number; endTime?: number }> = [];
+  for (let page = 1; page <= REPORT_MAX_PAGES; page += 1) {
+    const payload = await queryWcl<{
+      reportData?: {
+        reports?: {
+          data?: Array<{ code?: string; startTime?: number; endTime?: number }>;
+        };
       };
-    };
-  }>(
-    accessToken,
-    `
-      query AttendanceReports($guildID: Int!, $startTime: Float!, $endTime: Float!, $limit: Int!) {
-        reportData {
-          reports(guildID: $guildID, startTime: $startTime, endTime: $endTime, limit: $limit, page: 1) {
-            data {
-              code
-              startTime
-              endTime
+    }>(
+      accessToken,
+      `
+        query AttendanceReports($guildID: Int!, $startTime: Float!, $endTime: Float!, $limit: Int!, $page: Int!) {
+          reportData {
+            reports(guildID: $guildID, startTime: $startTime, endTime: $endTime, limit: $limit, page: $page) {
+              data {
+                code
+                startTime
+                endTime
+              }
             }
           }
         }
+      `,
+      {
+        guildID: WCL_GUILD_ID,
+        startTime: startTimeMs,
+        endTime: endTimeMs,
+        limit: REPORT_PAGE_SIZE,
+        page,
       }
-    `,
-    {
-      guildID: WCL_GUILD_ID,
-      startTime: startTimeMs,
-      endTime: endTimeMs,
-      limit: 30,
-    }
-  );
+    );
 
-  const rows = payload?.reportData?.reports?.data ?? [];
-  return rows
-    .map((row) => {
+    const pageRows = payload?.reportData?.reports?.data ?? [];
+    if (pageRows.length === 0) break;
+    allRows.push(...pageRows);
+
+    if (pageRows.length < REPORT_PAGE_SIZE) {
+      // Last page in this window.
+      break;
+    }
+  }
+
+  const dedupedByCode = new Map<string, WclReportSummary>();
+  for (const row of allRows) {
+    const parsed = (() => {
       const code = (row.code ?? '').trim();
       const startTime = Number(row.startTime ?? 0);
       const endTime = Number(row.endTime ?? 0);
@@ -543,8 +564,12 @@ async function listCandidateReportsForOccurrence(
         startTime,
         endTime: Number.isFinite(endTime) && endTime > startTime ? endTime : startTime,
       } as WclReportSummary;
-    })
-    .filter((row): row is WclReportSummary => row !== null)
+    })();
+    if (!parsed) continue;
+    dedupedByCode.set(parsed.code, parsed);
+  }
+
+  return [...dedupedByCode.values()]
     .sort((a, b) => {
       const endDelta = Math.abs(a.endTime - targetEndTimeMs) - Math.abs(b.endTime - targetEndTimeMs);
       if (endDelta !== 0) return endDelta;
@@ -1150,6 +1175,35 @@ async function syncAttendanceOccurrence(
   occurrence: AttendanceOccurrence,
   ownership: AttendanceOwnershipData
 ): Promise<void> {
+  const overrideRow = await db
+    .prepare(
+      `SELECT report_code
+       FROM raid_attendance_log_overrides
+       WHERE raid_ref_key = ?
+         AND occurrence_start_utc = ?
+       LIMIT 1`
+    )
+    .bind(occurrence.raid_ref_key, occurrence.occurrence_start_utc)
+    .first<{ report_code: string | null }>();
+
+  const overrideReportCode = (overrideRow?.report_code ?? '').trim();
+  if (overrideReportCode) {
+    const details = await fetchFightParticipantsByCharId(accessToken, overrideReportCode, ownership);
+    await upsertAttendanceReport(db, occurrence, {
+      reportCode: overrideReportCode,
+      reportStartUtc: details.reportStartUtc,
+      reportEndUtc: details.reportEndUtc,
+      totalBossKills: details.totalBossKills,
+      totalBossWipes: details.totalBossWipes,
+      totalWipePulls: details.totalWipePulls,
+      totalBossFights: details.totalBossFights,
+      bossesByCharId: details.bossesByCharId,
+      bossKillsByCharId: details.bossKillsByCharId,
+      deathStatsByCharId: details.deathStatsByCharId,
+    });
+    return;
+  }
+
   const candidates = await listCandidateReportsForOccurrence(
     accessToken,
     occurrence.occurrence_start_utc,
@@ -1715,6 +1769,97 @@ export async function getAttendanceSummaryMap(
 export async function refreshAttendanceCache(dbInput?: D1Database): Promise<void> {
   const db = getDatabase(dbInput);
   await syncAttendanceFromWcl(db);
+}
+
+export async function getAttendanceLogCandidatesForOccurrence(
+  dbInput: D1Database | undefined,
+  occurrenceStartUtc: number,
+  scheduledDurationMinutes: number
+): Promise<AttendanceLogCandidate[]> {
+  const db = getDatabase(dbInput);
+  const now = nowInSeconds();
+  const currentBackoffUntil = await getWclBackoffUntil(db);
+  if (currentBackoffUntil && currentBackoffUntil > now) {
+    throw new Error(`Warcraft Logs API backoff active until ${new Date(currentBackoffUntil * 1000).toISOString()}.`);
+  }
+
+  const config = getWclAuthConfig();
+  if (!config) return [];
+
+  const accessToken = await getWclAccessToken(config);
+  if (!accessToken) return [];
+
+  const candidates = await listCandidateReportsForOccurrence(
+    accessToken,
+    occurrenceStartUtc,
+    scheduledDurationMinutes
+  );
+
+  return candidates.map((candidate) => ({
+    code: candidate.code,
+    startUtc: Math.floor(candidate.startTime / 1000),
+    endUtc: Math.floor(candidate.endTime / 1000),
+  }));
+}
+
+export async function rematchAttendanceOccurrence(
+  dbInput: D1Database | undefined,
+  occurrence: {
+    raidKind: 'primary' | 'adhoc';
+    primaryScheduleId: number | null;
+    adHocRaidId: number | null;
+    occurrenceStartUtc: number;
+    scheduledDurationMinutes?: number | null;
+  }
+): Promise<void> {
+  const db = getDatabase(dbInput);
+  const now = nowInSeconds();
+  const currentBackoffUntil = await getWclBackoffUntil(db);
+  if (currentBackoffUntil && currentBackoffUntil > now) {
+    throw new Error(`Warcraft Logs API backoff active until ${new Date(currentBackoffUntil * 1000).toISOString()}.`);
+  }
+
+  const config = getWclAuthConfig();
+  if (!config) {
+    throw new Error('WCL credentials are not configured.');
+  }
+
+  const accessToken = await getWclAccessToken(config);
+  if (!accessToken) {
+    throw new Error('Failed to get WCL access token.');
+  }
+
+  const ownership = await loadAttendanceOwnership(db);
+  const raidRefKey = toRaidRefKey(occurrence.raidKind, occurrence.primaryScheduleId, occurrence.adHocRaidId);
+  const safeDuration = Number.isFinite(occurrence.scheduledDurationMinutes)
+    ? Math.max(1, Math.floor(Number(occurrence.scheduledDurationMinutes)))
+    : 180;
+
+  try {
+    await syncAttendanceOccurrence(
+      db,
+      accessToken,
+      {
+        raid_ref_key: raidRefKey,
+        raid_kind: occurrence.raidKind,
+        primary_schedule_id: occurrence.primaryScheduleId,
+        ad_hoc_raid_id: occurrence.adHocRaidId,
+        occurrence_start_utc: occurrence.occurrenceStartUtc,
+        scheduled_duration_minutes: safeDuration,
+      },
+      ownership
+    );
+    await clearWclBackoff(db);
+  } catch (error) {
+    if (error instanceof WclRateLimitError) {
+      const backoffSeconds = Math.min(
+        ATTENDANCE_WCL_MAX_BACKOFF_SECONDS,
+        Math.max(ATTENDANCE_WCL_RATE_LIMIT_BACKOFF_SECONDS, error.retryAfterSeconds)
+      );
+      await setWclBackoffUntil(db, nowInSeconds() + backoffSeconds);
+    }
+    throw error;
+  }
 }
 
 export function attendanceStatusLabel(status: AttendanceSignupStatus): string {

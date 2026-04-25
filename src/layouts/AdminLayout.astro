@@ -14,16 +14,23 @@ const adminModules = [
 	{ href: '/admin/mains', label: 'Mains & Alts', icon: 'lucide:users' },
 	{ href: '/admin/roster-teams', label: 'Roster Teams', icon: 'lucide:users-round' },
 	{ href: '/admin/raid-signups', label: 'Raid Signups', icon: 'lucide:calendar-plus' },
+	{ href: '/admin/log-matching', label: 'Log Matching', icon: 'lucide:scan-search' },
 	{ href: '/admin/applications', label: 'Applications', icon: 'lucide:clipboard-list' },
 	{ href: '/admin/feedback', label: 'Feedback', icon: 'lucide:message-square-warning' },
-	{ href: '/admin/performance-review', label: 'Performance Review', icon: 'lucide:chart-no-axes-column-increasing' },
-	{ href: '/admin/raiding', label: 'Raiding Content', icon: 'lucide:swords' },
-	{ href: '/admin/links', label: 'Links', icon: 'lucide:link' },
+	{ href: '/admin/performance-review', label: 'Performance', icon: 'lucide:chart-no-axes-column-increasing' },
 	{ href: '/admin/settings', label: 'Settings', icon: 'lucide:settings' },
 ];
 
+const adminContentModules = [
+	{ href: '/admin/raiding', label: 'Raiding Content', icon: 'lucide:swords' },
+	{ href: '/admin/links', label: 'Links', icon: 'lucide:external-link' },
+];
+
+const isContentModuleActive = adminContentModules.some((module) => currentPath.startsWith(module.href));
+
 const currentAdminModule =
-	adminModules.find((module) => currentPath.startsWith(module.href))?.label ?? 'Modules';
+	adminModules.find((module) => currentPath.startsWith(module.href))?.label ??
+	(isContentModuleActive ? 'Content' : 'Modules');
 ---
 
 <Layout title={title}>
@@ -47,6 +54,30 @@ const currentAdminModule =
 								</a>
 							</li>
 						))}
+						<li class="admin-content-dropdown">
+							<div class="admin-content-dropdown-menu">
+								<button
+									type="button"
+									class:list={['admin-tab', 'admin-content-trigger', { active: isContentModuleActive }]}
+								>
+									<Icon name="lucide:layout-panel-left" aria-hidden="true" />
+									Content
+								</button>
+								<ul class="admin-content-panel" aria-label="Content admin modules">
+									{adminContentModules.map((module) => (
+										<li>
+											<a
+												href={module.href}
+												class:list={['admin-tab', { active: currentPath.startsWith(module.href) }]}
+											>
+												<Icon name={module.icon} aria-hidden="true" />
+												{module.label}
+											</a>
+										</li>
+									))}
+								</ul>
+							</div>
+						</li>
 					</ul>
 					<details class="admin-subnav-menu">
 						<summary aria-label="Open admin navigation menu">
@@ -63,6 +94,17 @@ const currentAdminModule =
 										>
 											<Icon name={m.icon} aria-hidden="true" />
 											{m.label}
+										</a>
+									</li>
+								))}
+								{adminContentModules.map((module) => (
+									<li>
+										<a
+											href={module.href}
+											class:list={['admin-tab', 'admin-menu-tab', { active: currentPath.startsWith(module.href) }]}
+										>
+											<Icon name={module.icon} aria-hidden="true" />
+											{module.label}
 										</a>
 									</li>
 								))}
@@ -124,7 +166,7 @@ const currentAdminModule =
 		flex: 1;
 	}
 
-	.admin-subnav ul {
+	.admin-subnav > ul {
 		display: flex;
 		align-items: center;
 		gap: 0.25rem;
@@ -137,6 +179,73 @@ const currentAdminModule =
 	.admin-subnav-menu {
 		display: none;
 		position: relative;
+	}
+
+	.admin-content-dropdown {
+		position: relative;
+	}
+
+	.admin-content-dropdown-menu {
+		position: relative;
+	}
+
+	/* Hover bridge: keeps panel alive while mouse travels from trigger to panel */
+	.admin-content-dropdown-menu::after {
+		content: '';
+		position: absolute;
+		left: 0;
+		right: 0;
+		top: 100%;
+		height: 0.42rem;
+	}
+
+	.admin-content-trigger {
+		cursor: pointer;
+		background: transparent;
+		font-family: inherit;
+	}
+
+	.admin-content-trigger::after {
+		content: '▾';
+		font-size: 0.7em;
+		margin-left: 0.3rem;
+		opacity: 0.88;
+	}
+
+	.admin-content-panel {
+		display: none;
+		position: absolute;
+		top: 100%;
+		right: 0;
+		margin-top: 0;
+		min-width: 11rem;
+		list-style: none;
+		padding: 0.32rem;
+		margin: 0;
+		border-radius: 0.45rem;
+		border: 1px solid rgba(214, 176, 106, 0.36);
+		background: rgba(10, 18, 28, 0.97);
+		box-shadow: 0 12px 30px rgba(0, 0, 0, 0.34);
+		z-index: 20;
+		gap: 0.18rem;
+	}
+
+	.admin-content-panel .admin-tab {
+		display: flex;
+		width: 100%;
+		white-space: nowrap;
+		box-sizing: border-box;
+	}
+
+	.admin-content-dropdown-menu:hover > .admin-content-panel {
+		display: flex;
+		flex-direction: column;
+	}
+
+	.admin-content-dropdown-menu:hover > .admin-content-trigger {
+		border-color: rgba(214, 176, 106, 0.45);
+		background: rgba(214, 176, 106, 0.09);
+		color: var(--text);
 	}
 
 	.admin-subnav-menu summary {
