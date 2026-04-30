@@ -251,6 +251,8 @@ function normalizeRealmSlug(realm: string | null | undefined): string {
     .trim()
     .toLowerCase()
     .replace(/'/g, '')
+    .replace(/([a-z])([0-9])/g, '$1-$2')
+    .replace(/([0-9])([a-z])/g, '$1-$2')
     .replace(/\s+/g, '-')
     .replace(/-+/g, '-');
 }
@@ -330,8 +332,6 @@ async function loadAttendanceOwnership(db: D1Database): Promise<AttendanceOwners
     const ownerKey = attendanceOwnerKey(row.user_id, blizzardCharId);
     ownerKeyByCharId.set(blizzardCharId, ownerKey);
     addCharIdToOwnerMap(charIdsByOwnerKeyMutable, ownerKey, blizzardCharId);
-
-    addUniqueNameLookup(nameOnlyLookupMutable, normalizeName(row.name), blizzardCharId);
 
     const lookupKey = `${normalizeName(row.name)}::${normalizeRealmSlug(row.realm)}`;
     if (!lookupKey.startsWith('::')) {
