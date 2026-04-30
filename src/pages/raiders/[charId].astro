@@ -1133,7 +1133,7 @@ function gemAffixState(item: (typeof gear)[number] | undefined): { missing: bool
                 <tbody>
                   {attendanceBreakdown.map((row) => (
                     <tr>
-                      <td class="date-col">{new Date(row.occurrenceStartUtc * 1000).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}</td>
+                      <td class="date-col">{new Date(row.occurrenceStartUtc * 1000).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'America/New_York' })}</td>
                       <td>{attendanceStatusLabel(row.signupStatus)}</td>
                       <td>
                         <span class="attendance-boss-summary">{row.bossKillsPresent}/{row.totalBosses}</span>

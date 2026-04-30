@@ -747,7 +747,18 @@ async function fetchFightParticipantsByCharId(
     if (!actorId || !name) continue;
 
     const charId = ownership.charLookup.get(`${name}::${realmSlug}`) ?? ownership.nameOnlyLookup.get(name);
-    if (!charId) continue;
+    if (!charId) {
+      const nameOnlyResult = ownership.nameOnlyLookup.get(name);
+      const reason = nameOnlyResult === null ? 'duplicate name, realm slug mismatch' : 'not found in character lookup';
+      console.warn('[attendance] WCL actor not matched to any character', {
+        reportCode,
+        actorName: actor.name,
+        actorServer: actor.server,
+        normalizedKey: `${name}::${realmSlug}`,
+        reason,
+      });
+      continue;
+    }
 
     const ownerKey = ownership.ownerKeyByCharId.get(charId) ?? attendanceOwnerKey(null, charId);
     actorOwnerKeyById.set(actorId, ownerKey);

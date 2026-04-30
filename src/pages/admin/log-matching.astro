@@ -4,7 +4,7 @@ export const prerender = false;
 import AdminLayout from '../../layouts/AdminLayout.astro';
 import { env } from 'cloudflare:workers';
 import { attendanceScoringStartUtc } from '../../lib/attendance';
-import { dayKeyInTimeZone, parseUtcTime } from '../../lib/raid-signups';
+import { dayKeyInTimeZone } from '../../lib/raid-signups';
 
 if (!Astro.locals.user) {
   return Astro.redirect('/');
@@ -46,53 +46,16 @@ interface LogMatchRow {
 }
 
 const PRIMARY_SCHEDULE_TIME_ZONE = 'America/New_York';
-const WEEKDAY_SHORT_TO_INDEX: Record<string, number> = {
-  Sun: 0,
-  Mon: 1,
-  Tue: 2,
-  Wed: 3,
-  Thu: 4,
-  Fri: 5,
-  Sat: 6,
-};
 
-const tzWeekMinuteFormatter = new Intl.DateTimeFormat('en-US', {
+const raidNightFormatter = new Intl.DateTimeFormat('en-US', {
   timeZone: PRIMARY_SCHEDULE_TIME_ZONE,
-  weekday: 'short',
-  hour: '2-digit',
+  month: 'numeric',
+  day: 'numeric',
+  year: 'numeric',
+  hour: 'numeric',
   minute: '2-digit',
-  hourCycle: 'h23',
+  hour12: true,
 });
-
-function weekMinuteInPrimaryTimeZone(epochSeconds: number): number {
-  const parts = tzWeekMinuteFormatter.formatToParts(new Date(epochSeconds * 1000));
-  const weekdayShort = parts.find((p) => p.type === 'weekday')?.value ?? 'Sun';
-  const hour = Number.parseInt(parts.find((p) => p.type === 'hour')?.value ?? '0', 10);
-  const minute = Number.parseInt(parts.find((p) => p.type === 'minute')?.value ?? '0', 10);
-  const weekday = WEEKDAY_SHORT_TO_INDEX[weekdayShort] ?? 0;
-  return weekday * 24 * 60 + hour * 60 + minute;
-}
-
-function adjustedPrimaryDisplayStartUtc(weekdayUtc: number, startTimeUtc: string, startsAtUtc: number): number {
-  const parsedTime = parseUtcTime(startTimeUtc);
-  if (!parsedTime) return startsAtUtc;
-
-  const referenceSundayUtc = Math.floor(Date.UTC(2024, 0, 7, 0, 0, 0, 0) / 1000);
-  const referenceSlotUtc =
-    referenceSundayUtc +
-    weekdayUtc * 24 * 60 * 60 +
-    (parsedTime.hour * 60 + parsedTime.minute) * 60;
-
-  const intendedWeekMinute = weekMinuteInPrimaryTimeZone(referenceSlotUtc);
-  const actualWeekMinute = weekMinuteInPrimaryTimeZone(startsAtUtc);
-
-  let diffMinutes = actualWeekMinute - intendedWeekMinute;
-  while (diffMinutes > 7 * 24 * 60 / 2) diffMinutes -= 7 * 24 * 60;
-  while (diffMinutes < -(7 * 24 * 60 / 2)) diffMinutes += 7 * 24 * 60;
-
-  if (Math.abs(diffMinutes) > 120 || diffMinutes === 0) return startsAtUtc;
-  return startsAtUtc - diffMinutes * 60;
-}
 
 function pickCanonicalLogNightRow(existing: LogMatchRow, candidate: LogMatchRow): LogMatchRow {
   const existingOverride = Boolean((existing.override_report_code ?? '').trim());
@@ -294,16 +257,11 @@ const WEEKDAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
                 const autoCode = (row.matched_report_code ?? '').trim() || null;
                 const overrideCode = (row.override_report_code ?? '').trim() || null;
                 const totalBosses = Math.max(0, Number(row.total_boss_kills ?? 0)) + Math.max(0, Number(row.total_boss_wipes ?? 0));
-                const displayOccurrenceStartUtc = adjustedPrimaryDisplayStartUtc(
-                  row.weekday_utc,
-                  row.start_time_utc,
-                  row.occurrence_start_utc
-                );
                 return (
                   <tr>
                     <td>
                       <div class="cell-stack">
-                        <strong>{new Date(displayOccurrenceStartUtc * 1000).toLocaleString()}</strong>
+                        <strong>{raidNightFormatter.format(new Date(row.occurrence_start_utc * 1000))} ET</strong>
                         <small>{row.raid_ref_key}</small>
                       </div>
                     </td>

@@ -116,7 +116,7 @@ const statusParam = new URL(Astro.request.url).searchParams.get('status');
             <tbody>
               {review.includedLogs.map((log) => (
                 <tr>
-                  <td data-sort-value={String(log.occurrenceStartUtc)}>{new Date(log.occurrenceStartUtc * 1000).toLocaleString()}</td>
+                  <td data-sort-value={String(log.occurrenceStartUtc)}>{new Date(log.occurrenceStartUtc * 1000).toLocaleString('en-US', { timeZone: 'America/New_York' })} ET</td>
                   <td data-sort-value={`${log.scheduleName.toLowerCase()}-${log.weekdayUtc ?? -1}`}>
                     {log.scheduleName}
                     {log.weekdayUtc !== null && (
