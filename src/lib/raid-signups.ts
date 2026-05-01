@@ -122,6 +122,51 @@ export function utcDateKey(date: Date): string {
   ).padStart(2, '0')}`;
 }
 
+const WEEKDAY_SHORT_TO_INDEX: Record<string, number> = {
+  Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6,
+};
+
+const primaryTzWeekMinuteFormatter = new Intl.DateTimeFormat('en-US', {
+  timeZone: 'America/New_York',
+  weekday: 'short',
+  hour: '2-digit',
+  minute: '2-digit',
+  hourCycle: 'h23',
+});
+
+function weekMinuteInPrimaryTimeZone(epochSeconds: number): number {
+  const parts = primaryTzWeekMinuteFormatter.formatToParts(new Date(epochSeconds * 1000));
+  const weekdayShort = parts.find((p) => p.type === 'weekday')?.value ?? 'Sun';
+  const hour = Number.parseInt(parts.find((p) => p.type === 'hour')?.value ?? '0', 10);
+  const minute = Number.parseInt(parts.find((p) => p.type === 'minute')?.value ?? '0', 10);
+  const weekday = WEEKDAY_SHORT_TO_INDEX[weekdayShort] ?? 0;
+  return weekday * 24 * 60 + hour * 60 + minute;
+}
+
+export function adjustedPrimaryDisplayStartUtc(
+  schedule: Pick<PrimarySchedule, 'start_time_utc' | 'weekday_utc'>,
+  startsAtUtc: number
+): number {
+  const parsedTime = parseUtcTime(schedule.start_time_utc);
+  if (!parsedTime) return startsAtUtc;
+
+  const referenceSundayUtc = Math.floor(Date.UTC(2024, 0, 7, 0, 0, 0, 0) / 1000);
+  const referenceSlotUtc =
+    referenceSundayUtc +
+    schedule.weekday_utc * 24 * 60 * 60 +
+    (parsedTime.hour * 60 + parsedTime.minute) * 60;
+
+  const intendedWeekMinute = weekMinuteInPrimaryTimeZone(referenceSlotUtc);
+  const actualWeekMinute = weekMinuteInPrimaryTimeZone(startsAtUtc);
+
+  let diffMinutes = actualWeekMinute - intendedWeekMinute;
+  while (diffMinutes > (7 * 24 * 60) / 2) diffMinutes -= 7 * 24 * 60;
+  while (diffMinutes < -(7 * 24 * 60) / 2) diffMinutes += 7 * 24 * 60;
+
+  if (Math.abs(diffMinutes) > 120 || diffMinutes === 0) return startsAtUtc;
+  return startsAtUtc - diffMinutes * 60;
+}
+
 function firstOccurrenceDayStartUtc(createdAtEpoch: number, weekdayUtc: number): number {
   const created = new Date(createdAtEpoch * 1000);
   const createdDayStart = Date.UTC(created.getUTCFullYear(), created.getUTCMonth(), created.getUTCDate()) / 1000;

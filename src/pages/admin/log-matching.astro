@@ -4,7 +4,7 @@ export const prerender = false;
 import AdminLayout from '../../layouts/AdminLayout.astro';
 import { env } from 'cloudflare:workers';
 import { attendanceScoringStartUtc } from '../../lib/attendance';
-import { dayKeyInTimeZone } from '../../lib/raid-signups';
+import { adjustedPrimaryDisplayStartUtc, dayKeyInTimeZone } from '../../lib/raid-signups';
 
 if (!Astro.locals.user) {
   return Astro.redirect('/');
@@ -261,7 +261,7 @@ const WEEKDAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
                   <tr>
                     <td>
                       <div class="cell-stack">
-                        <strong>{raidNightFormatter.format(new Date(row.occurrence_start_utc * 1000))} ET</strong>
+                        <strong>{raidNightFormatter.format(new Date(adjustedPrimaryDisplayStartUtc(row, row.occurrence_start_utc) * 1000))} ET</strong>
                         <small>{row.raid_ref_key}</small>
                       </div>
                     </td>
