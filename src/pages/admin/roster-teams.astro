@@ -385,7 +385,7 @@ function roleLabel(role: AssignedRole): string {
                       ) : (
                         <ul class="pill-list">
                           {summary.tokenDistribution.map((t) => (
-                            <li>{t.token} ({tokenArmorType(t.token)}): {t.count}</li>
+                            <li>{t.token}: {t.count}</li>
                           ))}
                         </ul>
                       )}

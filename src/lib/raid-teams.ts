@@ -1,6 +1,6 @@
 export type TeamMode = 'flex' | 'mythic';
 export type AssignedRole = 'tank' | 'healer' | 'melee-dps' | 'ranged-dps';
-export type TokenGroup = 'Conqueror' | 'Protector' | 'Vanquisher' | 'Unknown';
+export type TokenGroup = 'Cloth' | 'Leather' | 'Mail' | 'Plate' | 'Unknown';
 
 export interface ClassRaidData {
   buffs: string[];
@@ -28,67 +28,67 @@ const CLASS_RAID_DATA: Record<string, ClassRaidData> = {
   'Death Knight': {
     buffs: ['Battle Resurrection'],
     healerCooldowns: [],
-    token: 'Vanquisher',
+    token: 'Plate',
   },
   'Demon Hunter': {
     buffs: ['Chaos Brand'],
     healerCooldowns: [],
-    token: 'Vanquisher',
+    token: 'Leather',
   },
   Druid: {
     buffs: ['Mark of the Wild', 'Battle Resurrection'],
     healerCooldowns: ['Tranquility'],
-    token: 'Vanquisher',
+    token: 'Leather',
   },
   Evoker: {
     buffs: ['Blessing of the Bronze', 'Bloodlust/Heroism'],
     healerCooldowns: ['Rewind'],
-    token: 'Protector',
+    token: 'Mail',
   },
   Hunter: {
     buffs: ['Bloodlust/Heroism'],
     healerCooldowns: [],
-    token: 'Protector',
+    token: 'Mail',
   },
   Mage: {
     buffs: ['Arcane Intellect', 'Bloodlust/Heroism'],
     healerCooldowns: [],
-    token: 'Vanquisher',
+    token: 'Cloth',
   },
   Monk: {
     buffs: ['Mystic Touch'],
     healerCooldowns: ['Revival'],
-    token: 'Vanquisher',
+    token: 'Leather',
   },
   Paladin: {
     buffs: [],
     healerCooldowns: ['Aura Mastery'],
-    token: 'Conqueror',
+    token: 'Plate',
   },
   Priest: {
     buffs: ['Power Word: Fortitude'],
     healerCooldowns: ['Power Word: Barrier', 'Divine Hymn'],
-    token: 'Conqueror',
+    token: 'Cloth',
   },
   Rogue: {
     buffs: [],
     healerCooldowns: [],
-    token: 'Vanquisher',
+    token: 'Leather',
   },
   Shaman: {
     buffs: ['Bloodlust/Heroism'],
     healerCooldowns: ['Spirit Link Totem', 'Healing Tide Totem'],
-    token: 'Protector',
+    token: 'Mail',
   },
   Warlock: {
     buffs: ['Healthstones', 'Summoning Gateway', 'Battle Resurrection'],
     healerCooldowns: [],
-    token: 'Conqueror',
+    token: 'Cloth',
   },
   Warrior: {
     buffs: ['Battle Shout'],
     healerCooldowns: ['Rallying Cry'],
-    token: 'Protector',
+    token: 'Plate',
   },
 };
 
@@ -129,9 +129,10 @@ export function classRaidData(className: string): ClassRaidData {
 }
 
 export function tokenArmorType(token: TokenGroup): string {
-  if (token === 'Conqueror') return 'Cloth';
-  if (token === 'Protector') return 'Mail';
-  if (token === 'Vanquisher') return 'Leather';
+  if (token === 'Cloth') return 'Cloth';
+  if (token === 'Leather') return 'Leather';
+  if (token === 'Mail') return 'Mail';
+  if (token === 'Plate') return 'Plate';
   return 'Unknown';
 }
 

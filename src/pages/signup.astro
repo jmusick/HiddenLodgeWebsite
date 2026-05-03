@@ -16,7 +16,6 @@ import {
 import {
   computeTeamSummary,
   raidBuffDescription,
-  tokenArmorType,
   type AssignedRole,
 } from '../lib/raid-teams';
 import { resolveUserTimeZone } from '../lib/time-zones';
@@ -656,6 +655,14 @@ const getRaidMembers = (raidKey: string): DaySummarySignupRow[] => {
                           <p>Ranged DPS: <strong>{summary.roleCounts['ranged-dps']}</strong></p>
                         </article>
                         <article>
+                          <h4>Class Breakdown</h4>
+                          <ul class="mini-list">
+                            {summary.classDistribution.map((item) => (
+                              <li>{item.className}: {item.count}</li>
+                            ))}
+                          </ul>
+                        </article>
+                        <article>
                           <h4>Raid Buff Coverage</h4>
                           <ul class="pill-list">
                             {summary.raidBuffCounts.map(({ buff, count }) => (
@@ -673,19 +680,11 @@ const getRaidMembers = (raidKey: string): DaySummarySignupRow[] => {
                           </ul>
                         </article>
                         <article>
-                          <h4>Class Breakdown</h4>
-                          <ul class="mini-list">
-                            {summary.classDistribution.map((item) => (
-                              <li>{item.className}: {item.count}</li>
-                            ))}
-                          </ul>
-                        </article>
-                        <article>
                           <h4>Token Breakdown</h4>
                           <ul class="mini-list">
                             {summary.tokenDistribution.map((item) => (
                               <li>
-                                {item.token} ({tokenArmorType(item.token)}): {item.count}
+                                {item.token}: {item.count}
                               </li>
                             ))}
                           </ul>
@@ -1205,8 +1204,7 @@ const getRaidMembers = (raidKey: string): DaySummarySignupRow[] => {
   }
 
   .signup-intro {
-    white-space: normal;
-    max-width: 72ch;
+    white-space: nowrap;
   }
 
   .summary-hint {
@@ -1677,7 +1675,7 @@ const getRaidMembers = (raidKey: string): DaySummarySignupRow[] => {
     margin-top: 0.55rem;
     display: grid;
     gap: 0.45rem;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-columns: repeat(4, minmax(0, 1fr));
   }
 
   .summary-grid article {
@@ -1866,13 +1864,16 @@ const getRaidMembers = (raidKey: string): DaySummarySignupRow[] => {
       grid-template-columns: repeat(2, minmax(0, 1fr));
     }
 
+    .summary-grid {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
     .weekday-head {
       display: none;
     }
 
     .signup-intro {
       white-space: normal;
-      max-width: 72ch;
     }
   }
 
