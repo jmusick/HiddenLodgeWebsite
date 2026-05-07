@@ -27,21 +27,32 @@ function quoteIdentifier(identifier) {
   return `"${String(identifier).replace(/"/g, '""')}"`;
 }
 
-function runCommand(commandLine) {
+function runCommand(commandLine, { retries = 2 } = {}) {
   console.log(`\n$ ${commandLine}`);
-  try {
-    const result = execSync(commandLine, {
-      cwd: PROJECT_ROOT,
-      encoding: 'utf-8',
-      stdio: ['pipe', 'pipe', 'pipe'],
-      maxBuffer: 128 * 1024 * 1024,
-    });
-    return result;
-  } catch (error) {
-    console.error('Command output:', error.stdout);
-    console.error('Command error:', error.stderr);
-    throw new Error(`Command failed: ${error.message}`);
+
+  let lastError = null;
+  for (let attempt = 1; attempt <= retries + 1; attempt += 1) {
+    try {
+      const result = execSync(commandLine, {
+        cwd: PROJECT_ROOT,
+        encoding: 'utf-8',
+        stdio: ['pipe', 'pipe', 'pipe'],
+        maxBuffer: 128 * 1024 * 1024,
+      });
+      return result;
+    } catch (error) {
+      lastError = error;
+      const isFinalAttempt = attempt > retries;
+      if (!isFinalAttempt) {
+        console.warn(`Command attempt ${attempt} failed, retrying...`);
+        continue;
+      }
+    }
   }
+
+  console.error('Command output:', lastError?.stdout);
+  console.error('Command error:', lastError?.stderr);
+  throw new Error(`Command failed: ${lastError?.message ?? 'Unknown error'}`);
 }
 
 function runSqlFile(sql, { remote = false, json = false } = {}) {
@@ -192,7 +203,7 @@ function getTableData(tables, remote = false) {
   return results;
 }
 
-function generateInsertStatements(table, rows) {
+function generateInsertStatements(table, rows, { rowsPerStatement = 1 } = {}) {
   if (!rows || rows.length === 0) {
     return [];
   }
@@ -201,21 +212,27 @@ function generateInsertStatements(table, rows) {
   const columns = Object.keys(rows[0]);
   const columnList = columns.map(quoteIdentifier).join(', ');
 
-  for (const row of rows) {
-    const values = columns.map((col) => {
-      const val = row[col];
-      if (val === null || val === undefined) {
-        return 'NULL';
-      }
-      if (typeof val === 'string') {
-        // Escape single quotes
-        return `'${val.replace(/'/g, "''")}'`;
-      }
-      return String(val);
+  for (let i = 0; i < rows.length; i += rowsPerStatement) {
+    const chunk = rows.slice(i, i + rowsPerStatement);
+    const valueTuples = chunk.map((row) => {
+      const values = columns.map((col) => {
+        const val = row[col];
+        if (val === null || val === undefined) {
+          return 'NULL';
+        }
+        if (typeof val === 'string') {
+          // Escape single quotes
+          return `'${val.replace(/'/g, "''")}'`;
+        }
+        return String(val);
+      });
+
+      return `(${values.join(', ')})`;
     });
 
-    const valueList = values.join(', ');
-    statements.push(`INSERT INTO ${quoteIdentifier(table)} (${columnList}) VALUES (${valueList});`);
+    statements.push(
+      `INSERT INTO ${quoteIdentifier(table)} (${columnList}) VALUES ${valueTuples.join(', ')};`
+    );
   }
 
   return statements;
@@ -237,6 +254,8 @@ function insertData(data, tables) {
   console.log(`Inserting data into LOCAL database`);
   console.log(`========================================`);
 
+  let totalSkippedRows = 0;
+
   for (const table of tables) {
     const rows = data[table];
 
@@ -249,7 +268,8 @@ function insertData(data, tables) {
       }
 
       // Generate and execute INSERT statements
-      const statements = generateInsertStatements(table, rows);
+      const rowsPerStatement = table === 'raider_metrics_cache' ? 10 : 100;
+      const statements = generateInsertStatements(table, rows, { rowsPerStatement });
       console.log(`  - Generated ${statements.length} insert statements`);
 
       // Determine batch size based on table (some tables have very large data)
@@ -257,6 +277,7 @@ function insertData(data, tables) {
       const batchSize = largeDataTables.includes(table) ? 1 : 10;
       
       let insertedCount = 0;
+      let skippedCount = 0;
       for (let i = 0; i < statements.length; i += batchSize) {
         const batch = statements.slice(i, i + batchSize);
         const sql = batch.join('\n');
@@ -269,15 +290,27 @@ function insertData(data, tables) {
             console.log(`    ... inserted ${insertedCount} of ${rows.length} rows`);
           }
         } catch (err) {
-          console.error(`  Error in batch ${Math.floor(i / batchSize) + 1} of ${Math.ceil(statements.length / batchSize)}:`);
-          console.error(`  Error message: ${err.message}`);
-          // Log the SQL for debugging
-          console.error(`  First statement: ${statements[i]}`);
-          throw err;
+          console.warn(`  Batch ${Math.floor(i / batchSize) + 1} failed, retrying statements individually...`);
+
+          for (const statement of batch) {
+            try {
+              runSqlFile(statement);
+              insertedCount += 1;
+            } catch (singleErr) {
+              skippedCount += 1;
+              totalSkippedRows += 1;
+              console.warn(`    - Skipped one row in ${table}: ${singleErr.message}`);
+              console.warn(`      Statement: ${statement}`);
+            }
+          }
         }
       }
 
-      console.log(`✓ Inserted ${rows.length} rows into ${table}`);
+      if (skippedCount > 0) {
+        console.log(`✓ Inserted ${insertedCount} rows into ${table} (skipped ${skippedCount})`);
+      } else {
+        console.log(`✓ Inserted ${rows.length} rows into ${table}`);
+      }
     } catch (err) {
       console.error(`✗ Error inserting into ${table}:`, err.message);
       throw err;
@@ -286,6 +319,8 @@ function insertData(data, tables) {
 
   if (!tables.some((table) => (data[table] ?? []).length > 0)) {
     console.log(`\nℹ No data to insert - production database is empty`);
+  } else if (totalSkippedRows > 0) {
+    console.log(`\n⚠ Sync completed with ${totalSkippedRows} skipped row(s). Review warnings above for details.`);
   }
 }
 

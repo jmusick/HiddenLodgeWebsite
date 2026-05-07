@@ -1,7 +1,7 @@
 {
   "name": "hiddenlodgewebsite",
   "type": "module",
-  "version": "1.27.6",
+  "version": "1.28.0",
   "engines": {
     "node": ">=22.12.0"
   },
@@ -22,6 +22,9 @@
     "db:migrate:prod": "node scripts/run-d1-migration.mjs --remote",
     "db:check:migrations": "node scripts/check-migrations.mjs",
     "db:copy-prod": "node scripts/copy-prod-data.mjs",
+    "db:export:prod:sql": "wrangler d1 export hidden-lodge-db --remote --no-schema --output=prod-data-export.sql",
+    "db:import:local:sql": "wrangler d1 execute hidden-lodge-db --local --file=prod-data-export.sql",
+    "db:sync:fast": "npm run db:bootstrap:local && npm run db:export:prod:sql && npm run db:import:local:sql",
     "db:compare-schema": "node scripts/compare-d1-schema.mjs --target=local",
     "db:compare-schema:remote": "node scripts/compare-d1-schema.mjs --target=remote",
     "db:reconcile-local": "node scripts/reconcile-local-d1.mjs",
