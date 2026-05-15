@@ -253,7 +253,7 @@ async function loadRecentGuildLogs(limit = 5): Promise<RecentLogsResult> {
     const response = await fetch(GUILD_REPORTS_LIST_URL, {
       signal: controller.signal,
       headers: {
-        'user-agent': 'HiddenLodgeWebsite/1.0 (+https://www.thehiddenlodge.com)',
+        'user-agent': 'HiddenLodgeWebsite/1.0 (+https://hidden-lodge.com)',
       },
     });
 

@@ -56,6 +56,7 @@ const headerLinkLabels: Record<string, string> = {
 };
 
 const siteVersion = packageJson.version;
+const canonicalUrl = new URL(Astro.url.pathname, 'https://hidden-lodge.com').href;
 ---
 
 <!doctype html>
@@ -69,10 +70,25 @@ const siteVersion = packageJson.version;
 			href="https://fonts.googleapis.com/css2?family=Cinzel:wght@500;700;800&family=Barlow+Condensed:wght@400;500;600;700&display=swap"
 			rel="stylesheet"
 		/>
-		<link rel="icon" type="image/svg+xml" href="/favicon.svg" />
-		<link rel="icon" href="/favicon.ico" />
+		<link rel="icon" type="image/png" href="/favicon.png" />
+		<link rel="apple-touch-icon" href="/favicon.png" />
+		<link rel="canonical" href={canonicalUrl} />
+		<link rel="sitemap" href="/sitemap.xml" />
 		<meta name="generator" content={Astro.generator} />
 		<meta name="description" content={description} />
+		<meta name="robots" content="index, follow" />
+		<!-- Open Graph -->
+		<meta property="og:type" content="website" />
+		<meta property="og:site_name" content="The Hidden Lodge" />
+		<meta property="og:title" content={title} />
+		<meta property="og:description" content={description} />
+		<meta property="og:url" content={canonicalUrl} />
+		<meta property="og:image" content="https://hidden-lodge.com/images/guild-banner.png" />
+		<!-- Twitter Card -->
+		<meta name="twitter:card" content="summary_large_image" />
+		<meta name="twitter:title" content={title} />
+		<meta name="twitter:description" content={description} />
+		<meta name="twitter:image" content="https://hidden-lodge.com/images/guild-banner.png" />
 		<title>{title}</title>
 	</head>
 	<body>
@@ -239,7 +255,7 @@ const siteVersion = packageJson.version;
 		<footer class="container site-footer">
 			<p>For Azeroth. For The Hidden Lodge.</p>
 			<p class="site-feedback">Found a bug or have a feature request? <a href="https://github.com/jmusick/HiddenLodgeWebsite/issues" target="_blank" rel="noopener noreferrer">Open an issue on GitHub</a>.</p>
-			<p class="site-footer-links"><a href="/privacy">Privacy Policy</a></p>
+			<p class="site-footer-links"><a href="/privacy">Privacy Policy</a> · <a href="/sitemap.xml">Sitemap</a></p>
 			<p class="site-version">Site version v{siteVersion}</p>
 		</footer>
 	</body>
