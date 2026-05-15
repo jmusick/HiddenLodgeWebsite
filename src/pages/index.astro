@@ -3,15 +3,110 @@ import Layout from '../layouts/Layout.astro';
 import SectionCard from '../components/SectionCard.astro';
 import { externalLinks } from '../data/externalLinks';
 import { Icon } from 'astro-icon/components';
+import { getCollection } from 'astro:content';
+
+const articles = (await getCollection('articles'))
+	.sort((a, b) => b.data.publishedAt.valueOf() - a.data.publishedAt.valueOf())
+	.slice(0, 3);
+
+type YouTubeVideo = {
+	title: string;
+	videoId: string;
+	published: string;
+	thumbnail: string;
+	href: string;
+};
+
+let youtubeVideos: YouTubeVideo[] = [];
+try {
+	const channelPageRes = await fetch('https://www.youtube.com/@HiddenLodgeGuild', {
+		headers: { 'User-Agent': 'HiddenLodgeWebsite/1.0 (+https://hidden-lodge.com)' },
+	});
+	const html = await channelPageRes.text();
+	const rssMatch = html.match(/href="(https:\/\/www\.youtube\.com\/feeds\/videos\.xml\?channel_id=[^"]+)"/);
+	if (rssMatch) {
+		const rssRes = await fetch(rssMatch[1]);
+		const xml = await rssRes.text();
+		const entryMatches = [...xml.matchAll(/<entry>([\s\S]*?)<\/entry>/g)];
+		const decode = (s: string) =>
+			s.replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&#39;/g, "'").replace(/&quot;/g, '"');
+		youtubeVideos = entryMatches.slice(0, 3).map(([, c]) => {
+			const title = decode(c.match(/<title>(.*?)<\/title>/)?.[1] ?? '');
+			const videoId = c.match(/<yt:videoId>(.*?)<\/yt:videoId>/)?.[1] ?? '';
+			const published = c.match(/<published>(.*?)<\/published>/)?.[1] ?? '';
+			return {
+				title,
+				videoId,
+				published,
+				thumbnail: `https://i.ytimg.com/vi/${videoId}/mqdefault.jpg`,
+				href: `https://www.youtube.com/watch?v=${videoId}`,
+			};
+		});
+	}
+} catch {
+	// silently degrade — no videos shown
+}
+
+function formatDate(date: Date | string) {
+	const d = typeof date === 'string' ? new Date(date) : date;
+	return d.toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
+}
 ---
 
 <Layout title="The Hidden Lodge | Home" description="A semi hardcore WoW raiding guild focused on AOTC and Mythic progression.">
-	<section class="hero">
-		<img
-			src="/images/guild-banner.png"
-			alt="The Hidden Lodge — For Azeroth. For the Hidden Lodge."
-			class="banner-img"
-		/>
+	<img src="/images/header.png" alt="The Hidden Lodge" class="site-header-img" />
+	<section class="newsfeed">
+		<div class="feed-col">
+			<h2 class="feed-heading"><Icon name="lucide:newspaper" aria-hidden="true" /> Latest Articles</h2>
+			{articles.length === 0 && <p class="feed-empty">No articles yet. Check back soon.</p>}
+			<div class="feed-list">
+				{articles.map((article) => (
+					<a class="feed-card" href={`/articles/${article.id}`}>
+						<time class="feed-date" datetime={article.data.publishedAt.toISOString()}>
+							{formatDate(article.data.publishedAt)}
+						</time>
+						<h3>{article.data.title}</h3>
+						<p>{article.data.description}</p>
+						<span class="feed-action" aria-hidden="true">Read more →</span>
+					</a>
+				))}
+			</div>
+			<a class="feed-see-all" href="/articles">All articles →</a>
+		</div>
+		<div class="feed-col">
+			<h2 class="feed-heading"><Icon name="lucide:youtube" aria-hidden="true" /> Latest Videos</h2>
+			{youtubeVideos.length === 0 && (
+				<p class="feed-empty">
+					No videos loaded.{' '}
+					<a href="https://www.youtube.com/@HiddenLodgeGuild" target="_blank" rel="noopener noreferrer">
+						Visit our YouTube channel
+					</a>.
+				</p>
+			)}
+			<div class="feed-list">
+				{youtubeVideos.map((video, i) => i === 0 ? (
+					<div class="feed-card feed-card--video video-embed-wrap">
+						<button class="video-embed-trigger" data-video-id={video.videoId} aria-label={`Play ${video.title}`}>
+							<img class="video-thumb" src={video.thumbnail} alt="" loading="lazy" />
+							<span class="play-btn" aria-hidden="true">&#9654;</span>
+						</button>
+						<time class="feed-date" datetime={video.published}>{formatDate(video.published)}</time>
+						<h3>{video.title}</h3>
+						<a class="feed-action" href={video.href} target="_blank" rel="noopener noreferrer">Watch on YouTube →</a>
+					</div>
+				) : (
+					<a class="feed-card feed-card--video" href={video.href} target="_blank" rel="noopener noreferrer">
+						<img class="video-thumb" src={video.thumbnail} alt="" loading="lazy" />
+						<time class="feed-date" datetime={video.published}>
+							{formatDate(video.published)}
+						</time>
+						<h3>{video.title}</h3>
+						<span class="feed-action" aria-hidden="true">Watch on YouTube →</span>
+					</a>
+				))}
+			</div>
+			<a class="feed-see-all" href="https://www.youtube.com/@HiddenLodgeGuild" target="_blank" rel="noopener noreferrer">All videos →</a>
+		</div>
 	</section>
 
 	<section class="grid">
@@ -60,20 +155,28 @@ import { Icon } from 'astro-icon/components';
 	</section>
 </Layout>
 
+<script>
+	document.querySelectorAll<HTMLButtonElement>('.video-embed-trigger').forEach((btn) => {
+		btn.addEventListener('click', () => {
+			const videoId = btn.dataset.videoId;
+			if (!videoId) return;
+			const iframe = document.createElement('iframe');
+			iframe.src = `https://www.youtube.com/embed/${videoId}?autoplay=1`;
+			iframe.allow = 'autoplay; encrypted-media; picture-in-picture; fullscreen';
+			iframe.allowFullscreen = true;
+			iframe.classList.add('video-iframe');
+			iframe.style.display = 'block';
+			iframe.style.width = '100%';
+			iframe.style.aspectRatio = '16 / 9';
+			iframe.style.border = 'none';
+			iframe.style.borderRadius = '0.35rem';
+			iframe.style.marginBottom = '0.55rem';
+			btn.replaceWith(iframe);
+		});
+	});
+</script>
+
 <style>
-	.hero {
-		padding: 0;
-		border: 1px solid rgba(214, 176, 106, 0.38);
-		border-radius: 0.9rem;
-		overflow: hidden;
-	}
-
-	.banner-img {
-		display: block;
-		width: 100%;
-		height: auto;
-	}
-
 	.raid-schedule-card {
 		position: relative;
 		border: 1px solid rgba(214, 176, 106, 0.38);
@@ -149,10 +252,175 @@ import { Icon } from 'astro-icon/components';
 		margin-top: 1.35rem;
 	}
 
-	@media (max-width: 900px) {
-		.grid {
-			grid-template-columns: 1fr;
-		}
+	.site-header-img {
+		display: block;
+		width: 100%;
+		height: auto;
+		border-radius: 0.6rem;
+		margin-bottom: 1.25rem;
+	}
+
+	.newsfeed {
+		display: grid;
+		grid-template-columns: repeat(2, 1fr);
+		gap: 1.5rem;
+		margin-bottom: 1.35rem;
+		position: relative;
+		z-index: 0;
+	}
+
+	.feed-heading {
+		display: flex;
+		align-items: center;
+		gap: 0.5rem;
+		font-size: 1.2rem;
+		color: var(--gold-bright);
+		margin: 0 0 1rem;
+		padding-bottom: 0.6rem;
+		border-bottom: 1px solid var(--border);
+	}
+
+	.feed-heading [data-icon] {
+		width: 1.1rem;
+		height: 1.1rem;
+	}
+
+	.feed-list {
+		display: flex;
+		flex-direction: column;
+		gap: 0.85rem;
+	}
+
+	.feed-card {
+		display: block;
+		padding: 0.85rem 1rem;
+		border-radius: 0.6rem;
+		border: 1px solid rgba(214, 176, 106, 0.28);
+		background: rgba(10, 20, 30, 0.72);
+		text-decoration: none;
+		transition: border-color 160ms ease, background 160ms ease;
+	}
+
+	.feed-card:hover,
+	.feed-card:focus-visible {
+		border-color: rgba(214, 176, 106, 0.55);
+		background: rgba(10, 20, 30, 0.9);
+	}
+
+	.feed-date {
+		display: block;
+		font-size: 0.78rem;
+		color: var(--muted);
+		margin-bottom: 0.3rem;
+		text-transform: uppercase;
+		letter-spacing: 0.06em;
+	}
+
+	.feed-card h3 {
+		margin: 0 0 0.4rem;
+		font-size: 1rem;
+		color: var(--gold-bright);
+		line-height: 1.35;
+	}
+
+	.feed-card p {
+		margin: 0 0 0.5rem;
+		font-size: 0.9rem;
+		color: var(--muted);
+		line-height: 1.5;
+		display: -webkit-box;
+		-webkit-line-clamp: 2;
+		-webkit-box-orient: vertical;
+		overflow: hidden;
+	}
+
+	.feed-action {
+		font-size: 0.82rem;
+		color: var(--gold);
+		font-weight: 600;
+	}
+
+	.video-thumb {
+		display: block;
+		width: 100%;
+		aspect-ratio: 16 / 9;
+		object-fit: cover;
+		border-radius: 0.35rem;
+		margin-bottom: 0.55rem;
+		background: rgba(10, 20, 30, 0.5);
+	}
+
+	.video-embed-trigger {
+		position: relative;
+		display: block;
+		width: 100%;
+		padding: 0;
+		border: none;
+		background: none;
+		cursor: pointer;
+		margin: 0;
+	}
+
+	.video-embed-trigger .video-thumb {
+		margin-bottom: 0;
+	}
+
+	.play-btn {
+		position: absolute;
+		top: 50%;
+		left: 50%;
+		transform: translate(-50%, -50%);
+		width: 3rem;
+		height: 3rem;
+		background: rgba(0, 0, 0, 0.68);
+		border-radius: 50%;
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		color: #fff;
+		font-size: 1.1rem;
+		padding-left: 0.18rem;
+		transition: background 160ms ease, transform 160ms ease;
+		pointer-events: none;
+	}
+
+	.video-embed-trigger:hover .play-btn {
+		background: rgba(200, 0, 0, 0.88);
+		transform: translate(-50%, -50%) scale(1.1);
+	}
+
+	:global(.video-iframe) {
+		display: block;
+		width: 100%;
+		aspect-ratio: 16 / 9;
+		border: none;
+		border-radius: 0.35rem;
+		margin-bottom: 0.55rem;
+	}
+
+	.feed-see-all {
+		display: inline-block;
+		margin-top: 0.85rem;
+		font-size: 0.88rem;
+		color: var(--gold);
+		font-weight: 600;
+	}
+
+	.feed-see-all:hover {
+		color: var(--gold-bright);
+		text-decoration: underline;
+		text-underline-offset: 2px;
+	}
+
+	.feed-empty {
+		color: var(--muted);
+		font-style: italic;
+		font-size: 0.9rem;
+	}
+
+	.feed-empty a {
+		color: var(--gold);
+		text-decoration: underline;
 	}
 
 	.bottom-row {
@@ -274,6 +542,11 @@ import { Icon } from 'astro-icon/components';
 	}
 
 	@media (max-width: 900px) {
+		.grid,
+		.newsfeed {
+			grid-template-columns: 1fr;
+		}
+
 		.bottom-row {
 			grid-template-columns: 1fr;
 		}

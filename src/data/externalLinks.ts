@@ -16,5 +16,11 @@ export const externalLinks = [
     href: 'https://www.wowprogress.com/guild/us/illidan/Hidden+Lodge',
     favicon: 'https://www.google.com/s2/favicons?sz=64&domain_url=https://www.wowprogress.com',
     description: 'Progression ranking and guild progression overview.'
+  },
+  {
+    name: 'YouTube',
+    href: 'https://www.youtube.com/@HiddenLodgeGuild',
+    favicon: 'https://www.google.com/s2/favicons?sz=64&domain_url=https://www.youtube.com',
+    description: 'Guild videos, raid highlights, and content.'
   }
 ] as const;
