@@ -1,0 +1,94 @@
+---
+import Layout from '../layouts/Layout.astro';
+---
+
+<Layout
+	title="On Hiatus | The Hidden Lodge"
+	description="The Hidden Lodge raider features are currently offline. We'll return for Season 2."
+>
+	<div class="hiatus-wrap">
+		<div class="hiatus-card">
+			<p class="hiatus-label">Guild Hiatus</p>
+			<h1>See You in Season 2</h1>
+			<p class="hiatus-body">
+				The Hidden Lodge is taking a well-earned break between seasons. Raider tools, signups,
+				and member features are offline until we return for Season 2.
+			</p>
+			<p class="hiatus-body">
+				In the meantime, check out our roster, lore, and guild info — and keep an eye on our
+				articles for updates.
+			</p>
+			<div class="hiatus-links">
+				<a href="/">Home</a>
+				<a href="/roster">Roster</a>
+				<a href="/articles">Articles</a>
+			</div>
+		</div>
+	</div>
+</Layout>
+
+<style>
+	.hiatus-wrap {
+		display: flex;
+		justify-content: center;
+		align-items: center;
+		min-height: 50vh;
+	}
+
+	.hiatus-card {
+		max-width: 38rem;
+		width: 100%;
+		text-align: center;
+		padding: 3rem 2rem;
+		border: 1px solid rgba(214, 176, 106, 0.28);
+		border-radius: 0.75rem;
+		background: rgba(13, 23, 34, 0.6);
+		backdrop-filter: blur(6px);
+	}
+
+	.hiatus-label {
+		margin: 0 0 0.75rem;
+		font-size: 0.8rem;
+		text-transform: uppercase;
+		letter-spacing: 0.12em;
+		color: var(--gold);
+		opacity: 0.8;
+	}
+
+	h1 {
+		margin: 0 0 1.5rem;
+		font-size: 2.2rem;
+		color: var(--gold-bright);
+		text-shadow: 0 0 24px rgba(214, 176, 106, 0.22);
+	}
+
+	.hiatus-body {
+		margin: 0 0 1rem;
+		color: var(--muted);
+		font-size: 1.05rem;
+		line-height: 1.6;
+	}
+
+	.hiatus-links {
+		display: flex;
+		justify-content: center;
+		gap: 0.75rem;
+		flex-wrap: wrap;
+		margin-top: 2rem;
+	}
+
+	.hiatus-links a {
+		padding: 0.5rem 1.1rem;
+		border: 1px solid rgba(214, 176, 106, 0.4);
+		border-radius: 0.45rem;
+		color: var(--gold);
+		font-weight: 600;
+		font-size: 0.95rem;
+		transition: background 160ms ease, color 160ms ease;
+	}
+
+	.hiatus-links a:hover {
+		background: rgba(214, 176, 106, 0.1);
+		color: var(--gold-bright);
+	}
+</style>

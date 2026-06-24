@@ -4,6 +4,9 @@ import { env } from 'cloudflare:workers';
 
 const MEMBER_ONLY_PATHS = new Set(['/raiders', '/signup', '/feedback', '/trinkets']);
 
+// Guild is on hiatus between seasons — redirect raider/tool features to the hiatus page.
+const HIATUS_PATHS = new Set(['/raiders', '/signup', '/trinkets', '/professions', '/loot-history', '/upgrades']);
+
 function requireAuthenticatedGuildMember(
 	path: string,
 	user: App.Locals['user'],
@@ -32,8 +35,14 @@ export const onRequest = defineMiddleware(async (context, next) => {
 	context.locals.isGuildMember = user ? await isGuildMember(env.DB, user.id) : false;
 	context.locals.isAdmin = user ? await isGuildAdmin(env.DB, user.id) : false;
 
-	// Guard all /admin/* routes at the middleware level
 	const path = new URL(context.request.url).pathname;
+
+	// Redirect raider/tool features to the hiatus page during guild break between seasons.
+	if (HIATUS_PATHS.has(path) || path.startsWith('/raiders/')) {
+		return context.redirect('/hiatus');
+	}
+
+	// Guard all /admin/* routes at the middleware level
 	const isAdminPage = path.startsWith('/admin');
 	const isAdminApi = path.startsWith('/api/admin');
 	const isAdminSurface = isAdminPage || isAdminApi;
