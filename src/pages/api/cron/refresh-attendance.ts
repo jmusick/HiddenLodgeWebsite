@@ -1,8 +1,13 @@
 import type { APIRoute } from 'astro';
 import { env } from 'cloudflare:workers';
 import { importAttendanceFromReportCode, refreshAttendanceCache } from '../../../lib/attendance';
+import { FEATURE_FLAGS } from '../../../lib/feature-flags';
 
 export const GET: APIRoute = async ({ request }) => {
+  if (!FEATURE_FLAGS.attendance) {
+    return new Response('Not found', { status: 404 });
+  }
+
   const provided = request.headers.get('X-Cron-Secret');
   if (!env.CRON_SECRET || !provided || provided !== env.CRON_SECRET) {
     return new Response('Unauthorized', { status: 401 });

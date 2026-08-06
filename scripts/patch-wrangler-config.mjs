@@ -25,7 +25,7 @@ export const scheduled = async (event, env, ctx) => {
   const fetchFn = typeof astroHandler === 'function'
     ? astroHandler
     : astroHandler.fetch.bind(astroHandler);
-  const req = new Request('https://placeholder/api/cron/refresh-roster', {
+  const req = new Request('https://placeholder/api/cron/refresh', {
     method: 'GET',
     headers: { 'X-Cron-Secret': env.CRON_SECRET ?? '' },
   });

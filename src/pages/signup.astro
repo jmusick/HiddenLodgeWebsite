@@ -21,6 +21,11 @@ import {
 import { resolveUserTimeZone } from '../lib/time-zones';
 import { fallbackClassIconUrl } from '../lib/class-icons';
 import { classColor } from '../lib/wow';
+import { FEATURE_FLAGS } from '../lib/feature-flags';
+
+if (!FEATURE_FLAGS.raidSignups) {
+  return Astro.redirect('/');
+}
 
 const user = Astro.locals.user!;
 const isAdmin = Astro.locals.isAdmin;

@@ -3,6 +3,7 @@ export const prerender = false;
 import type { APIContext } from 'astro';
 import { env } from 'cloudflare:workers';
 import { normalizeAssignedRole } from '../../../lib/raid-teams';
+import { FEATURE_FLAGS } from '../../../lib/feature-flags';
 
 function parsePositiveInt(value: FormDataEntryValue | null): number | null {
   if (typeof value !== 'string') return null;
@@ -26,6 +27,8 @@ function redirectWithStatus(returnTo: string, status: string): Response {
 }
 
 export async function POST(context: APIContext): Promise<Response> {
+  if (!FEATURE_FLAGS.raidSignups) return new Response('Not found', { status: 404 });
+
   const user = context.locals.user;
   if (!user) return new Response('Unauthorized', { status: 401 });
   if (!context.locals.isGuildMember) return new Response('Forbidden', { status: 403 });

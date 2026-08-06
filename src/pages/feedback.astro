@@ -3,6 +3,11 @@ export const prerender = false;
 
 import Layout from '../layouts/Layout.astro';
 import { Icon } from 'astro-icon/components';
+import { FEATURE_FLAGS } from '../lib/feature-flags';
+
+if (!FEATURE_FLAGS.feedback) {
+  return Astro.redirect('/');
+}
 
 const user = Astro.locals.user;
 if (!user) {

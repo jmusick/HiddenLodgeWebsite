@@ -3,6 +3,11 @@ export const prerender = false;
 
 import Layout from '../layouts/Layout.astro';
 import { loadProfessionsPageData } from '../lib/professions-cache';
+import { FEATURE_FLAGS } from '../lib/feature-flags';
+
+if (!FEATURE_FLAGS.tools) {
+  return Astro.redirect('/');
+}
 
 const user = (Astro.locals as { user?: { id: number } | null }).user;
 if (!user) {

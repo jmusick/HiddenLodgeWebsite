@@ -15,9 +15,14 @@ import {
   type AssignedRole,
   type TeamMode,
 } from '../../lib/raid-teams';
+import { FEATURE_FLAGS } from '../../lib/feature-flags';
 
 if (!Astro.locals.isAdmin) {
   return Astro.redirect('/');
+}
+
+if (!FEATURE_FLAGS.rosterTeams) {
+  return Astro.redirect('/admin');
 }
 
 interface TeamRow {

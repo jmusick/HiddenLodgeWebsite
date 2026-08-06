@@ -2,6 +2,7 @@ export const prerender = false;
 
 import type { APIContext } from 'astro';
 import { env } from 'cloudflare:workers';
+import { FEATURE_FLAGS } from '../../../lib/feature-flags';
 
 function safeReturnPath(value: FormDataEntryValue | null): string {
   if (typeof value !== 'string') return '/feedback';
@@ -17,6 +18,7 @@ function redirectWithStatus(returnTo: string, status: string): Response {
 }
 
 export async function POST(context: APIContext): Promise<Response> {
+  if (!FEATURE_FLAGS.feedback) return new Response('Not found', { status: 404 });
   if (!context.locals.user) return new Response('Unauthorized', { status: 401 });
   if (!context.locals.isGuildMember) return new Response('Forbidden', { status: 403 });
 

@@ -2,10 +2,15 @@ export const prerender = false;
 
 import type { APIContext } from 'astro';
 import { env } from 'cloudflare:workers';
+import { FEATURE_FLAGS } from '../../../lib/feature-flags';
 
 const VALID_ROLES = new Set(['tank', 'healer', 'melee-dps', 'ranged-dps']);
 
 export async function POST(context: APIContext): Promise<Response> {
+	if (!FEATURE_FLAGS.raidSignups) {
+		return new Response('Not found', { status: 404 });
+	}
+
 	const user = context.locals.user;
 	if (!user) {
 		return new Response('Unauthorized', { status: 401 });

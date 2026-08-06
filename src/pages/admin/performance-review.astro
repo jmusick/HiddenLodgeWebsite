@@ -5,9 +5,14 @@ import AdminLayout from '../../layouts/AdminLayout.astro';
 import { Icon } from 'astro-icon/components';
 import { getExcessiveDeathReviewSummary } from '../../lib/performance-review';
 import { classColor } from '../../lib/wow';
+import { FEATURE_FLAGS } from '../../lib/feature-flags';
 
 if (!Astro.locals.isAdmin) {
   return Astro.redirect('/');
+}
+
+if (!FEATURE_FLAGS.attendance) {
+  return Astro.redirect('/admin');
 }
 
 const review = await getExcessiveDeathReviewSummary();

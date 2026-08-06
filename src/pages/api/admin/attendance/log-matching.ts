@@ -3,6 +3,7 @@ export const prerender = false;
 import type { APIContext } from 'astro';
 import { env } from 'cloudflare:workers';
 import { rematchAttendanceOccurrence } from '../../../../lib/attendance';
+import { FEATURE_FLAGS } from '../../../../lib/feature-flags';
 
 const REDIRECT_BASE = '/admin/log-matching';
 
@@ -52,6 +53,8 @@ async function canManageLogMatching(context: APIContext): Promise<boolean> {
 }
 
 export async function POST(context: APIContext): Promise<Response> {
+  if (!FEATURE_FLAGS.attendance) return new Response('Not found', { status: 404 });
+
   const user = context.locals.user;
   if (!user) return new Response('Unauthorized', { status: 401 });
 

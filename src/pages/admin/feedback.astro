@@ -3,9 +3,14 @@ export const prerender = false;
 
 import AdminLayout from '../../layouts/AdminLayout.astro';
 import { env } from 'cloudflare:workers';
+import { FEATURE_FLAGS } from '../../lib/feature-flags';
 
 if (!Astro.locals.isAdmin) {
   return Astro.redirect('/');
+}
+
+if (!FEATURE_FLAGS.feedback) {
+  return Astro.redirect('/admin');
 }
 
 interface FeedbackRow {

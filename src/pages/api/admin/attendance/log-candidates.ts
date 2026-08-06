@@ -3,6 +3,7 @@ export const prerender = false;
 import type { APIContext } from 'astro';
 import { env } from 'cloudflare:workers';
 import { getAttendanceLogCandidatesForOccurrence } from '../../../../lib/attendance';
+import { FEATURE_FLAGS } from '../../../../lib/feature-flags';
 
 async function canManageLogMatching(context: APIContext): Promise<boolean> {
   if (context.locals.isAdmin) return true;
@@ -30,6 +31,8 @@ function parsePositiveInt(raw: string | null): number | null {
 }
 
 export async function GET(context: APIContext): Promise<Response> {
+  if (!FEATURE_FLAGS.attendance) return new Response('Not found', { status: 404 });
+
   const canManage = await canManageLogMatching(context);
   if (!canManage) return new Response('Forbidden', { status: 403 });
 

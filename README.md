@@ -238,10 +238,10 @@ curl -sS \
 
 | Endpoint | Method | Description |
 |---|---|---|
-| `/api/cron/refresh-roster` | GET | Refreshes roster, raiders, attendance, professions, and warms trinket cache in small class batches; requires `X-Cron-Secret` |
+| `/api/cron/refresh` | GET | Refreshes roster, raiders, attendance, professions, and warms trinket cache in small class batches; requires `X-Cron-Secret` (formerly `/api/cron/refresh-roster`, which still works as an alias) |
 | `/api/cron/refresh-attendance` | GET | Refreshes Warcraft Logs attendance report cache and participant scoring data; requires `X-Cron-Secret` |
 
-`/api/cron/refresh-roster` optional query params:
+`/api/cron/refresh` optional query params:
 
 - `detailBatchSize`: override roster detail batch size for this run.
 - `backfillBatchSize`: override roster quest/death/critter backfill batch size for this run.
@@ -268,7 +268,7 @@ Example shell env values for the refresher process:
 
 ```bash
 # optional: defaults shown
-LOCAL_CRON_URL=http://localhost:4321/api/cron/refresh-roster
+LOCAL_CRON_URL=http://localhost:4321/api/cron/refresh
 LOCAL_CRON_INTERVAL_SECONDS=300
 LOCAL_CRON_RUN_ON_START=true
 LOCAL_CRON_STARTUP_WAIT_SECONDS=30

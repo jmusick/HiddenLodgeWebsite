@@ -5,6 +5,7 @@ import Layout from '../layouts/Layout.astro';
 import { classColor, factionColor } from '../lib/wow';
 import { getSupportedTimeZones, resolveUserTimeZone } from '../lib/time-zones';
 import { env } from 'cloudflare:workers';
+import { FEATURE_FLAGS } from '../lib/feature-flags';
 
 const user = Astro.locals.user;
 if (!user) {
@@ -94,36 +95,10 @@ const timezoneOptions = getSupportedTimeZones();
 					{userNickname ? 'Update Nickname' : 'Set Nickname'}
 				</button>
 			</form>
-			<small class="setting-help">Displayed instead of your Battle Tag on the signup sheet and roster. Leave blank to use your Battle Tag.</small>
+			<small class="setting-help">Displayed instead of your Battle Tag in admin tools and notes. Leave blank to use your Battle Tag.</small>
 		</section>
 
-		<section class="role-section" aria-labelledby="role-heading">
-			<div class="section-title-row">
-				<h2 id="role-heading">Preferred Role</h2>
-			</div>
-			{statusParam === 'role-updated' && (
-				<p class="flash-ok" role="status">Preferred role saved.</p>
-			)}
-			{statusParam === 'role-error' && (
-				<p class="flash-error" role="alert">Invalid role selection.</p>
-			)}
-			<form method="POST" action="/api/profile/update-role" class="role-form">
-				<label>
-					<span>Default role when signing up for raids:</span>
-					<select name="preferred_role" required>
-						<option value="tank" selected={userPreferredRole === 'tank'}>Tank</option>
-						<option value="healer" selected={userPreferredRole === 'healer'}>Healer</option>
-						<option value="melee-dps" selected={userPreferredRole === 'melee-dps'}>Melee DPS</option>
-						<option value="ranged-dps" selected={userPreferredRole === 'ranged-dps' || userPreferredRole === null}>Ranged DPS</option>
-					</select>
-				</label>
-				<button type="submit" class="set-main-btn">Save Role</button>
-			</form>
-			<small class="setting-help">Pre-selects your role when signing up for a raid. You can still change it per signup.</small>
-		</section>
-	</div>
-
-	<section class="timezone-section" aria-labelledby="timezone-heading">
+		<section class="timezone-section" aria-labelledby="timezone-heading">
 			<div class="section-title-row">
 				<h2 id="timezone-heading">Time Zone</h2>
 			</div>
@@ -158,6 +133,34 @@ const timezoneOptions = getSupportedTimeZones();
 				<small class="setting-help">Type to filter, then pick from the dropdown list.</small>
 			</form>
 		</section>
+	</div>
+
+	{FEATURE_FLAGS.raidSignups && (
+	<section class="role-section" aria-labelledby="role-heading">
+		<div class="section-title-row">
+			<h2 id="role-heading">Preferred Role</h2>
+		</div>
+		{statusParam === 'role-updated' && (
+			<p class="flash-ok" role="status">Preferred role saved.</p>
+		)}
+		{statusParam === 'role-error' && (
+			<p class="flash-error" role="alert">Invalid role selection.</p>
+		)}
+		<form method="POST" action="/api/profile/update-role" class="role-form">
+			<label>
+				<span>Default role when signing up for raids:</span>
+				<select name="preferred_role" required>
+					<option value="tank" selected={userPreferredRole === 'tank'}>Tank</option>
+					<option value="healer" selected={userPreferredRole === 'healer'}>Healer</option>
+					<option value="melee-dps" selected={userPreferredRole === 'melee-dps'}>Melee DPS</option>
+					<option value="ranged-dps" selected={userPreferredRole === 'ranged-dps' || userPreferredRole === null}>Ranged DPS</option>
+				</select>
+			</label>
+			<button type="submit" class="set-main-btn">Save Role</button>
+		</form>
+		<small class="setting-help">Pre-selects your role when signing up for a raid. You can still change it per signup.</small>
+	</section>
+	)}
 
 		<section class="characters-section" aria-labelledby="chars-heading">
 			<div class="section-title-row">

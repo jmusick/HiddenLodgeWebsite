@@ -2,8 +2,8 @@
 import Layout from '../layouts/Layout.astro';
 import { Icon } from 'astro-icon/components';
 import { env } from 'cloudflare:workers';
-import { fallbackClassIconUrl } from '../lib/class-icons';
 import { getSessionUser } from '../lib/auth';
+import { FEATURE_FLAGS } from '../lib/feature-flags';
 
 interface RecentGuildLog {
   title: string;
@@ -289,12 +289,10 @@ const recentLogs = recentLogsResult.logs;
 // ── Raiding page editable content ──────────────────────────────────────────
 interface RaidingContentRow { key: string; content: string; }
 interface RaidingAddonRow   { id: number; name: string; url: string; sort_order: number; }
-interface RecruitmentNeedRow { id: number; class: string; role: string; priority: string; }
 
-const [raidingContentResult, raidingAddonsResult, recruitmentNeedsResult] = await env.DB.batch([
+const [raidingContentResult, raidingAddonsResult] = await env.DB.batch([
   env.DB.prepare(`SELECT key, content FROM raiding_content WHERE key IN ('schedule','raid_expectations','recruitment')`),
   env.DB.prepare(`SELECT id, name, url, sort_order FROM raiding_addons ORDER BY sort_order ASC, id ASC`),
-  env.DB.prepare(`SELECT id, class, role, priority FROM recruitment_needs ORDER BY sort_order ASC, id ASC`),
 ]);
 
 const raidingContentMap = new Map<string, string>();
@@ -303,7 +301,6 @@ for (const row of (raidingContentResult.results ?? []) as RaidingContentRow[]) {
 }
 
 const raidingAddons = (raidingAddonsResult.results ?? []) as RaidingAddonRow[];
-const recruitmentNeeds = (recruitmentNeedsResult.results ?? []) as RecruitmentNeedRow[];
 
 const scheduleHtml     = raidingContentMap.get('schedule')          ?? '';
 const expectationsHtml = raidingContentMap.get('raid_expectations') ?? '';
@@ -312,7 +309,7 @@ const recruitmentHtml  = raidingContentMap.get('recruitment')       ?? '';
 const blizzardClientId = readEnv('BLIZZARD_CLIENT_ID') ?? '';
 
 // Check if logged-in Blizzard user has a matching application
-const sessionUser = await getSessionUser(env.DB, Astro.request);
+const sessionUser = FEATURE_FLAGS.applications ? await getSessionUser(env.DB, Astro.request) : null;
 let myApplication: { id: number; status: string } | null = null;
 if (sessionUser) {
   const appRow = await env.DB.prepare(
@@ -390,6 +387,23 @@ const APP_STATUS_THEME: Record<string, string> = {
         )}
       </section>
 
+    </div>
+
+    <div class="raiding-column">
+      <section class="panel" id="recruitment">
+        <h2 class="title-row"><Icon name="lucide:users" class="title-icon" aria-hidden="true" />Recruitment</h2>
+        {recruitmentHtml ? (
+          <div class="rich-content" set:html={recruitmentHtml} />
+        ) : (
+          <p class="panel-text">
+            We recruit players who value consistency, preparation, and a positive progression mindset.
+            Exceptional applicants are always welcome. See our
+            {' '}<a href="https://raider.io/guilds/us/illidan/Hidden%20Lodge/" target="_blank" rel="noopener noreferrer">Raider.IO guild profile</a>{' '}
+            for our current recruitment needs and contact information.
+          </p>
+        )}
+      </section>
+
       <section class="panel">
         <h2 class="title-row"><Icon name="lucide:puzzle" class="title-icon" aria-hidden="true" />Required Addons</h2>
         <ul class="addon-links">
@@ -429,54 +443,8 @@ const APP_STATUS_THEME: Record<string, string> = {
           </>
         )}
       </section>
-    </div>
 
-    <div class="raiding-column">
-      <section class="panel" id="recruitment">
-        <h2 class="title-row"><Icon name="lucide:users" class="title-icon" aria-hidden="true" />Recruitment</h2>
-        {recruitmentHtml ? (
-          <div class="rich-content" set:html={recruitmentHtml} />
-        ) : (
-          <p class="panel-text">
-            We recruit players who value consistency, preparation, and a positive progression mindset.
-            Exceptional applicants are always welcome.
-          </p>
-        )}
-      </section>
-
-      <section class="panel">
-        <h2 class="title-row"><Icon name="lucide:target" class="title-icon" aria-hidden="true" />Current Needs</h2>
-        {recruitmentNeeds.length === 0 ? (
-          <p class="panel-text">We are not actively recruiting for any specific class or role at this time. However, we are always open to exceptional players who bring skill, dedication, and a great attitude.</p>
-        ) : (
-          <div class="needs-table">
-            <div class="needs-row needs-row--header">
-              <span class="needs-col-header">Class</span>
-              <span class="needs-col-header">Role</span>
-              <span class="needs-col-header">Need</span>
-            </div>
-            {recruitmentNeeds.map((need) => {
-              const iconUrl = fallbackClassIconUrl(need.class);
-              return (
-                <div class="needs-row">
-                  <span class="need-class-identity">
-                    {iconUrl && (
-                      <img src={iconUrl} alt="" aria-hidden="true" class="need-class-icon" loading="lazy" decoding="async" />
-                    )}
-                    <span class="need-class-name">{need.class}</span>
-                  </span>
-                  <span class="need-role">{need.role}</span>
-                  <span class={`need-priority need-priority--${need.priority}`}>
-                    {need.priority.charAt(0).toUpperCase() + need.priority.slice(1)}
-                  </span>
-                </div>
-              );
-            })}
-          </div>
-        )}
-        <p class="needs-footnote">We always welcome applications from exceptional and highly qualified players, regardless of current needs.</p>
-      </section>
-
+      {FEATURE_FLAGS.applications && (
       <section class="panel" id="apply">
         <h2 class="title-row"><Icon name="lucide:scroll-text" class="title-icon" aria-hidden="true" />How to Apply</h2>
         <p class="apply-intro">Fill out the form below and we&rsquo;ll review your application and reach out in game or through Discord using the contact information you provide.</p>
@@ -573,6 +541,7 @@ const APP_STATUS_THEME: Record<string, string> = {
 
         <datalist id="realm-list"></datalist>
       </section>
+      )}
     </div>
   </div>
 </Layout>

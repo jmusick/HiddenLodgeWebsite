@@ -1,4 +1,4 @@
-const DEFAULT_URL = 'http://localhost:4321/api/cron/refresh-roster';
+const DEFAULT_URL = 'http://localhost:4321/api/cron/refresh';
 const DEFAULT_READY_URL = 'http://localhost:4321/';
 const DEFAULT_INTERVAL_SECONDS = 300;
 const DEFAULT_STARTUP_WAIT_SECONDS = 30;

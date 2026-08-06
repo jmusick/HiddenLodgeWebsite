@@ -3,6 +3,7 @@ export const prerender = false;
 import type { APIContext } from 'astro';
 import { env } from 'cloudflare:workers';
 import { getSessionUser } from '../../../lib/auth';
+import { FEATURE_FLAGS } from '../../../lib/feature-flags';
 
 export async function GET(context: APIContext): Promise<Response> {
 	const json = (data: unknown) =>
@@ -10,6 +11,8 @@ export async function GET(context: APIContext): Promise<Response> {
 			status: 200,
 			headers: { 'Content-Type': 'application/json' },
 		});
+
+	if (!FEATURE_FLAGS.applications) return json(null);
 
 	const user = await getSessionUser(env.DB, context.request);
 	if (!user) return json(null);

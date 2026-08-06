@@ -6,11 +6,10 @@ import { Icon } from 'astro-icon/components';
 import { env } from 'cloudflare:workers';
 import { classColor } from '../../lib/wow';
 import { getRaiderByCharId, getRaiderGear, getRaiderMedia, getPreparednessHistory, getProgressionHistory, getVaultHistory } from '../../lib/raiders';
-import { isCharacterOwner } from '../../lib/auth';
-import { getLatestSingleTargetForRaiders, getLatestSimsForRaiderByDifficulty, getRaiderRaidbotsTableData } from '../../lib/sim-api';
+import { getLatestSingleTargetForRaiders } from '../../lib/sim-api';
 import { attendanceScoringStartUtc, attendanceStatusLabel, getAttendanceSummaryMap } from '../../lib/attendance';
 import { RAID_PROGRESS_TARGET_GROUPS } from '../../data/raidProgressTargets';
-import RaiderSimTools from '../../components/RaiderSimTools.astro';
+import { FEATURE_FLAGS } from '../../lib/feature-flags';
 
 const { charId } = Astro.params;
 const id = Number(charId);
@@ -32,12 +31,13 @@ if (!raider) {
 const { portrait, fullBody } = media;
 const nowEpoch = Math.floor(Date.now() / 1000);
 
-await Promise.all([
-  getLatestSingleTargetForRaiders((env as any).DB, [id], { maxAgeSeconds: 14 * 24 * 60 * 60 }),
-  getLatestSimsForRaiderByDifficulty((env as any).DB, id, { maxAgeSeconds: 14 * 24 * 60 * 60 }),
-]);
+if (FEATURE_FLAGS.sim) {
+  await getLatestSingleTargetForRaiders((env as any).DB, [id], { maxAgeSeconds: 14 * 24 * 60 * 60 });
+}
 
-const attendanceSummaryMap = await getAttendanceSummaryMap((env as any).DB, { includeBreakdownFor: [id] });
+const attendanceSummaryMap = FEATURE_FLAGS.attendance
+  ? await getAttendanceSummaryMap((env as any).DB, { includeBreakdownFor: [id] })
+  : new Map();
 const attendanceSummary = attendanceSummaryMap.get(id) ?? null;
 const attendanceBreakdown = attendanceSummary?.breakdown ?? [];
 const attendanceStartLabel = new Date(attendanceScoringStartUtc() * 1000).toLocaleDateString(undefined, {
@@ -475,12 +475,6 @@ const color = classColor(raider.className);
 const pageTitle = `${raider.name} — ${raider.realm} | The Hidden Lodge`;
 const raidProgressMatrix = parseRaidProgressMatrix(raider.raidProgressLabel);
 const warcraftLogsUrl = `https://www.warcraftlogs.com/character/id/${raider.blizzardCharId}`;
-const canManageSim = Boolean(
-  Astro.locals.user && (
-    Astro.locals.isAdmin || await isCharacterOwner((env as any).DB, Astro.locals.user.id, raider.blizzardCharId)
-  )
-);
-const raidbotsTableData = await getRaiderRaidbotsTableData((env as any).DB, raider.blizzardCharId).catch(() => []);
 const blizzardArmoryUrl = raider.realmSlug
   ? `https://worldofwarcraft.blizzard.com/en-us/character/us/${encodeURIComponent(raider.realmSlug)}/${encodeURIComponent(raider.name.toLowerCase())}/`
   : null;
@@ -984,6 +978,7 @@ function gemAffixState(item: (typeof gear)[number] | undefined): { missing: bool
           <div class="stat-value">{raider.equippedItemLevel ?? '—'}</div>
         </div>
 
+        {FEATURE_FLAGS.sim && (
         <div class="stat-card">
           <div class="stat-label">
             <Icon name="lucide:crosshair" class="stat-icon" aria-hidden="true" />
@@ -993,6 +988,7 @@ function gemAffixState(item: (typeof gear)[number] | undefined): { missing: bool
             {raider.singleTargetDps ? raider.singleTargetDps.toLocaleString(undefined, { maximumFractionDigits: 0 }) : '—'}
           </div>
         </div>
+        )}
 
         <div class="stat-card">
           <div class="stat-label">
@@ -1004,6 +1000,7 @@ function gemAffixState(item: (typeof gear)[number] | undefined): { missing: bool
           </div>
         </div>
 
+        {FEATURE_FLAGS.attendance && (
         <div class="stat-card">
           <div class="stat-label">
             <Icon name="lucide:calendar-check-2" class="stat-icon" aria-hidden="true" />
@@ -1013,6 +1010,7 @@ function gemAffixState(item: (typeof gear)[number] | undefined): { missing: bool
             {attendanceSummary ? `${attendanceSummary.scorePercent.toFixed(1)}` : '—'}
           </div>
         </div>
+        )}
 
         <div class="stat-card">
           <div class="stat-label">
@@ -1100,6 +1098,7 @@ function gemAffixState(item: (typeof gear)[number] | undefined): { missing: bool
         </div>
       </section>
 
+      {FEATURE_FLAGS.attendance && (
       <details class="preparedness-history-panel panel">
         <summary class="prep-history-summary" aria-label="Attendance breakdown">
           <Icon name="lucide:user-check" class="raid-progress-icon" aria-hidden="true" />
@@ -1193,6 +1192,7 @@ function gemAffixState(item: (typeof gear)[number] | undefined): { missing: bool
           <p class="raid-progress-empty">No scored attendance raids yet. Attendance starts at {attendanceStartLabel} after logs are parsed.</p>
         )}
       </details>
+      )}
 
       <details class="preparedness-history-panel panel preparedness-history-panel-two-week">
         <summary class="prep-history-summary" aria-label="Preparedness history">
@@ -1437,17 +1437,6 @@ function gemAffixState(item: (typeof gear)[number] | undefined): { missing: bool
       </details>
 
     </div>
-  </section>
-
-  <section>
-    <RaiderSimTools
-      charId={raider.blizzardCharId}
-      charName={raider.name}
-      charClass={raider.className}
-      canManageSim={canManageSim}
-      showSourceDebug={Boolean(Astro.locals.isAdmin)}
-      raidbotsTableData={raidbotsTableData}
-    />
   </section>
 </Layout>
 

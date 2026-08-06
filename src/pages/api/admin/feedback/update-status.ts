@@ -2,6 +2,7 @@ export const prerender = false;
 
 import type { APIContext } from 'astro';
 import { env } from 'cloudflare:workers';
+import { FEATURE_FLAGS } from '../../../../lib/feature-flags';
 
 const VALID_STATUSES = new Set(['new', 'reviewed']);
 
@@ -26,6 +27,7 @@ function parsePositiveInt(value: FormDataEntryValue | null): number | null {
 
 export async function POST(context: APIContext): Promise<Response> {
   if (!context.locals.isAdmin) return new Response('Forbidden', { status: 403 });
+  if (!FEATURE_FLAGS.feedback) return new Response('Not found', { status: 404 });
 
   const formData = await context.request.formData();
   const feedbackId = parsePositiveInt(formData.get('feedback_id'));

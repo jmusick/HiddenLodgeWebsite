@@ -9,6 +9,11 @@ import {
   RAID_SLUG_TO_NAME,
 } from '../lib/upgrades';
 import { classColor } from '../lib/wow';
+import { FEATURE_FLAGS } from '../lib/feature-flags';
+
+if (!FEATURE_FLAGS.tools) {
+  return Astro.redirect('/');
+}
 
 const isGuildMember = Astro.locals.isGuildMember;
 if (!isGuildMember) {

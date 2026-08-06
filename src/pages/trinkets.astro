@@ -5,6 +5,11 @@ import Layout from '../layouts/Layout.astro';
 import { env } from 'cloudflare:workers';
 import { loadTrinketTierPageData, type SpecTrinketTierResult } from '../lib/trinkets';
 import { fallbackClassIconUrl } from '../lib/class-icons';
+import { FEATURE_FLAGS } from '../lib/feature-flags';
+
+if (!FEATURE_FLAGS.tools) {
+  return Astro.redirect('/');
+}
 
 const user = Astro.locals.user;
 if (!user) {

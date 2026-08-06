@@ -7,6 +7,7 @@ interface Props {
 import { externalLinks } from '../data/externalLinks';
 import { Icon } from 'astro-icon/components';
 import packageJson from '../../package.json';
+import { FEATURE_FLAGS } from '../lib/feature-flags';
 
 const {
 	title = 'The Hidden Lodge | WoW Guild',
@@ -31,16 +32,16 @@ const guildNavItems = [
 	{ href: '/leadership', label: 'Leadership' },
 ];
 
-const toolsNavItems = [
+const toolsNavItems = FEATURE_FLAGS.tools ? [
 	...(isGuildMember ? [{ href: '/trinkets', label: 'Trinkets' }] : []),
 	...(user ? [{ href: '/professions', label: 'Professions' }] : []),
 	...(user ? [{ href: '/loot-history', label: 'Loot' }] : []),
 	...(isGuildMember ? [{ href: '/upgrades', label: 'Upgrades' }] : []),
-];
+] : [];
 
 const memberNavItems = [
 	...(isGuildMember ? [{ href: '/raiders', label: 'Raiders' }] : []),
-	...(isGuildMember ? [{ href: '/signup', label: 'Signup' }] : []),
+	...(isGuildMember && FEATURE_FLAGS.raidSignups ? [{ href: '/signup', label: 'Signup' }] : []),
 ];
 
 const adminNavItems = [
@@ -84,6 +85,14 @@ const canonicalUrl = new URL(Astro.url.pathname, 'https://hidden-lodge.com').hre
 		<meta name="twitter:description" content={description} />
 		<meta name="twitter:image" content="https://hidden-lodge.com/images/guild-banner.png" />
 		<title>{title}</title>
+		<!-- Google tag (gtag.js) -->
+		<script async is:inline src="https://www.googletagmanager.com/gtag/js?id=G-CZH1RY5ETP"></script>
+		<script is:inline>
+			window.dataLayer = window.dataLayer || [];
+			function gtag(){window.dataLayer.push(arguments);}
+			gtag('js', new Date());
+			gtag('config', 'G-CZH1RY5ETP');
+		</script>
 	</head>
 	<body>
 		<div class="background-glow" aria-hidden="true"></div>
@@ -98,28 +107,13 @@ const canonicalUrl = new URL(Astro.url.pathname, 'https://hidden-lodge.com').hre
 									<a href={homeNavItem.href}>{homeNavItem.label}</a>
 								</li>
 							)}
-							<li class="nav-dropdown">
-								<div class="nav-dropdown-menu">
-									<button type="button" class="nav-dropdown-trigger">Guild</button>
-									<ul class="dropdown-panel" aria-label="Guild navigation">
-										{
-											guildNavItems.map((item) => (
-												<li>
-													<a href={item.href}>{item.label}</a>
-												</li>
-											))
-										}
-										<li class="dropdown-divider" role="separator" aria-hidden="true"></li>
-										{
-											externalLinks.map((link) => (
-												<li>
-													<a class="dropdown-external" href={link.href} target="_blank" rel="noopener noreferrer">{link.name}</a>
-												</li>
-											))
-										}
-									</ul>
-								</div>
-							</li>
+							{
+								guildNavItems.map((item) => (
+									<li>
+										<a href={item.href}>{item.label}</a>
+									</li>
+								))
+							}
 							{
 								trailingPublicNavItems.map((item) => (
 									<li>
@@ -221,6 +215,17 @@ const canonicalUrl = new URL(Astro.url.pathname, 'https://hidden-lodge.com').hre
 							</div>
 						</div>
 					</details>
+					<ul class="external-icon-nav" aria-label="External links">
+						{
+							externalLinks.map((link) => (
+								<li>
+									<a href={link.href} target="_blank" rel="noopener noreferrer" title={link.name} aria-label={link.name}>
+										<img src={link.favicon} alt="" aria-hidden="true" width="18" height="18" loading="lazy" />
+									</a>
+								</li>
+							))
+						}
+					</ul>
 					<div class="user-nav">
 						{user ? (
 							<a href="/profile" class="user-btn" title="My Profile">
@@ -483,6 +488,40 @@ const canonicalUrl = new URL(Astro.url.pathname, 'https://hidden-lodge.com').hre
 		color: var(--gold-bright);
 	}
 
+	.external-icon-nav {
+		display: flex;
+		align-items: center;
+		gap: 0.3rem;
+		padding-left: 0.55rem;
+		border-left: 1px solid rgba(214, 176, 106, 0.34);
+	}
+
+	.external-icon-nav a {
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		width: 2rem;
+		height: 2rem;
+		padding: 0;
+		border-radius: 0.4rem;
+		border: 1px solid transparent;
+		opacity: 0.82;
+	}
+
+	.external-icon-nav a:hover,
+	.external-icon-nav a:focus-visible {
+		border-color: rgba(214, 176, 106, 0.5);
+		background: rgba(214, 176, 106, 0.1);
+		opacity: 1;
+	}
+
+	.external-icon-nav img {
+		display: block;
+		width: 1.05rem;
+		height: 1.05rem;
+		border-radius: 0.2rem;
+	}
+
 	.user-nav {
 		display: flex;
 		align-items: center;
@@ -610,18 +649,6 @@ const canonicalUrl = new URL(Astro.url.pathname, 'https://hidden-lodge.com').hre
 		white-space: nowrap;
 	}
 
-	.dropdown-divider {
-		height: 1px;
-		background: rgba(214, 176, 106, 0.18);
-		margin: 0.25rem 0.2rem;
-	}
-
-	.dropdown-external::after {
-		content: ' ↗';
-		font-size: 0.75em;
-		opacity: 0.55;
-	}
-
 	@media (max-width: 1120px) {
 		.brand {
 			font-size: 1.08rem;
@@ -646,6 +673,7 @@ const canonicalUrl = new URL(Astro.url.pathname, 'https://hidden-lodge.com').hre
 
 	@media (max-width: 1200px) {
 		.main-nav-groups > .member-nav,
+		.nav-shell > .external-icon-nav,
 		.nav-shell > .user-nav {
 			display: none !important;
 			padding-left: 0;

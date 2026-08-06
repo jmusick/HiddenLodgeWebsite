@@ -5,9 +5,16 @@ import Layout from '../layouts/Layout.astro';
 import { Icon } from 'astro-icon/components';
 import { classColor } from '../lib/wow';
 import { loadRaidersViewData, type RaiderRecord } from '../lib/raiders';
-import BlinkyWalker from '../components/BlinkyWalker.astro';
+import { SEASON_2_START_TIMESTAMP } from '../lib/wow-reset';
 
 const { raiders, totalMembers, readyCount } = await loadRaidersViewData();
+const nowTs = Math.floor(Date.now() / 1000);
+const isBeforeSeason2 = nowTs < SEASON_2_START_TIMESTAMP;
+const season2StartLabel = new Date(SEASON_2_START_TIMESTAMP * 1000).toLocaleDateString(undefined, {
+  month: 'long',
+  day: 'numeric',
+  year: 'numeric',
+});
 
 function compareRaiders(a: RaiderRecord, b: RaiderRecord): number {
   const scoreA = a.mythicScore ?? -1;
@@ -23,7 +30,6 @@ interface RaiderGroup {
   characters: RaiderRecord[];
   altCharacters: RaiderRecord[];
   classNames: string[];
-  teamNames: string[];
   searchNames: string;
 }
 
@@ -54,18 +60,12 @@ const raiderGroups = Array.from(
       classNames: [...new Set(orderedCharacters.map((raider) => raider.className))].sort((a, b) =>
         a.localeCompare(b)
       ),
-      teamNames: [...new Set(orderedCharacters.flatMap((raider) => raider.teamNames))].sort((a, b) =>
-        a.localeCompare(b)
-      ),
       searchNames: orderedCharacters.map((raider) => raider.name.toLowerCase()).join(' '),
     };
   })
   .sort((a, b) => compareRaiders(a.primary, b.primary));
 
 const classOptions = [...new Set(sortedRaiders.map((raider) => raider.className))].sort((a, b) =>
-  a.localeCompare(b)
-);
-const teamOptions = [...new Set(sortedRaiders.flatMap((raider) => raider.teamNames))].sort((a, b) =>
   a.localeCompare(b)
 );
 
@@ -270,25 +270,12 @@ function greatVaultScoreForRaider(raider: (typeof sortedRaiders)[number]): { sco
   return { score, color: '#ffffff' };
 }
 
-function attendanceColor(score: number | null): string {
-  if (score === null) return '#8ea4b2';
-  if (score >= 100) return '#ff8000';
-  if (score >= 90) return '#a335ee';
-  if (score >= 80) return '#0070dd';
-  if (score >= 65) return '#1eff00';
-  return '#ffffff';
-}
-
 const topItemLevel = sortedRaiders.reduce((best, raider) =>
   (raider.equippedItemLevel ?? -1) > (best?.equippedItemLevel ?? -1) ? raider : best,
   null as (typeof sortedRaiders)[number] | null
 );
 const topMythicScore = sortedRaiders.reduce((best, raider) =>
   (raider.mythicScore ?? -1) > (best?.mythicScore ?? -1) ? raider : best,
-  null as (typeof sortedRaiders)[number] | null
-);
-const topSingleTarget = sortedRaiders.reduce((best, raider) =>
-  (raider.singleTargetDps ?? -1) > (best?.singleTargetDps ?? -1) ? raider : best,
   null as (typeof sortedRaiders)[number] | null
 );
 const crestCandidates = sortedRaiders.filter((raider) => crestTotalValue(raider) !== null);
@@ -323,15 +310,6 @@ const spotlightCards = [
     value: topItemLevel?.equippedItemLevel ? String(topItemLevel.equippedItemLevel) : '—',
     detail: topItemLevel?.name ?? '—',
     className: topItemLevel?.className ?? '',
-  },
-  {
-    label: 'Highest Simulated DPS',
-    icon: 'lucide:crosshair',
-    value: topSingleTarget?.singleTargetDps
-      ? topSingleTarget.singleTargetDps.toLocaleString(undefined, { maximumFractionDigits: 0 })
-      : '—',
-    detail: topSingleTarget?.name ?? '—',
-    className: topSingleTarget?.className ?? '',
   },
   {
     label: 'Highest M+ Score',
@@ -383,17 +361,19 @@ const mplusWinnerData = {
 };
 ---
 
-<Layout title="The Hidden Lodge | Raiders" description="Guild-member view backed by cached Blizzard character-profile data for roster-team members.">
-  <div class="raiders-feedback-row">
-    <a href="/feedback" class="raiders-feedback-link" title="Submit guild feedback or concerns">
-      <Icon name="lucide:message-square-warning" aria-hidden="true" />
-      <span>Submit Feedback</span>
-    </a>
-  </div>
-
+<Layout title="The Hidden Lodge | Raiders" description="Guild-member view backed by cached Blizzard character-profile data for all level-90 guild characters.">
   <section>
     <h1 class="title-row"><Icon name="lucide:shield-user" class="title-icon" aria-hidden="true" />Raiders</h1>
   </section>
+
+  {isBeforeSeason2 && (
+    <div class="season-notice" role="status" data-season2-start={SEASON_2_START_TIMESTAMP}>
+      <Icon name="lucide:hourglass" class="season-notice-icon" aria-hidden="true" />
+      <span>
+        Season 2 starts {season2StartLabel} (<span id="season2-countdown">calculating…</span>). We will not record new gear, M+, or Great Vault tracking data on this page until then.
+      </span>
+    </div>
+  )}
 
   <section class="spotlights" aria-label="Raiders snapshot">
     {spotlightCards.map(({ label, icon, value, detail, className }) => {
@@ -437,12 +417,10 @@ const mplusWinnerData = {
       <p class="spotlight-value" id="mplus-winner-value">{mplusWinnerData.current.value}</p>
       <p class="spotlight-name" id="mplus-winner-name" style={`color: ${mplusWinnerData.current.color}`}>{mplusWinnerData.current.name}</p>
     </article>
-
-    <BlinkyWalker />
   </section>
 
   <section class="panel">
-    <h2 class="title-row"><Icon name="lucide:list" class="title-icon" aria-hidden="true" />Roster Team Raiders ({raiderGroups.length} people / {sortedRaiders.length} characters)</h2>
+    <h2 class="title-row"><Icon name="lucide:list" class="title-icon" aria-hidden="true" />Raiders ({raiderGroups.length} people / {sortedRaiders.length} characters)</h2>
     <div class="controls" aria-label="Raiders controls">
       <label>
         Search
@@ -453,13 +431,6 @@ const mplusWinnerData = {
         <select id="raiders-class-filter">
           <option value="all">All Classes</option>
           {classOptions.map((className) => <option value={className}>{className}</option>)}
-        </select>
-      </label>
-      <label>
-        Team
-        <select id="raiders-team-filter">
-          <option value="all">All Teams</option>
-          {teamOptions.map((teamName) => <option value={teamName}>{teamName}</option>)}
         </select>
       </label>
     </div>
@@ -486,7 +457,6 @@ const mplusWinnerData = {
             <th><button class="sort-btn" type="button" data-sort-key="name">Name</button></th>
             <th><button class="sort-btn" type="button" data-sort-key="class">Class</button></th>
             <th><button class="sort-btn" type="button" data-sort-key="equippedItemLevel">iLvl</button></th>
-            <th><button class="sort-btn" type="button" data-sort-key="singleTargetDps">Sim DPS</button></th>
             <th><button class="sort-btn" type="button" data-sort-key="mythicScore">M+ Score</button></th>
             <th>
               <div class="metric-header">
@@ -509,12 +479,10 @@ const mplusWinnerData = {
             </th>
             <th><button class="sort-btn" type="button" data-sort-key="crestSort" data-tooltip="Total crests across all types (Adventurer + Veteran + Champion + Hero + Myth). Hover a crest total in the table to see the color-coded type breakdown." aria-label="Crests total across all crest types. Hover a crest total in the table to see the color-coded type breakdown.">Crests <Icon name="lucide:info" class="col-help-icon" aria-hidden="true" /></button></th>
             <th><button class="sort-btn" type="button" data-sort-key="preparednessScore" data-tooltip="Preparedness = 2-week rolling average of (Socketed Gems + Enchanted Slots) / (Total Sockets + Enchantable Slots). Falls back to current snapshot until history accumulates. Tiers: S = 100%, A >= 85%, B >= 70%, C >= 40%, D < 40%." aria-label="Preparedness. Based on a 2-week rolling average of gem and enchant coverage. Formula: (Socketed Gems + Enchanted Slots) / (Total Sockets + Enchantable Slots). Tiers: S equals 100 percent, A 85 percent or higher, B 70 percent or higher, C 40 percent or higher, D below 40 percent.">Preparedness <Icon name="lucide:info" class="col-help-icon" aria-hidden="true" /></button></th>
-            <th class="tooltip-priority-col"><button class="sort-btn" type="button" data-sort-key="attendanceScore" data-tooltip="Attendance score starts on 2026-04-02 and is based on signup intent versus Warcraft Logs boss kill participation, normalized per raid night (for example, 1 out of 1 and 6 out of 6 are both full credit). Wipes still count for no-show validation. Bench grants full credit plus bonus." data-tooltip-dir="right" aria-label="Attendance score since April second 2026 from signup intent and Warcraft Logs boss kill participation, normalized per raid night. One out of one and six out of six both grant full credit. Wipes still count for no-show validation. Bench grants full credit plus bonus.">Attendance <Icon name="lucide:info" class="col-help-icon" aria-hidden="true" /></button></th>
           </tr>
         </thead>
         {raiderGroups.map((group) => {
           const raider = group.primary;
-          const teamList = group.teamNames.join(', ');
           const preparedness = preparednessTotals(raider);
           const vaultScore = greatVaultScoreForRaider(raider);
           return (
@@ -524,15 +492,12 @@ const mplusWinnerData = {
               data-search-name={group.searchNames}
               data-class={raider.className}
               data-classes={group.classNames.join('||')}
-              data-team={teamList}
               data-equipped-item-level={String(raider.equippedItemLevel ?? -1)}
               data-raid-progress-kills={String(raider.raidProgressKills ?? -1)}
               data-mythic-score={String(raider.mythicScore ?? -1)}
-              data-attendance-score={String(raider.attendanceScorePercent ?? -1)}
               data-mythic-plus-run-count={String(raider.mythicPlusRunCount ?? -1)}
               data-mythic-plus-weekly-runs={String(raider.mythicPlusWeeklyRuns ?? -1)}
               data-mythic-plus-prev-weekly-runs={String(raider.mythicPlusPrevWeeklyRuns ?? -1)}
-              data-single-target-dps={String(raider.singleTargetDps ?? -1)}
               data-tier-pieces-equipped={String(raider.tierPiecesEquipped ?? -1)}
               data-crest-sort={String(crestSortValue(raider))}
               data-total-upgrades-missing={String(raider.totalUpgradesMissing ?? -1)}
@@ -603,7 +568,6 @@ const mplusWinnerData = {
                         </span>
                       </div>
                     </td>
-                    <td>{character.singleTargetDps ? character.singleTargetDps.toLocaleString(undefined, { maximumFractionDigits: 0 }) : '—'}</td>
                     <td>{character.mythicScore ? character.mythicScore.toLocaleString(undefined, { maximumFractionDigits: 0 }) : '—'}</td>
                     <td class="mplus-cell">
                       <span
@@ -648,19 +612,6 @@ const mplusWinnerData = {
                       )}
                     </td>
                     <td><span class="score-val" style={`color: ${characterPreparednessTier.color}`}>{characterPreparednessTier.label}</span></td>
-                    <td>
-                      {character.attendanceScorePercent !== null ? (
-                        <span
-                          class="score-val"
-                          style={`color: ${attendanceColor(character.attendanceScorePercent)}`}
-                          title={`${character.attendanceScoredRaids} scored raids since 2026-04-02${character.attendanceBenchBonusPoints > 0 ? `, bench bonus +${character.attendanceBenchBonusPoints.toFixed(1)} points` : ''}`}
-                        >
-                          {character.attendanceScorePercent.toFixed(1)}
-                        </span>
-                      ) : (
-                        '—'
-                      )}
-                    </td>
                   </tr>
                 );
               })}
@@ -679,6 +630,39 @@ const mplusWinnerData = {
 </Layout>
 
 <script>
+  (function initSeasonCountdown() {
+    const notice = document.querySelector<HTMLElement>('.season-notice[data-season2-start]');
+    const countdownEl = document.getElementById('season2-countdown');
+    if (!notice || !countdownEl) return;
+
+    const targetTs = Number(notice.dataset.season2Start ?? '0');
+    if (!Number.isFinite(targetTs) || targetTs <= 0) return;
+
+    function render() {
+      const remainingSeconds = targetTs - Math.floor(Date.now() / 1000);
+      if (remainingSeconds <= 0) {
+        countdownEl!.textContent = 'starting now';
+        return;
+      }
+
+      const days = Math.floor(remainingSeconds / 86400);
+      const hours = Math.floor((remainingSeconds % 86400) / 3600);
+      const minutes = Math.floor((remainingSeconds % 3600) / 60);
+      const seconds = remainingSeconds % 60;
+
+      const parts: string[] = [];
+      if (days > 0) parts.push(`${days}d`);
+      if (days > 0 || hours > 0) parts.push(`${hours}h`);
+      if (days > 0 || hours > 0 || minutes > 0) parts.push(`${minutes}m`);
+      parts.push(`${seconds}s`);
+
+      countdownEl!.textContent = `${parts.join(' ')} remaining`;
+    }
+
+    render();
+    setInterval(render, 1000);
+  })();
+
   const pageSizeSelect = document.getElementById('raiders-page-size') as unknown as HTMLSelectElement | null;
   const prevPageBtn = document.querySelector<HTMLButtonElement>('#raiders-prev-page');
   const nextPageBtn = document.querySelector<HTMLButtonElement>('#raiders-next-page');
@@ -689,7 +673,6 @@ const mplusWinnerData = {
 
   const searchInput = document.querySelector<HTMLInputElement>('#raiders-search');
   const classFilter = document.getElementById('raiders-class-filter') as unknown as HTMLSelectElement | null;
-  const teamFilter = document.getElementById('raiders-team-filter') as unknown as HTMLSelectElement | null;
   const mplusMetricSelect = document.getElementById('mplus-metric-select') as unknown as HTMLSelectElement | null;
   const mplusWinnerSelect = document.getElementById('spotlight-mplus-select') as unknown as HTMLSelectElement | null;
   const vaultMetricSelect = document.getElementById('vault-metric-select') as unknown as HTMLSelectElement | null;
@@ -790,22 +773,19 @@ const mplusWinnerData = {
 
     const query = searchInput?.value.trim().toLowerCase() ?? '';
     const selectedClass = classFilter?.value ?? 'all';
-    const selectedTeam = teamFilter?.value ?? 'all';
 
     const visibleGroups = groupBodies.filter((group) => {
       const rowName = group.dataset.searchName ?? group.dataset.name ?? '';
       const rowClass = group.dataset.class ?? '';
       const rowClasses = (group.dataset.classes ?? rowClass).split('||').map((value) => value.trim()).filter(Boolean);
-      const rowTeam = group.dataset.team ?? '';
 
       const matchesSearch = query.length === 0 || rowName.includes(query);
       const matchesClass = selectedClass === 'all' || rowClasses.includes(selectedClass);
-      const matchesTeam = selectedTeam === 'all' || rowTeam.split(',').map((value) => value.trim()).includes(selectedTeam);
 
-      return matchesSearch && matchesClass && matchesTeam;
+      return matchesSearch && matchesClass;
     });
 
-    const numericKeys = new Set(['equippedItemLevel', 'raidProgressKills', 'mythicScore', 'attendanceScore', 'singleTargetDps', 'crestSort', 'preparednessScore']);
+    const numericKeys = new Set(['equippedItemLevel', 'raidProgressKills', 'mythicScore', 'crestSort', 'preparednessScore']);
 
     visibleGroups.sort((rowA, rowB) => {
       if (sortKey === 'mplusMetric') {
@@ -885,10 +865,6 @@ const mplusWinnerData = {
     currentPage = 1;
     applyFiltersAndSort();
   });
-  teamFilter?.addEventListener('change', () => {
-    currentPage = 1;
-    applyFiltersAndSort();
-  });
 
   mplusMetricSelect?.addEventListener('change', () => {
     setMplusMetric(mplusMetricSelect.value);
@@ -940,37 +916,23 @@ const mplusWinnerData = {
     font-size: clamp(2rem, 3.1vw, 2.95rem);
   }
 
-  .raiders-feedback-row {
+  .season-notice {
     display: flex;
-    justify-content: flex-end;
-    margin-bottom: 0.4rem;
-  }
-
-  .raiders-feedback-link {
-    display: inline-flex;
     align-items: center;
-    gap: 0.35rem;
-    padding: 0.38rem 0.72rem;
-    border-radius: 0.45rem;
+    gap: 0.5rem;
+    margin-bottom: 1rem;
+    padding: 0.65rem 0.9rem;
     border: 1px solid rgba(214, 176, 106, 0.42);
+    border-radius: 0.5rem;
     background: rgba(214, 176, 106, 0.08);
     color: #f1cd88;
-    font-size: 0.86rem;
-    font-weight: 700;
-    letter-spacing: 0.03em;
-    transition: border-color 160ms ease, background 160ms ease, color 160ms ease;
+    font-size: 0.92rem;
   }
 
-  .raiders-feedback-link [data-icon] {
-    width: 0.95rem;
-    height: 0.95rem;
-  }
-
-  .raiders-feedback-link:hover,
-  .raiders-feedback-link:focus-visible {
-    border-color: rgba(214, 176, 106, 0.64);
-    background: rgba(214, 176, 106, 0.16);
-    color: #ffe0a4;
+  .season-notice-icon {
+    width: 1.05rem;
+    height: 1.05rem;
+    flex-shrink: 0;
   }
 
   .intro-copy {

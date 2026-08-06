@@ -6,6 +6,11 @@ import { env } from 'cloudflare:workers';
 import { resolveUserTimeZone } from '../lib/time-zones';
 import { MIDNIGHT_SEASON_ONE_NORMALIZED_RAID_NAMES } from '../lib/midnight-season-one';
 import { fetchItemIconUrls } from '../lib/upgrades';
+import { FEATURE_FLAGS } from '../lib/feature-flags';
+
+if (!FEATURE_FLAGS.tools) {
+	return Astro.redirect('/');
+}
 
 const user = Astro.locals.user;
 if (!user) {

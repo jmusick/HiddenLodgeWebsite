@@ -1,4 +1,5 @@
 import { getRaiderIoConfig } from './runtime-env';
+import { getUsWeeklyResetTimestamp, WEEK_SECONDS } from './wow-reset';
 
 const RAIDER_IO_BASE = 'https://raider.io/api/v1';
 const DEFAULT_REGION = 'us';
@@ -6,8 +7,6 @@ const RAIDER_IO_INTERNAL_API_BASE = 'https://raider.io/api';
 const MIDNIGHT_SEASON_SLUG = 'season-mn-1';
 const MIDNIGHT_CURRENT_TIER = '35';
 const MIDNIGHT_SEASON_1_START_TIMESTAMP = Math.floor(Date.UTC(2026, 2, 24, 15, 0, 0, 0) / 1000);
-const WEEK_SECONDS = 7 * 24 * 60 * 60;
-const US_WEEKLY_RESET_HOUR_EASTERN = 10;
 
 interface RaiderIoKeystoneRun {
   keystone_run_id?: number;
@@ -156,63 +155,6 @@ export interface MythicPlusRunCounts {
   thisWeekKeyLevels: number[];
   /** All deduplicated runs seen across all profile lists, for persistent accumulation. */
   allRuns: KeystoneRun[];
-}
-
-function easternUtcOffsetMinutes(atUtc: Date): number {
-  const parts = new Intl.DateTimeFormat('en-US', {
-    timeZone: 'America/New_York',
-    timeZoneName: 'shortOffset',
-    hour: '2-digit',
-  }).formatToParts(atUtc);
-
-  const offsetLabel = parts.find((part) => part.type === 'timeZoneName')?.value ?? 'GMT-5';
-  const match = offsetLabel.match(/GMT([+-])(\d{1,2})(?::?(\d{2}))?/i);
-  if (!match) return -300;
-
-  const sign = match[1] === '-' ? -1 : 1;
-  const hours = Number(match[2] ?? '0');
-  const minutes = Number(match[3] ?? '0');
-  return sign * (hours * 60 + minutes);
-}
-
-function getUsWeeklyResetTimestamp(): number {
-  const now = new Date();
-  const nowParts = new Intl.DateTimeFormat('en-US', {
-    timeZone: 'America/New_York',
-    weekday: 'short',
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-  }).formatToParts(now);
-
-  const weekdayShort = nowParts.find((part) => part.type === 'weekday')?.value ?? 'Tue';
-  const year = Number(nowParts.find((part) => part.type === 'year')?.value ?? '1970');
-  const month = Number(nowParts.find((part) => part.type === 'month')?.value ?? '1');
-  const day = Number(nowParts.find((part) => part.type === 'day')?.value ?? '1');
-
-  const weekdayToIndex: Record<string, number> = {
-    Sun: 0,
-    Mon: 1,
-    Tue: 2,
-    Wed: 3,
-    Thu: 4,
-    Fri: 5,
-    Sat: 6,
-  };
-  const dayIndex = weekdayToIndex[weekdayShort] ?? 2;
-  const daysSinceTuesday = (dayIndex - 2 + 7) % 7;
-
-  const localResetSeedUtc = new Date(Date.UTC(year, month - 1, day - daysSinceTuesday, US_WEEKLY_RESET_HOUR_EASTERN, 0, 0, 0));
-  const offsetMinutes = easternUtcOffsetMinutes(localResetSeedUtc);
-  let resetUtc = new Date(localResetSeedUtc.getTime() - offsetMinutes * 60 * 1000);
-
-  if (resetUtc > now) {
-    const previousWeekLocalSeedUtc = new Date(Date.UTC(year, month - 1, day - daysSinceTuesday - 7, US_WEEKLY_RESET_HOUR_EASTERN, 0, 0, 0));
-    const previousWeekOffsetMinutes = easternUtcOffsetMinutes(previousWeekLocalSeedUtc);
-    resetUtc = new Date(previousWeekLocalSeedUtc.getTime() - previousWeekOffsetMinutes * 60 * 1000);
-  }
-
-  return Math.floor(resetUtc.getTime() / 1000);
 }
 
 function listLength(list: RaiderIoKeystoneRun[] | undefined): number | null {

@@ -5,9 +5,14 @@ import AdminLayout from '../../layouts/AdminLayout.astro';
 import { env } from 'cloudflare:workers';
 import { attendanceScoringStartUtc } from '../../lib/attendance';
 import { adjustedPrimaryDisplayStartUtc, dayKeyInTimeZone } from '../../lib/raid-signups';
+import { FEATURE_FLAGS } from '../../lib/feature-flags';
 
 if (!Astro.locals.user) {
   return Astro.redirect('/');
+}
+
+if (!FEATURE_FLAGS.attendance) {
+  return Astro.redirect('/admin');
 }
 
 const officerRow = Astro.locals.isAdmin

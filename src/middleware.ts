@@ -5,7 +5,7 @@ import { env } from 'cloudflare:workers';
 const MEMBER_ONLY_PATHS = new Set(['/raiders', '/signup', '/feedback', '/trinkets']);
 
 // Guild is on hiatus between seasons — redirect raider/tool features to the hiatus page.
-const HIATUS_PATHS = new Set(['/raiders', '/signup', '/trinkets', '/professions', '/loot-history', '/upgrades']);
+const HIATUS_PATHS = new Set(['/signup', '/trinkets', '/professions', '/loot-history', '/upgrades']);
 
 function requireAuthenticatedGuildMember(
 	path: string,
@@ -38,7 +38,7 @@ export const onRequest = defineMiddleware(async (context, next) => {
 	const path = new URL(context.request.url).pathname;
 
 	// Redirect raider/tool features to the hiatus page during guild break between seasons.
-	if (HIATUS_PATHS.has(path) || path.startsWith('/raiders/')) {
+	if (HIATUS_PATHS.has(path)) {
 		return context.redirect('/hiatus');
 	}
 

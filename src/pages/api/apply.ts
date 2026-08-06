@@ -2,6 +2,7 @@ export const prerender = false;
 
 import type { APIContext } from 'astro';
 import { env } from 'cloudflare:workers';
+import { FEATURE_FLAGS } from '../../lib/feature-flags';
 
 function realmToSlug(name: string): string {
 	return name.toLowerCase().replace(/'/g, '').replace(/\s+/g, '-');
@@ -19,6 +20,8 @@ export async function POST(context: APIContext): Promise<Response> {
 			status,
 			headers: { 'Content-Type': 'application/json' },
 		});
+
+	if (!FEATURE_FLAGS.applications) return json({ error: 'Applications are currently closed.' }, 404);
 
 	try {
 

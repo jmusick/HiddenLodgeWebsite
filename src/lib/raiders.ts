@@ -4,9 +4,11 @@ import { resolveRaidProgressTier } from '../data/raidProgressTargets';
 import { fallbackClassIconUrl } from './class-icons';
 import { getLatestDroptimizerForRaiders, getLatestSingleTargetForRaiders } from './sim-api';
 import { getAttendanceSummaryMap } from './attendance';
+import { FEATURE_FLAGS } from './feature-flags';
 import { getBlizzardAppAccessToken as getSharedBlizzardAppAccessToken } from './blizzard-app-token';
 import { fetchBlizzardJsonWithRetry } from './blizzard-fetch';
 import { getCharacterMythicPlusRunCounts, fetchStatisticsWeeklyTotal, type KeystoneRun } from './raider-io';
+import { getUsWeeklyResetTimestamp, WEEK_SECONDS, SEASON_2_START_TIMESTAMP } from './wow-reset';
 
 const API_BASE = 'https://us.api.blizzard.com';
 const PROFILE_NAMESPACE = 'profile-us';
@@ -18,8 +20,6 @@ const PREPAREDNESS_HISTORY_WINDOW_SECONDS = 14 * 24 * 60 * 60; // 14 days (2 wee
 const PROGRESSION_HISTORY_WINDOW_SECONDS = 28 * 24 * 60 * 60; // 28 days (4 weeks)
 const VAULT_HISTORY_WINDOW_SECONDS = 28 * 24 * 60 * 60; // 28 days (4 weeks)
 const MIDNIGHT_SEASON_1_START_TIMESTAMP = Math.floor(Date.UTC(2026, 2, 24, 15, 0, 0, 0) / 1000);
-const WEEK_SECONDS = 7 * 24 * 60 * 60;
-const US_WEEKLY_RESET_HOUR_EASTERN = 10;
 const DELVES_TOTAL_STAT_ID = 40734;
 
 const CREST_STAT_IDS = {
@@ -85,73 +85,6 @@ const SEASON_16_MYTHIC_DUNGEON_STAT_IDS = new Set([
   16088, 12613, 10195,                                      // legacy keystones
 ]);
 
-function easternUtcOffsetMinutes(atUtc: Date): number {
-  // Derive the UTC offset by comparing the Eastern local time components to UTC.
-  // This avoids relying on `timeZoneName: 'shortOffset'` (an ES2021 addition that is not
-  // universally supported) and the regex dance that follows it.
-  const nyParts = new Intl.DateTimeFormat('en-US', {
-    timeZone: 'America/New_York',
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-    hour12: false,
-  }).formatToParts(atUtc);
-
-  const nyYear   = Number(nyParts.find((p) => p.type === 'year')?.value   ?? '1970');
-  const nyMonth  = Number(nyParts.find((p) => p.type === 'month')?.value  ?? '1');
-  const nyDay    = Number(nyParts.find((p) => p.type === 'day')?.value    ?? '1');
-  const nyHour   = Number(nyParts.find((p) => p.type === 'hour')?.value   ?? '0');
-  const nyMinute = Number(nyParts.find((p) => p.type === 'minute')?.value ?? '0');
-  const nySecond = Number(nyParts.find((p) => p.type === 'second')?.value ?? '0');
-
-  // Treat the Eastern wall-clock reading as if it were UTC, then subtract the true UTC ms.
-  const nyAsUtcMs = Date.UTC(nyYear, nyMonth - 1, nyDay, nyHour, nyMinute, nySecond);
-  return Math.round((nyAsUtcMs - atUtc.getTime()) / 60_000);
-}
-
-// US weekly reset bucket: Tuesday 10:00 AM America/New_York.
-function getUsWeeklyResetTimestamp(): number {
-  const now = new Date();
-  const nowParts = new Intl.DateTimeFormat('en-US', {
-    timeZone: 'America/New_York',
-    weekday: 'short',
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-  }).formatToParts(now);
-
-  const weekdayShort = nowParts.find((part) => part.type === 'weekday')?.value ?? 'Tue';
-  const year = Number(nowParts.find((part) => part.type === 'year')?.value ?? '1970');
-  const month = Number(nowParts.find((part) => part.type === 'month')?.value ?? '1');
-  const day = Number(nowParts.find((part) => part.type === 'day')?.value ?? '1');
-
-  const weekdayToIndex: Record<string, number> = {
-    Sun: 0,
-    Mon: 1,
-    Tue: 2,
-    Wed: 3,
-    Thu: 4,
-    Fri: 5,
-    Sat: 6,
-  };
-  const dayIndex = weekdayToIndex[weekdayShort] ?? 2;
-  const daysSinceTuesday = (dayIndex - 2 + 7) % 7;
-
-  const localResetSeedUtc = new Date(Date.UTC(year, month - 1, day - daysSinceTuesday, US_WEEKLY_RESET_HOUR_EASTERN, 0, 0, 0));
-  const offsetMinutes = easternUtcOffsetMinutes(localResetSeedUtc);
-  let resetUtc = new Date(localResetSeedUtc.getTime() - offsetMinutes * 60 * 1000);
-
-  if (resetUtc > now) {
-    const previousWeekLocalSeedUtc = new Date(Date.UTC(year, month - 1, day - daysSinceTuesday - 7, US_WEEKLY_RESET_HOUR_EASTERN, 0, 0, 0));
-    const previousWeekOffsetMinutes = easternUtcOffsetMinutes(previousWeekLocalSeedUtc);
-    resetUtc = new Date(previousWeekLocalSeedUtc.getTime() - previousWeekOffsetMinutes * 60 * 1000);
-  }
-
-  return Math.floor(resetUtc.getTime() / 1000);
-}
 
 // Great Vault score formula (mirrors raiders.astro greatVaultScoreForRaider).
 const VAULT_SLOT_POSITION_WEIGHTS = [1, 1.35, 1.8] as const;
@@ -1681,13 +1614,10 @@ export async function refreshRaidersCache(
          rmc.name,
          rmc.realm,
          rmc.realm_slug,
-        rmc.class_name,
-        GROUP_CONCAT(DISTINCT rt.name) AS team_names
-       FROM raid_team_members rtm
-       JOIN raid_teams rt ON rt.id = rtm.team_id
-       JOIN roster_members_cache rmc ON rmc.blizzard_char_id = rtm.blizzard_char_id
-       WHERE rt.is_archived = 0
-       GROUP BY rmc.blizzard_char_id, rmc.name, rmc.realm, rmc.realm_slug, rmc.class_name`
+         rmc.class_name,
+         NULL AS team_names
+       FROM roster_members_cache rmc
+       WHERE rmc.level = 90`
     )
     .all<RaiderSourceRow>();
 
@@ -1696,7 +1626,10 @@ export async function refreshRaidersCache(
   await upsertSummaryRows(db, sourceRows, now);
   await pruneMissingRaiders(db, now);
 
-  const skipDetails = options?.skipDetails === true;
+  // Hold off on all per-raider tracking data (gear/ilvl, M+ score, crests, keystones,
+  // vault, and *_history snapshots) until Season 2 actually starts, regardless of
+  // whether refresh cron or a manual admin refresh runs earlier during patch week.
+  const skipDetails = options?.skipDetails === true || now < SEASON_2_START_TIMESTAMP;
   const detailCandidates = skipDetails
     ? []
     : await listDetailCandidates(
@@ -1790,28 +1723,13 @@ export async function refreshRaidersCache(
     }
 
     const newWeeklyRuns: number = keystoneCounts.weekly;
-    const newSeasonRunsRaw: number = keystoneCounts.season;
-    const isSeasonWeekOne = now >= MIDNIGHT_SEASON_1_START_TIMESTAMP && now < MIDNIGHT_SEASON_1_START_TIMESTAMP + WEEK_SECONDS;
-    const newSeasonRuns: number = isSeasonWeekOne ? newWeeklyRuns : newSeasonRunsRaw;
+    const newSeasonRuns: number = keystoneCounts.season;
     const newPrevWeeklyRuns: number | null = keystoneCounts.prevWeekly;
     const keystoneVaultKeyLevels = keystoneCounts.weeklyKeyLevels;
 
     const worldLifetime = detailed.worldVaultLifetimeObjectives;
     if (worldLifetime !== null) {
-      const duringFirstWeek = now >= MIDNIGHT_SEASON_1_START_TIMESTAMP && now < MIDNIGHT_SEASON_1_START_TIMESTAMP + WEEK_SECONDS;
-      const shouldBootstrapWorldFromLifetimeTotal =
-        duringFirstWeek &&
-        worldLifetime > 0 &&
-        (old?.worldWeekly ?? 0) === 0 &&
-        ((old?.worldSnapshot ?? null) === null || (old?.worldSnapshot ?? 0) === worldLifetime);
-
-      if (shouldBootstrapWorldFromLifetimeTotal) {
-        // If world-vault tracking ships after players already did delves during the
-        // first season week, treating the current total as the baseline erases all
-        // current-week progress. Bootstrap from the current total instead.
-        newWorldSnapshot = 0;
-        newWorldWeeklyObjectives = worldLifetime;
-      } else if (old && old.syncedAt !== null && old.syncedAt < weeklyResetTs) {
+      if (old && old.syncedAt !== null && old.syncedAt < weeklyResetTs) {
         newWorldSnapshot = worldLifetime;
         newWorldWeeklyObjectives = 0;
       } else if (newWorldSnapshot !== null && newWorldSnapshot >= 0) {
@@ -2484,27 +2402,29 @@ export async function loadRaidersViewData(dbInput?: D1Database): Promise<Raiders
   }));
 
   try {
-    const singleTargetMap = await getLatestSingleTargetForRaiders(
-      db,
-      raiders.map((raider) => raider.blizzardCharId),
-      { maxAgeSeconds: 14 * 24 * 60 * 60 }
-    );
-    const droptimizerMap = await getLatestDroptimizerForRaiders(
-      db,
-      raiders.map((raider) => raider.blizzardCharId),
-      { maxAgeSeconds: 14 * 24 * 60 * 60 }
-    );
+    if (FEATURE_FLAGS.sim) {
+      const singleTargetMap = await getLatestSingleTargetForRaiders(
+        db,
+        raiders.map((raider) => raider.blizzardCharId),
+        { maxAgeSeconds: 14 * 24 * 60 * 60 }
+      );
+      const droptimizerMap = await getLatestDroptimizerForRaiders(
+        db,
+        raiders.map((raider) => raider.blizzardCharId),
+        { maxAgeSeconds: 14 * 24 * 60 * 60 }
+      );
 
-    raiders = raiders.map((raider) => {
-      const snapshot = singleTargetMap.get(raider.blizzardCharId);
-      const droptimizer = droptimizerMap.get(raider.blizzardCharId);
-      return {
-        ...raider,
-        singleTargetDps: snapshot?.baseline_dps ?? null,
-        singleTargetUpdatedAt: snapshot?.updated_at ?? null,
-        droptimizerUpdatedAt: droptimizer?.updated_at ?? null,
-      };
-    });
+      raiders = raiders.map((raider) => {
+        const snapshot = singleTargetMap.get(raider.blizzardCharId);
+        const droptimizer = droptimizerMap.get(raider.blizzardCharId);
+        return {
+          ...raider,
+          singleTargetDps: snapshot?.baseline_dps ?? null,
+          singleTargetUpdatedAt: snapshot?.updated_at ?? null,
+          droptimizerUpdatedAt: droptimizer?.updated_at ?? null,
+        };
+      });
+    }
   } catch (error) {
     if (!errorMessage) {
       errorMessage = error instanceof Error ? error.message : 'Unable to load single-target snapshots.';
@@ -2512,16 +2432,18 @@ export async function loadRaidersViewData(dbInput?: D1Database): Promise<Raiders
   }
 
   try {
-    const attendanceMap = await getAttendanceSummaryMap(db);
-    raiders = raiders.map((raider) => {
-      const attendance = attendanceMap.get(raider.blizzardCharId);
-      return {
-        ...raider,
-        attendanceScorePercent: attendance?.scorePercent ?? null,
-        attendanceScoredRaids: attendance?.scoredRaidCount ?? 0,
-        attendanceBenchBonusPoints: attendance?.totalBenchBonusPoints ?? 0,
-      };
-    });
+    if (FEATURE_FLAGS.attendance) {
+      const attendanceMap = await getAttendanceSummaryMap(db);
+      raiders = raiders.map((raider) => {
+        const attendance = attendanceMap.get(raider.blizzardCharId);
+        return {
+          ...raider,
+          attendanceScorePercent: attendance?.scorePercent ?? null,
+          attendanceScoredRaids: attendance?.scoredRaidCount ?? 0,
+          attendanceBenchBonusPoints: attendance?.totalBenchBonusPoints ?? 0,
+        };
+      });
+    }
   } catch (error) {
     if (!errorMessage) {
       errorMessage = error instanceof Error ? error.message : 'Unable to load attendance data.';

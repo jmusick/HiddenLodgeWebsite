@@ -3,6 +3,7 @@ export const prerender = false;
 import type { APIContext } from 'astro';
 import { env } from 'cloudflare:workers';
 import { getSessionUser } from '../../../../../lib/auth';
+import { FEATURE_FLAGS } from '../../../../../lib/feature-flags';
 
 export async function POST(context: APIContext): Promise<Response> {
 	const json = (data: unknown, status = 200) =>
@@ -12,6 +13,7 @@ export async function POST(context: APIContext): Promise<Response> {
 		});
 
 	if (!context.locals.isAdmin) return json({ error: 'Forbidden' }, 403);
+	if (!FEATURE_FLAGS.applications) return json({ error: 'Not found' }, 404);
 
 	const user = await getSessionUser(env.DB, context.request);
 	if (!user) return json({ error: 'Forbidden' }, 403);

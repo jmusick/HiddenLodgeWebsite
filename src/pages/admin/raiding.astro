@@ -4,7 +4,6 @@ export const prerender = false;
 import AdminLayout from '../../layouts/AdminLayout.astro';
 import { Icon } from 'astro-icon/components';
 import { env } from 'cloudflare:workers';
-import { fallbackClassIconUrl } from '../../lib/class-icons';
 
 if (!Astro.locals.isAdmin) {
   return Astro.redirect('/');
@@ -12,12 +11,10 @@ if (!Astro.locals.isAdmin) {
 
 interface ContentRow { key: string; content: string; }
 interface AddonRow { id: number; name: string; url: string; sort_order: number; }
-interface NeedRow { id: number; class: string; role: string; priority: string; sort_order: number; }
 
-const [contentResult, addonsResult, needsResult] = await env.DB.batch([
+const [contentResult, addonsResult] = await env.DB.batch([
   env.DB.prepare(`SELECT key, content FROM raiding_content WHERE key IN ('schedule','raid_expectations','recruitment')`),
   env.DB.prepare(`SELECT id, name, url, sort_order FROM raiding_addons ORDER BY sort_order ASC, id ASC`),
-  env.DB.prepare(`SELECT id, class, role, priority, sort_order FROM recruitment_needs ORDER BY sort_order ASC, id ASC`),
 ]);
 
 const contentMap = new Map<string, string>();
@@ -26,10 +23,8 @@ for (const row of (contentResult.results ?? []) as ContentRow[]) {
 }
 
 const addons = (addonsResult.results ?? []) as AddonRow[];
-const needs  = (needsResult.results  ?? []) as NeedRow[];
 
 const nextAddonOrder = (addons.at(-1)?.sort_order ?? 0) + 10;
-const nextNeedOrder  = (needs.at(-1)?.sort_order  ?? 0) + 10;
 
 const statusParam = new URL(Astro.request.url).searchParams.get('status');
 const statusMessages: Record<string, { type: 'ok' | 'error'; text: string }> = {
@@ -39,23 +34,9 @@ const statusMessages: Record<string, { type: 'ok' | 'error'; text: string }> = {
   'addon-created':            { type: 'ok',    text: 'Addon added.' },
   'addon-updated':            { type: 'ok',    text: 'Addon updated.' },
   'addon-deleted':            { type: 'ok',    text: 'Addon removed.' },
-  'need-created':             { type: 'ok',    text: 'Recruitment need added.' },
-  'need-updated':             { type: 'ok',    text: 'Priority updated.' },
-  'need-deleted':             { type: 'ok',    text: 'Recruitment need removed.' },
   'error':                    { type: 'error', text: 'Something went wrong. Please try again.' },
 };
 const flash = statusParam ? (statusMessages[statusParam] ?? null) : null;
-
-const WOW_CLASSES = [
-  'Death Knight','Demon Hunter','Druid','Evoker','Hunter',
-  'Mage','Monk','Paladin','Priest','Rogue','Shaman','Warlock','Warrior',
-];
-const WOW_ROLES   = ['Tank','Healer','Ranged DPS','Melee DPS'];
-const PRIORITIES  = [
-  { value: 'low',  label: 'Low' },
-  { value: 'mid',  label: 'Mid' },
-  { value: 'high', label: 'High' },
-];
 
 // Default HTML used when DB is empty (mirrors the hardcoded raiding.astro content)
 const DEFAULT_SCHEDULE = `<ul>
@@ -256,87 +237,6 @@ const recruitmentHtml  = contentMap.get('recruitment')       || DEFAULT_RECRUITM
           <button type="submit" class="btn btn-primary">Save Recruitment</button>
         </div>
       </form>
-    </section>
-
-    <!-- ── Current Needs ──────────────────────────────────────────────── -->
-    <section class="edit-section">
-      <h2 class="section-title"><Icon name="lucide:target" aria-hidden="true" class="section-icon" />Current Needs</h2>
-      <p class="section-hint">
-        Class and role combinations displayed on the public Raiding page under "Current Needs".
-        When the list is empty, a default "not actively recruiting" message is shown.
-      </p>
-
-      <div class="needs-list">
-        {needs.length === 0 && (
-          <p class="empty-state">No active needs. The default "not recruiting" message will be shown.</p>
-        )}
-        {needs.map((need) => (
-          <div class="need-row">
-            <div class="need-chips">
-              {(() => { const iconUrl = fallbackClassIconUrl(need.class); return iconUrl ? <img src={iconUrl} alt="" aria-hidden="true" class="need-class-icon" loading="lazy" decoding="async" /> : null; })()}
-              <span class={`class-chip class-${need.class.toLowerCase().replace(/\s+/g, '-')}`}>{need.class}</span>
-              <span class="role-chip">{need.role}</span>
-              <span class={`priority-chip priority-${need.priority}`}>{need.priority.charAt(0).toUpperCase() + need.priority.slice(1)}</span>
-            </div>
-            <div class="need-actions">
-              <details class="edit-panel edit-panel-need">
-                <summary class="edit-toggle">Priority</summary>
-                <form method="POST" action="/api/admin/raiding/update-need" class="priority-form">
-                  <input type="hidden" name="id" value={need.id} />
-                  <select name="priority" class="input-field select-sm">
-                    {PRIORITIES.map((p) => (
-                      <option value={p.value} selected={need.priority === p.value}>{p.label}</option>
-                    ))}
-                  </select>
-                  <button type="submit" class="btn btn-primary btn-sm">Save</button>
-                </form>
-              </details>
-              <form method="POST" action="/api/admin/raiding/delete-need" class="delete-form"
-                onsubmit={`return confirm('Remove ${need.class} ${need.role}?')`}>
-                <input type="hidden" name="id" value={need.id} />
-                <button type="submit" class="btn btn-danger btn-sm">Remove</button>
-              </form>
-            </div>
-          </div>
-        ))}
-      </div>
-
-      <details class="add-panel">
-        <summary class="add-toggle">+ Add Need</summary>
-        <form method="POST" action="/api/admin/raiding/create-need" class="add-form">
-          <div class="form-row">
-            <label class="field">
-              <span class="field-label">Class <span class="required">*</span></span>
-              <select name="class" class="input-field" required>
-                {WOW_CLASSES.map((c) => (
-                  <option value={c}>{c}</option>
-                ))}
-              </select>
-            </label>
-            <label class="field">
-              <span class="field-label">Role <span class="required">*</span></span>
-              <select name="role" class="input-field" required>
-                {WOW_ROLES.map((r) => (
-                  <option value={r}>{r}</option>
-                ))}
-              </select>
-            </label>
-            <label class="field field-order-sm">
-              <span class="field-label">Priority</span>
-              <select name="priority" class="input-field">
-                {PRIORITIES.map((p) => (
-                  <option value={p.value} selected={p.value === 'mid'}>{p.label}</option>
-                ))}
-              </select>
-            </label>
-            <label class="field field-order">
-              <span class="field-label">Sort Order</span>
-              <input type="number" name="sort_order" class="input-field" value={nextNeedOrder} />
-            </label>
-          </div>
-          <button type="submit" class="btn btn-primary">Add Need</button>
-        </form>
-      </details>
     </section>
 
   </div>
@@ -635,11 +535,6 @@ const recruitmentHtml  = contentMap.get('recruitment')       || DEFAULT_RECRUITM
     gap: 0.75rem;
   }
 
-  .edit-panel-need {
-    display: flex;
-    flex-direction: column;
-  }
-
   /* ── Add panel ────────────────────────────────────────────────────── */
   .add-panel {
     border: 1px dashed rgba(214,176,106,0.3);
@@ -668,99 +563,6 @@ const recruitmentHtml  = contentMap.get('recruitment')       || DEFAULT_RECRUITM
     flex-direction: column;
     gap: 0.75rem;
   }
-
-  /* ── Needs list ───────────────────────────────────────────────────── */
-  .needs-list { display: flex; flex-direction: column; gap: 0.5rem; }
-
-  .need-row {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 0.75rem;
-    flex-wrap: wrap;
-    padding: 0.5rem 0.75rem;
-    background: rgba(7,17,26,0.35);
-    border: 1px solid rgba(214,176,106,0.12);
-    border-radius: 0.45rem;
-  }
-
-  .need-chips { display: flex; align-items: center; gap: 0.45rem; flex-wrap: wrap; }
-
-  .need-class-icon {
-    width: 1.3rem;
-    height: 1.3rem;
-    border-radius: 50%;
-    border: 1px solid rgba(214, 176, 106, 0.3);
-    background: rgba(4, 10, 16, 0.85);
-    object-fit: cover;
-    flex-shrink: 0;
-  }
-
-  .need-actions {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    flex-shrink: 0;
-  }
-
-  .priority-form {
-    display: flex;
-    align-items: center;
-    gap: 0.4rem;
-    margin-top: 0.35rem;
-  }
-
-  /* ── Class chips ──────────────────────────────────────────────────── */
-  .class-chip {
-    display: inline-block;
-    padding: 0.2rem 0.6rem;
-    border-radius: 0.3rem;
-    font-size: 0.8rem;
-    font-weight: 700;
-    background: rgba(255,255,255,0.08);
-    color: #d8e2e8;
-    border: 1px solid rgba(255,255,255,0.12);
-  }
-
-  /* WoW class colors */
-  .class-death-knight   { background: rgba(196,31,59,0.2);  border-color: rgba(196,31,59,0.5);  color: #c41f3b; }
-  .class-demon-hunter   { background: rgba(163,48,201,0.2); border-color: rgba(163,48,201,0.5); color: #a330c9; }
-  .class-druid          { background: rgba(255,125,10,0.2); border-color: rgba(255,125,10,0.5); color: #ff7d0a; }
-  .class-evoker         { background: rgba(51,147,127,0.2); border-color: rgba(51,147,127,0.5); color: #33937f; }
-  .class-hunter         { background: rgba(169,210,113,0.2);border-color: rgba(169,210,113,0.5);color: #a9d271; }
-  .class-mage           { background: rgba(105,204,240,0.2);border-color: rgba(105,204,240,0.5);color: #69ccf0; }
-  .class-monk           { background: rgba(0,255,150,0.2);  border-color: rgba(0,255,150,0.5);  color: #00ff96; }
-  .class-paladin        { background: rgba(245,140,186,0.2);border-color: rgba(245,140,186,0.5);color: #f58cba; }
-  .class-priest         { background: rgba(210,210,210,0.2);border-color: rgba(210,210,210,0.5);color: #d2d2d2; }
-  .class-rogue          { background: rgba(255,245,105,0.2);border-color: rgba(255,245,105,0.5);color: #fff569; }
-  .class-shaman         { background: rgba(0,112,222,0.2);  border-color: rgba(0,112,222,0.5);  color: #0070de; }
-  .class-warlock        { background: rgba(148,130,201,0.2);border-color: rgba(148,130,201,0.5);color: #9482c9; }
-  .class-warrior        { background: rgba(199,156,110,0.2);border-color: rgba(199,156,110,0.5);color: #c79c6e; }
-
-  /* ── Role & priority chips ────────────────────────────────────────── */
-  .role-chip {
-    display: inline-block;
-    padding: 0.2rem 0.55rem;
-    border-radius: 0.3rem;
-    font-size: 0.78rem;
-    font-weight: 600;
-    background: rgba(214,176,106,0.1);
-    border: 1px solid rgba(214,176,106,0.3);
-    color: #d6b06a;
-  }
-
-  .priority-chip {
-    display: inline-block;
-    padding: 0.18rem 0.55rem;
-    border-radius: 0.3rem;
-    font-size: 0.75rem;
-    font-weight: 700;
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-  }
-  .priority-low  { background: rgba(80,160,80,0.15);  border: 1px solid rgba(80,160,80,0.4);  color: #7ecb7e; }
-  .priority-mid  { background: rgba(200,160,40,0.15); border: 1px solid rgba(200,160,40,0.4); color: #e0c060; }
-  .priority-high { background: rgba(200,60,60,0.15);  border: 1px solid rgba(200,60,60,0.4);  color: #eb7070; }
 
   /* ── Empty / delete ───────────────────────────────────────────────── */
   .empty-state {

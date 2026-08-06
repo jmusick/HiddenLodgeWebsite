@@ -4,6 +4,7 @@ export const prerender = false;
 import AdminLayout from '../../layouts/AdminLayout.astro';
 import { env } from 'cloudflare:workers';
 import { RAID_PROGRESS_TARGET_GROUPS, resolveRaidProgressTier } from '../../data/raidProgressTargets';
+import { FEATURE_FLAGS } from '../../lib/feature-flags';
 
 if (!Astro.locals.isAdmin) {
   return Astro.redirect('/');
@@ -229,7 +230,7 @@ const simPurgeSummary = hasSimPurgeCounts
             <section class="cache-subsection">
               <h3>Raiders Cache</h3>
               <ul class="stats-list">
-                <li><span>Total team raiders</span><strong>{raidersCache?.total_members ?? 0}</strong></li>
+                <li><span>Total raiders</span><strong>{raidersCache?.total_members ?? 0}</strong></li>
                 <li><span>Pending detail refresh</span><strong>{raidersCache?.pending_details ?? 0}</strong></li>
                 <li><span>Estimated catch-up ETA</span><strong>{raidersEta}</strong></li>
                 <li><span>Last summary sync</span><strong>{formatEpoch(raidersCache?.last_summary_sync ?? null)}</strong></li>
@@ -248,6 +249,7 @@ const simPurgeSummary = hasSimPurgeCounts
           </div>
         </section>
 
+        {FEATURE_FLAGS.sim && (
         <section class="admin-section danger-zone">
           <h2>Danger Zone</h2>
           <p class="setting-copy">
@@ -262,6 +264,7 @@ const simPurgeSummary = hasSimPurgeCounts
             <button type="submit" class="danger-btn">Purge All Sim Data</button>
           </form>
         </section>
+        )}
       </>
     )}
   </div>

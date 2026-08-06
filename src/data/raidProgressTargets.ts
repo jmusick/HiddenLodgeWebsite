@@ -21,6 +21,14 @@ export const RAID_PROGRESS_TARGET_GROUPS: RaidProgressTargetGroup[] = [
       { raidName: "March on Quel'Danas", code: 'MQD' },
     ],
   },
+  {
+    id: 'midnight-s2',
+    expansion: 'Midnight',
+    tier: 'Season 2',
+    raids: [
+      { raidName: 'The Venomous Abyss', code: 'VA' },
+    ],
+  },
 ];
 
 export const RAID_PROGRESS_TARGETS = RAID_PROGRESS_TARGET_GROUPS.flatMap((group) => group.raids);
