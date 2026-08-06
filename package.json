@@ -1,7 +1,7 @@
 {
   "name": "hiddenlodgewebsite",
   "type": "module",
-  "version": "1.31.0",
+  "version": "2.0.0",
   "engines": {
     "node": ">=22.12.0"
   },
@@ -31,15 +31,15 @@
     "db:seed:test-notes": "wrangler d1 execute hidden-lodge-db --local --file=db-seeds/seed_test_notes.sql"
   },
   "dependencies": {
-    "@astrojs/cloudflare": "^13.1.2",
-    "@iconify-json/lucide": "^1.2.98",
-    "astro": "^6.0.4",
+    "@astrojs/cloudflare": "^13.7.0",
+    "@iconify-json/lucide": "^1.2.121",
+    "astro": "^6.4.8",
     "astro-icon": "^1.1.5"
   },
   "devDependencies": {
-    "@astrojs/check": "^0.9.8",
-    "@cloudflare/workers-types": "^4.20260317.1",
+    "@astrojs/check": "^0.9.10",
+    "@cloudflare/workers-types": "^5.20260804.1",
     "typescript": "^5.9.3",
-    "wrangler": "^4.76.0"
+    "wrangler": "^4.119.0"
   }
 }

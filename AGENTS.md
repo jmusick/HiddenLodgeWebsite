@@ -13,7 +13,7 @@ Guidance for AI coding agents working in this repository.
 ## Conventions
 
 - **Auth checks**: pages check `Astro.locals.isAdmin` / `Astro.locals.isGuildMember` / `Astro.locals.user` and `return Astro.redirect(...)` early if unauthorized. API routes check `context.locals.isAdmin` etc. and return `new Response('Forbidden', { status: 403 })` / `401` early in the handler.
-- **Feature flags**: `src/lib/feature-flags.ts` exports `FEATURE_FLAGS`, a plain object of booleans (one per major feature: `rosterTeams`, `raidSignups`, `attendance`, `applications`, `feedback`). A feature that's temporarily disabled but not removed is gated everywhere it surfaces:
+- **Feature flags**: `src/lib/feature-flags.ts` exports `FEATURE_FLAGS`, a plain object of booleans (one per major feature: `rosterTeams`, `raidSignups`, `attendance`, `applications`, `feedback`, `tools`, `sim`). A feature that's temporarily disabled but not removed is gated everywhere it surfaces:
   - Nav arrays (`AdminLayout.astro`'s `adminModules`, `Layout.astro`'s `memberNavItems`) conditionally include the entry.
   - Pages add `if (!FEATURE_FLAGS.x) return Astro.redirect('/')` (public) or `return Astro.redirect('/admin')` (admin), placed after the existing auth guard.
   - API routes add `if (!FEATURE_FLAGS.x) return new Response('Not found', { status: 404 })`, placed after the existing auth guard.
@@ -24,11 +24,11 @@ Guidance for AI coding agents working in this repository.
 ## Commands
 
 - `npm run dev` — Astro dev server + local cron refresher (see `scripts/dev-with-cron.mjs`).
-- `npm run build` — `astro build` (typechecks via Astro's checker as part of the build) then patches the Wrangler config.
-- `npm run db:migrate:local` / `db:migrate:prod` — apply migrations.
-- `npm run db:check:migrations` — verify migration numbering/state.
+- `npm run build` — `astro build` then patches the Wrangler config. Note: this does **not** run a full typecheck (no `astro check` in the build pipeline) — run `npx astro check` separately if you need one; the repo currently has some pre-existing type errors that build doesn't catch.
+- `npm run db:migrate:local` / `db:migrate:prod` — apply migrations. Destructive migrations (DROP/DELETE/TRUNCATE/`ALTER TABLE ... DROP COLUMN`) are blocked unless the file has a `-- allow-destructive` annotation; `npm run db:check:migrations` verifies this plus migration numbering/state without touching a database.
+- `npm run db:copy-prod` — copies all production D1 data into your local D1 (schema intersection only; skips `sessions`, system tables, and by default `link_categories`/`links`/`roster_cache_meta`/`site_settings`). Requires `wrangler` to be authenticated (`npx wrangler whoami`) and a bootstrapped local schema (`npm run db:bootstrap:local`). Safe to rerun — it clears local rows (FK-dependency order) before reinserting. Set `COPY_PROD_INCLUDE_SEEDED=1` in the environment to also copy the normally-skipped seeded tables.
 
 ## Notes
 
-- There is no `[triggers] crons` entry in `wrangler.toml`; the attendance-refresh cron (`src/pages/api/cron/refresh-attendance.ts`) is triggered externally (Cloudflare dashboard or a third-party pinger hitting the URL with an `X-Cron-Secret` header) rather than from this repo.
+- There is no `[triggers] crons` entry in `wrangler.toml`. `/api/cron/refresh` (roster/raiders/attendance/professions/trinkets — formerly named `/api/cron/refresh-roster`, kept as a compatibility alias) and `/api/cron/refresh-attendance` are both triggered externally (Cloudflare dashboard Cron Trigger and/or a third-party pinger hitting the URL with an `X-Cron-Secret` header) rather than declared in this repo. The build does bake a `scheduled()` handler into the Worker (`scripts/patch-wrangler-config.mjs`) that internally calls `/api/cron/refresh` — keep that path in sync if the route ever moves again.
 - A separate companion app (`HiddenLodgeDesktop`, different repo) consumes some of these API routes (e.g. `src/pages/api/desktop/raid-signups-today.ts`) — check before removing/gating an endpoint under `api/desktop/`.
