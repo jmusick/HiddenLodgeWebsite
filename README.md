@@ -10,42 +10,52 @@ The site combines public guild information, Blizzard-authenticated member profil
 
 - [Quick Start](#quick-start)
 - [Tech Stack](#tech-stack)
+- [Feature Flags (Guild Hiatus)](#feature-flags-guild-hiatus)
 - [Features](#features)
 - [Routes & API](#routes)
 - [Database](#data-model)
 - [Development](#development-details)
 - [Deployment](#deployment)
 
-## Features
+## Feature Flags (Guild Hiatus)
 
+The guild is between raid seasons. Several features are disabled in place — code, data, and DB schema are preserved but pages/routes/nav entries are gated off — via a single flag map at `src/lib/feature-flags.ts` (`FEATURE_FLAGS`). See `AGENTS.md` for the exact gating pattern if you're re-enabling one. Currently `false`:
+
+- `rosterTeams` — `/admin/roster-teams` and its API routes. `/raiders` no longer depends on this; it lists all level-90 guild characters directly instead (see below).
+- `raidSignups` — `/signup`, `/admin/raid-signups`, and the "Preferred Role" profile setting.
+- `attendance` — `/admin/log-matching`, `/admin/performance-review`, the attendance-refresh cron, and the Attendance/Sim DPS stat cards on raider profiles.
+- `applications` — the "How to Apply" section on `/raiding` and `/admin/applications`.
+- `feedback` — `/feedback` and `/admin/feedback`.
+- `tools` — `/trinkets`, `/professions`, `/loot-history`, `/upgrades`, and the "Tools" nav dropdown.
+- `sim` — the interactive Sim Tools panel on raider profiles and the admin "Purge All Sim Data" action.
+
+Separately, `/raiders`, `/signup`, `/trinkets`, `/professions`, `/loot-history`, and `/upgrades` are also redirected to `/hiatus` by `src/middleware.ts` (`HIATUS_PATHS`) — `/raiders` was removed from that set so it stays live, sourced from the level-90 roster.
+
+`/raiders` additionally won't record any new tracking data (gear/ilvl, M+ score, crests, keystones, Great Vault, history snapshots) until Season 2 actually starts — see `SEASON_2_START_TIMESTAMP` in `src/lib/wow-reset.ts`.
+
+## Features
 
 ### User-Facing
 
 - Public home page with guild identity, raiding summary, and external guild links
 - Leadership page with officer bios, portrait lightbox, and dad jokes
-- Raiding page with schedule, expectations, loot notes, addons, and recruitment info
+- Raiding page with schedule, expectations, addons, and recruitment info (recruitment currently points to the guild's Raider.IO profile; the application form is disabled — see Feature Flags)
 - Lore archive with story picker, reader, and artwork lightbox
 - Useful Links page (curated, admin-managed, searchable)
 - Live roster page with Blizzard data, caching, search, filters, and collection stats
-- Raiders analytics table with team-scoped metrics (iLvl, M+, crests, preparedness, upgrades, raid progress)
-- Raider detail profile with character render, equipment layout, raid progress matrix, and sim recommendations
-- **Progression history:** Item Level, Mythic+ Score, and Crests/Upgrades history panels (4-week rolling window) on each raider profile
+- Raiders analytics table of all level-90 guild characters (iLvl, M+, crests, preparedness, upgrades, raid progress) — Season 2 countdown banner shown until tracking data starts
+- Raider detail profile with character render, equipment layout, and raid progress matrix
 - Authenticated profile with Battle.net login, character sync, main selection, and timezone preferences
-- Guild-member raid signup calendar with recurring and ad-hoc raid support
-- Raid signup status and note changes lock automatically after each raid start time
+- *Disabled during guild hiatus (code/data preserved, see Feature Flags):* guild-member raid signup calendar, Trinkets/Professions/Loot History/Upgrades tools, guild feedback form, application form, interactive Sim Tools panel and Attendance history on raider profiles
 
 ### Admin Features
 
 - Mains & Alts module for member authentication, nickname management, and searchable member list (by nickname, main, or any character name); officer notes per member with author and timestamp, stored by character so notes on un-authenticated roster members automatically merge once they log in
-- Roster Teams module for multi-team raid setup and role assignment
-- Raid Signups module for schedule creation and signup management
 - Links Management for useful links curation
-- Settings module with raid-progress configuration and cache health
-- Performance Review module for officer-facing raid performance metrics, starting with excessive-death rankings derived from cached Warcraft Logs pulls
+- Settings module with raid-progress configuration (including the Season 2 raid tier) and cache health
 - Export module for addon-friendly JSON generation
-- Interactive sim tools for droptimizer and single-target analysis
-- **Raiding Content editor** for managing the schedule, raid expectations, required addons, and open recruitment needs displayed on the public Raiding page
-- **Applications module** for reviewing guild applications; admins can triage with a status workflow (Received → Reviewed → Contacted → Rejected → Trial), add and delete officer notes, and view all submitted characters with Raider.io and Warcraft Logs profile links
+- **Raiding Content editor** for managing the schedule, raid expectations, and required addons displayed on the public Raiding page
+- *Disabled during guild hiatus (code/data preserved, see Feature Flags):* Roster Teams module, Raid Signups module, Log Matching, Performance Review, Applications module, Feedback review, interactive sim tools, "Purge All Sim Data"
 
 ## Quick Start
 
@@ -84,29 +94,37 @@ http://localhost:4321
 |---|---|---|
 | `/` | No | Home page with guild overview and external guild profile links |
 | `/leadership` | No | Leadership bios, portraits, and portrait lightbox |
-| `/raiding` | No | Raid schedule, expectations, loot, addons, recruitment info, and recent Warcraft Logs reports |
+| `/raiding` | No | Raid schedule, expectations, addons, recruitment (Raider.IO link), and recent Warcraft Logs reports. Application form disabled — see Feature Flags |
 | `/lore` | No | Lore archive with story picker, story reader, and artwork lightbox |
 | `/links` | No | Curated useful links grouped by configurable categories |
 | `/roster` | No | Cached guild roster with filters, sorting, pagination, and collection stats |
-| `/raiders` | Yes + Guild Member | Cached raider analytics table for active roster-team characters |
+| `/hiatus` | No | Guild-hiatus notice page; several routes redirect here (see Feature Flags) |
+| `/raiders` | Yes + Guild Member | Raider analytics table for all level-90 guild characters |
 | `/raiders/:charId` | Yes + Guild Member | Raider detail page with media, stats, and raid progress matrix |
+| `/trinkets` | Yes + Guild Member | **Disabled** (redirects to `/hiatus`) — trinket tier comparison tool |
+| `/professions` | Yes | **Disabled** (redirects to `/hiatus`) — profession recipe browser |
+| `/loot-history` | Yes | **Disabled** (redirects to `/hiatus`) — guild loot history log |
+| `/upgrades` | Yes + Guild Member | **Disabled** (redirects to `/hiatus`) — gear upgrade comparison tool |
+| `/feedback` | Yes + Guild Member | **Disabled** — anonymous guild feedback form |
 
 ### Authenticated / Admin Pages
 
 | Route | Auth | Description |
 |---|---|---|
-| `/profile` | Yes | Battle.net account profile and main-character selection |
-| `/signup` | Yes + Guild Member | Raid signup calendar with timezone-aware raid times |
+| `/profile` | Yes | Battle.net account profile, main-character selection, timezone; "Preferred Role" hidden while raid signups are disabled |
+| `/signup` | Yes + Guild Member | **Disabled** (redirects to `/`) — raid signup calendar with timezone-aware raid times |
 | `/admin` | Yes + Admin | Redirects to `/admin/mains` |
-| `/admin/raid-signups` | Yes + Admin | Manage primary schedules and ad-hoc raids |
-| `/admin/roster-teams` | Yes + Admin | Multi-team raid roster builder and analysis |
+| `/admin/raid-signups` | Yes + Admin | **Disabled** — manage primary schedules and ad-hoc raids |
+| `/admin/roster-teams` | Yes + Admin | **Disabled** — multi-team raid roster builder and analysis |
 | `/admin/mains` | Yes + Admin | Member overview, main/alt visibility, and nickname management |
-| `/admin/performance-review` | Yes + Admin | Officer review tables for excessive deaths and future performance metrics |
-| `/admin/settings` | Yes + Admin | Raid-progress target settings and cache health controls |
+| `/admin/log-matching` | Yes + Admin/Officer | **Disabled** — match Warcraft Logs reports to raid occurrences |
+| `/admin/performance-review` | Yes + Admin | **Disabled** — officer review tables for excessive deaths and other performance metrics |
+| `/admin/settings` | Yes + Admin | Raid-progress target settings (including Season 2 tier) and cache health controls |
 | `/admin/cache` | Yes + Admin | Backward-compatible redirect to `/admin/settings` |
 | `/admin/links` | Yes + Admin | Public links category/link management |
-| `/admin/raiding` | Yes + Admin | Edit schedule, raid expectations, addon list, and recruitment needs |
-| `/admin/applications` | Yes + Admin | Review, triage, and manage guild applications |
+| `/admin/raiding` | Yes + Admin | Edit schedule, raid expectations, and addon list |
+| `/admin/applications` | Yes + Admin | **Disabled** — review, triage, and manage guild applications |
+| `/admin/feedback` | Yes + Admin | **Disabled** — review submitted guild feedback |
 
 ### Auth Routes
 
@@ -124,11 +142,13 @@ http://localhost:4321
 |---|---|---|
 | `/api/set-main` | POST | Sets the authenticated user's main character |
 | `/api/profile/update-timezone` | POST | Sets the authenticated user's preferred timezone |
-| `/api/signup/create` | POST | Creates or updates a member signup for a raid |
-| `/api/signup/cancel` | POST | Cancels a member signup for a raid |
-| `/api/signup/update-note` | POST | Updates notes on an existing member signup (before raid start) |
-| `/api/apply` | POST | Submit a guild application from the Raiding page |
-| `/api/application/status` | GET | Returns current application status for the logged-in user |
+| `/api/profile/update-role` | POST | **Disabled** — sets the authenticated user's preferred raid role |
+| `/api/signup/create` | POST | **Disabled** — creates or updates a member signup for a raid |
+| `/api/signup/cancel` | POST | **Disabled** — cancels a member signup for a raid |
+| `/api/signup/update-note` | POST | **Disabled** — updates notes on an existing member signup (before raid start) |
+| `/api/apply` | POST | **Disabled** — submit a guild application from the Raiding page |
+| `/api/application/status` | GET | **Disabled** — returns current application status for the logged-in user |
+| `/api/feedback/create` | POST | **Disabled** — submit anonymous guild feedback |
 
 ### Admin API
 
@@ -137,17 +157,18 @@ http://localhost:4321
 | `/api/admin/update-nickname` | POST | Set or clear a guild member display nickname |
 | `/api/admin/cache/refresh` | POST | Trigger roster and raiders cache refresh from admin |
 | `/api/admin/settings/raid-progress-target` | POST | Update the tracked raid-progress tier bundle |
-| `/api/admin/raid-signups/create-primary` | POST | Create a recurring primary raid schedule |
-| `/api/admin/raid-signups/delete-primary` | POST | Delete a recurring primary raid schedule |
-| `/api/admin/raid-signups/create-adhoc` | POST | Create an ad-hoc raid |
-| `/api/admin/raid-signups/delete-adhoc` | POST | Delete an ad-hoc raid |
-| `/api/admin/raid-signups/update-signup-role` | POST | Override a member signup role |
-| `/api/admin/roster-teams/create-team` | POST | Create a raid team |
-| `/api/admin/roster-teams/update-team` | POST | Update team name, mode, and sort order |
-| `/api/admin/roster-teams/delete-team` | POST | Delete a raid team |
-| `/api/admin/roster-teams/add-member` | POST | Add a level 90 member to a team with assigned role |
-| `/api/admin/roster-teams/remove-member` | POST | Remove a member from a team |
-| `/api/admin/roster-teams/update-member-role` | POST | Update assigned role for an existing team member |
+| `/api/admin/settings/purge-sim-data` | POST | **Disabled** — permanently delete all stored sim runs/recommendations |
+| `/api/admin/raid-signups/create-primary` | POST | **Disabled** — create a recurring primary raid schedule |
+| `/api/admin/raid-signups/delete-primary` | POST | **Disabled** — delete a recurring primary raid schedule |
+| `/api/admin/raid-signups/create-adhoc` | POST | **Disabled** — create an ad-hoc raid |
+| `/api/admin/raid-signups/delete-adhoc` | POST | **Disabled** — delete an ad-hoc raid |
+| `/api/admin/raid-signups/update-signup-role` | POST | **Disabled** — override a member signup role |
+| `/api/admin/roster-teams/create-team` | POST | **Disabled** — create a raid team |
+| `/api/admin/roster-teams/update-team` | POST | **Disabled** — update team name, mode, and sort order |
+| `/api/admin/roster-teams/delete-team` | POST | **Disabled** — delete a raid team |
+| `/api/admin/roster-teams/add-member` | POST | **Disabled** — add a level 90 member to a team with assigned role |
+| `/api/admin/roster-teams/remove-member` | POST | **Disabled** — remove a member from a team |
+| `/api/admin/roster-teams/update-member-role` | POST | **Disabled** — update assigned role for an existing team member |
 | `/api/admin/links/create-category` | POST | Create a public link category |
 | `/api/admin/links/update-category` | POST | Update category title, icon, or sort order |
 | `/api/admin/links/delete-category` | POST | Delete a link category and its links |
@@ -158,13 +179,11 @@ http://localhost:4321
 | `/api/admin/raiding/create-addon` | POST | Add a required addon |
 | `/api/admin/raiding/update-addon` | POST | Update addon name, URL, or sort order |
 | `/api/admin/raiding/delete-addon` | POST | Delete a required addon |
-| `/api/admin/raiding/create-need` | POST | Add an open recruitment need |
-| `/api/admin/raiding/update-need` | POST | Update a recruitment need class, role, or priority |
-| `/api/admin/raiding/delete-need` | POST | Delete a recruitment need |
-| `/api/admin/applications/[id]/set-status` | POST | Update an application's triage status |
-| `/api/admin/applications/[id]/add-note` | POST | Add an officer note to an application |
-| `/api/admin/applications/[id]/delete-note` | POST | Delete an officer note from an application |
-| `/api/admin/applications/[id]/delete` | POST | Permanently delete an application and all associated data |
+| `/api/admin/applications/[id]/set-status` | POST | **Disabled** — update an application's triage status |
+| `/api/admin/applications/[id]/add-note` | POST | **Disabled** — add an officer note to an application |
+| `/api/admin/applications/[id]/delete-note` | POST | **Disabled** — delete an officer note from an application |
+| `/api/admin/applications/[id]/delete` | POST | **Disabled** — permanently delete an application and all associated data |
+| `/api/admin/feedback/update-status` | POST | **Disabled** — update a feedback item's reviewed status |
 
 ### Sim Runner API
 
@@ -312,23 +331,29 @@ These handlers remain in the codebase as retired stubs and currently return HTTP
 | `users` | Battle.net account info, battle tag, optional nickname, and auth metadata |
 | `sessions` | Session IDs and expiration timestamps |
 | `characters` | User-owned WoW characters and selected main tracking |
-| `roster_members_cache` | Cached Blizzard guild roster data plus collection stats |
-| `raider_metrics_cache` | Cached team-scoped raider metrics including iLvl, M+, tier, gems/enchants, crest totals, missing upgrades, and raid progress |
-| `raider_progression_history` | 4-week rolling history of equipped item level, M+ score, crest totals, and missing upgrades for each raider |
-| `primary_raid_schedules` | Recurring primary raid schedule definitions |
-| `ad_hoc_raids` | One-off officer-created raids |
-| `raid_signups` | Member signups mapped to primary occurrences and ad-hoc raids |
-| `raid_teams` | Saved raid team definitions with mode and ordering |
-| `raid_team_members` | Team membership assignments and role ownership |
+| `roster_members_cache` | Cached Blizzard guild roster data plus collection stats. Source of truth for `/raiders` (all level-90 rows) |
+| `raider_metrics_cache` | Cached per-raider metrics including iLvl, M+, tier, gems/enchants, crest totals, missing upgrades, and raid progress. Cleared of Season 1 data by `migrations/0065_season1_data_purge.sql`; repopulates after Season 2 starts (`SEASON_2_START_TIMESTAMP` in `src/lib/wow-reset.ts`) |
+| `raider_progression_history` | Rolling history of equipped item level, M+ score, crest totals, and missing upgrades for each raider |
+| `raider_preparedness_history` | Rolling history of gem/enchant socket coverage per raider (backs the 30-day averages on `raider_metrics_cache`) |
+| `raider_vault_history` | Weekly Great Vault snapshots per raider per reset week |
+| `raider_keystones` | Every observed Mythic+ keystone completion per character; backs weekly/season run counts and vault key levels |
+| `primary_raid_schedules` | Recurring primary raid schedule definitions *(feature disabled — see Feature Flags)* |
+| `ad_hoc_raids` | One-off officer-created raids *(feature disabled)* |
+| `raid_signups` | Member signups mapped to primary occurrences and ad-hoc raids *(feature disabled)* |
+| `raid_teams` | Saved raid team definitions with mode and ordering *(feature disabled)* |
+| `raid_team_members` | Team membership assignments and role ownership *(feature disabled)* |
 | `link_categories` | Public Useful Links page categories |
 | `links` | Public Useful Links entries |
 | `site_settings` | Small key-value settings store (e.g., tracked raid-progress target) |
 | `raiding_content` | Key-value store for admin-editable raiding page sections (schedule, expectations, recruitment) |
 | `raiding_addons` | Ordered list of required addons displayed on the Raiding page |
-| `recruitment_needs` | Open recruitment class/role/priority entries displayed on the Raiding page |
-| `applications` | Guild applications submitted from the Raiding page |
-| `application_characters` | Characters attached to each application |
-| `application_notes` | Officer notes attached to each application |
+| `recruitment_needs` | Open recruitment class/role/priority entries. Admin UI and public display removed; table retained unused in case it's reintroduced |
+| `applications` | Guild applications submitted from the Raiding page *(feature disabled)* |
+| `application_characters` | Characters attached to each application *(feature disabled)* |
+| `application_notes` | Officer notes attached to each application *(feature disabled)* |
+| `guild_feedback` | Anonymous/named guild feedback submissions *(feature disabled)* |
+| `sim_runs` / `sim_raider_summaries` / `sim_item_winners` | Stored sim (droptimizer/single-target) run results *(interactive Sim Tools UI disabled; data left in place)* |
+| `raid_attendance_reports` and related attendance tables (from `migrations/0045`–`0048`, `0064`) | Cached Warcraft Logs attendance/kill-presence data and scoring *(feature disabled)* |
 
 ### Roster Cache Behavior
 
@@ -339,8 +364,9 @@ These handlers remain in the codebase as retired stubs and currently return HTTP
 - New cache columns that default to `0` use companion backfill flags so existing rows continue warming until each member has been revalidated
 - Raiders cache separates summary sync and detail sync to avoid heavy Blizzard fan-out on every request
 - Raiders detail/media calls use app-level client-credentials access so details are not blocked on per-user Battle.net login
-- Raiders detail sync now stores crest totals and total missing upgrades for roster-team members
+- Raiders detail sync stores crest totals and total missing upgrades for every level-90 guild character
 - Raid progress is stored as structured JSON labels for reliable table/profile rendering
+- No new raiders detail/history data is recorded before Season 2 starts (`SEASON_2_START_TIMESTAMP` in `src/lib/wow-reset.ts`), even if refresh cron or the admin "Refresh Now" button runs earlier
 
 ## Project Structure
 
@@ -480,7 +506,9 @@ When a tag matching `v*` is pushed:
 ## Notes
 
 - `/admin/*` routes are protected by middleware and require an officer-level guild rank or higher.
-- The roster refresh endpoint should be called by an external scheduler such as Cloudflare Cron Triggers.
-- External guild header links are defined in `src/data/externalLinks.ts`.
+- `/api/cron/refresh` should be called by an external scheduler such as Cloudflare Cron Triggers (or a third-party pinger); there is no `[triggers] crons` entry in `wrangler.toml`. The build also bakes a `scheduled()` handler into the Worker (`scripts/patch-wrangler-config.mjs`) that calls this endpoint internally.
+- External guild links (Raider.IO, Warcraft Logs, WoWProgress, YouTube) are defined in `src/data/externalLinks.ts` and render as favicon icon links in the main nav.
 - Useful Links content is stored in D1 and managed from `/admin/links`.
 - Lore content is currently authored directly in `src/pages/lore.astro`.
+- Google Analytics (`gtag.js`) is loaded site-wide from `src/layouts/Layout.astro`; disclosed in the Privacy Policy (`/privacy`).
+- `PROTECTED_TABLES` in `scripts/d1-migration-helpers.mjs` (`users`, `characters`, `raider_notes`, `raid_signups`, `loot_history`, `applications`, `application_notes`) is the only set that gets an automatic pre-migration backup. Anything else — take a manual `wrangler d1 export` before running a destructive migration against production.

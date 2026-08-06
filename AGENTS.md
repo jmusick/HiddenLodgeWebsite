@@ -20,6 +20,7 @@ Guidance for AI coding agents working in this repository.
   - Flip the flag back to `true` to fully restore a feature — no other code changes needed. Underlying `src/lib/*.ts` business logic and DB schema for disabled features are left intact on purpose.
 - **D1 queries**: written as raw SQL via `env.DB.prepare(...).bind(...).all()/.first()/.run()`. `env` is imported from `cloudflare:workers`.
 - Migrations are numbered and additive (`NNNN_description.sql`); never edit an already-applied migration — add a new one.
+- **Weekly reset / season timestamps**: `src/lib/wow-reset.ts` is the single source of truth for the US weekly reset (Tuesday 11:00 AM America/New_York, DST-aware) and season-start timestamps (e.g. `SEASON_2_START_TIMESTAMP`). This used to be copy-pasted independently in three files with a wrong reset hour — always import from here rather than reimplementing it.
 
 ## Commands
 
