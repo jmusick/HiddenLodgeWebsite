@@ -516,6 +516,8 @@ const mplusWinnerData = {
                 return (
                   <tr
                     data-href={`/raiders/${character.blizzardCharId}`}
+                    data-alt-row={!isPrimary ? '' : undefined}
+                    hidden={!isPrimary}
                     class:list={['clickable-row', 'raider-group-row', { 'is-primary': isPrimary, 'is-alt': !isPrimary }]}
                   >
                     <td class="raider-identity-cell">
@@ -527,9 +529,19 @@ const mplusWinnerData = {
                           </span>
                         </div>
                         {isPrimary && group.altCharacters.length > 0 && (
-                          <div class="character-note group-note">
-                            {group.altCharacters.length} linked alt{group.altCharacters.length === 1 ? '' : 's'} below
-                          </div>
+                          <button
+                            type="button"
+                            class="alts-toggle"
+                            data-alts-toggle
+                            data-alt-count={String(group.altCharacters.length)}
+                            aria-expanded="false"
+                            aria-label={`Show ${group.altCharacters.length} linked alt${group.altCharacters.length === 1 ? '' : 's'} for ${group.primary.name}`}
+                          >
+                            <Icon name="lucide:chevron-right" class="alts-toggle-icon" aria-hidden="true" />
+                            <span data-alts-toggle-label>
+                              Show {group.altCharacters.length} alt{group.altCharacters.length === 1 ? '' : 's'}
+                            </span>
+                          </button>
                         )}
                         {!isPrimary && (
                           <div class="character-note">Linked to main: {group.primary.name}</div>
@@ -903,6 +915,29 @@ const mplusWinnerData = {
   // Make entire rows clickable, but let clicks on existing links/buttons pass through
   table?.addEventListener('click', (event) => {
     const target = event.target as HTMLElement;
+    const altsToggle = target.closest<HTMLButtonElement>('[data-alts-toggle]');
+    if (altsToggle) {
+      const group = altsToggle.closest<HTMLTableSectionElement>('tbody[data-raider-group]');
+      if (!group) return;
+
+      const isExpanded = altsToggle.getAttribute('aria-expanded') === 'true';
+      const nextExpanded = !isExpanded;
+      const altCount = Number(altsToggle.dataset.altCount ?? 0);
+      const mainName = group.querySelector<HTMLElement>('.name-pill')?.textContent?.trim() ?? 'this main';
+      const label = altsToggle.querySelector<HTMLElement>('[data-alts-toggle-label]');
+
+      altsToggle.setAttribute('aria-expanded', String(nextExpanded));
+      altsToggle.setAttribute(
+        'aria-label',
+        `${nextExpanded ? 'Hide' : 'Show'} ${altCount} linked alt${altCount === 1 ? '' : 's'} for ${mainName}`
+      );
+      if (label) label.textContent = `${nextExpanded ? 'Hide' : 'Show'} ${altCount} alt${altCount === 1 ? '' : 's'}`;
+      group.querySelectorAll<HTMLTableRowElement>('tr[data-alt-row]').forEach((row) => {
+        row.hidden = !nextExpanded;
+      });
+      return;
+    }
+
     if (target.closest('a, button')) return;
     const row = target.closest<HTMLTableRowElement>('tr[data-href]');
     if (!row?.dataset.href) return;
@@ -1462,9 +1497,41 @@ const mplusWinnerData = {
     font-size: 0.78rem;
   }
 
-  .group-note {
+  .alts-toggle {
+    display: inline-flex;
+    align-items: center;
+    width: fit-content;
+    gap: 0.18rem;
+    padding: 0;
+    border: 0;
+    background: transparent;
     color: #d9c28c;
+    font: inherit;
+    font-size: 0.78rem;
     font-weight: 600;
+    cursor: pointer;
+  }
+
+  .alts-toggle:hover {
+    color: #f1d9a9;
+    text-decoration: underline;
+    text-underline-offset: 2px;
+  }
+
+  .alts-toggle:focus-visible {
+    outline: 2px solid rgba(241, 217, 169, 0.85);
+    outline-offset: 3px;
+    border-radius: 0.2rem;
+  }
+
+  .alts-toggle-icon {
+    width: 0.9rem;
+    height: 0.9rem;
+    transition: transform 150ms ease;
+  }
+
+  .alts-toggle[aria-expanded='true'] .alts-toggle-icon {
+    transform: rotate(90deg);
   }
 
   .class-icon {
