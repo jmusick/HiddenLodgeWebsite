@@ -1006,7 +1006,13 @@ async function enrichRaider(row: RaiderSourceRow, now: number, raidProgressTarge
       buildCharacterUrl(row.realm_slug, row.name, '/encounters/raids'),
       accessToken
     ),
-    getCharacterMythicPlusRunCounts(row.realm_slug, row.name).catch(() => ({ total: null, thisWeek: null, lastWeek: null, thisWeekKeyLevels: [] as number[] })),
+    getCharacterMythicPlusRunCounts(row.realm_slug, row.name).catch(() => ({
+      total: null,
+      thisWeek: null,
+      lastWeek: null,
+      thisWeekKeyLevels: [] as number[],
+      allRuns: [] as KeystoneRun[],
+    })),
   ]);
 
   if (!summary || !equipment) {
@@ -1028,7 +1034,12 @@ async function enrichRaider(row: RaiderSourceRow, now: number, raidProgressTarge
     lastCheckedAt: now,
     equippedItemLevel: Number(summary.equipped_item_level ?? 0) || null,
     averageItemLevel: Number(summary.average_item_level ?? 0) || null,
-    mythicScore: Number(mythicProfile?.current_mythic_rating?.rating ?? 0) || null,
+    // Blizzard can continue returning the previous season's rating during the
+    // rollover. Only surface it after Raider.IO reports at least one Season 2
+    // run for this character.
+    mythicScore: mythicPlusRunCount.allRuns.length > 0
+      ? Number(mythicProfile?.current_mythic_rating?.rating ?? 0) || null
+      : null,
     tierPiecesEquipped: countTierPieces(equippedItems),
     socketedGems: socketCounts.socketed,
     totalSockets: socketCounts.total,

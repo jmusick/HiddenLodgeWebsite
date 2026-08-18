@@ -231,14 +231,18 @@ function deduplicateAndCollectRuns(response: RaiderIoCharacterProfileResponse): 
     if (!isDuplicate) uniqueRuns.push(entry);
   }
 
+  // Raider.IO can retain prior-season best/alternate runs during a rollover.
+  // Never let those runs repopulate the Season 2 keystone table or scores.
+  const seasonRuns = uniqueRuns.filter(({ ts }) => ts >= SEASON_2_START_TIMESTAMP);
+
   let thisWeek = 0;
   let lastWeek = 0;
-  for (const { ts } of uniqueRuns) {
+  for (const { ts } of seasonRuns) {
     if (ts >= resetTs) thisWeek += 1;
     else if (ts >= previousResetTs) lastWeek += 1;
   }
 
-  const allRuns: KeystoneRun[] = uniqueRuns.map(({ ts, run }) => ({
+  const allRuns: KeystoneRun[] = seasonRuns.map(({ ts, run }) => ({
     completedTs: ts,
     dungeonId: Number.isInteger(run.map_challenge_mode_id) ? (run.map_challenge_mode_id ?? null) : null,
     keystoneLevel: Number.isInteger(run.mythic_level ?? run.keystone_level)
