@@ -1,12 +1,11 @@
 import { getRaiderIoConfig } from './runtime-env';
-import { getUsWeeklyResetTimestamp, WEEK_SECONDS } from './wow-reset';
+import { getUsWeeklyResetTimestamp, WEEK_SECONDS, SEASON_2_START_TIMESTAMP } from './wow-reset';
 
 const RAIDER_IO_BASE = 'https://raider.io/api/v1';
 const DEFAULT_REGION = 'us';
 const RAIDER_IO_INTERNAL_API_BASE = 'https://raider.io/api';
-const MIDNIGHT_SEASON_SLUG = 'season-mn-1';
-const MIDNIGHT_CURRENT_TIER = '35';
-const MIDNIGHT_SEASON_1_START_TIMESTAMP = Math.floor(Date.UTC(2026, 2, 24, 15, 0, 0, 0) / 1000);
+const MIDNIGHT_SEASON_SLUG = 'season-mn-2';
+const MIDNIGHT_CURRENT_TIER = '36';
 
 interface RaiderIoKeystoneRun {
   keystone_run_id?: number;
@@ -75,8 +74,8 @@ function buildCharacterDetailsUrl(realm: string, name: string): string {
 }
 
 function getCurrentSeasonWeek(nowTs: number): number {
-  if (nowTs <= MIDNIGHT_SEASON_1_START_TIMESTAMP) return 1;
-  return Math.max(1, Math.floor((nowTs - MIDNIGHT_SEASON_1_START_TIMESTAMP) / WEEK_SECONDS) + 1);
+  if (nowTs <= SEASON_2_START_TIMESTAMP) return 1;
+  return Math.max(1, Math.floor((nowTs - SEASON_2_START_TIMESTAMP) / WEEK_SECONDS) + 1);
 }
 
 function buildStatisticsRunsUrl(realm: string, name: string, characterId: number, seasonWeek: number): string {

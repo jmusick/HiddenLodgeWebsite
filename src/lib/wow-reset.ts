@@ -82,8 +82,9 @@ function easternWallClockToUtcSeconds(year: number, month1to12: number, day: num
   return Math.floor((seedUtc.getTime() - offsetMinutes * 60_000) / 1000);
 }
 
-// Midnight Season 2 begins Tuesday 2026-08-18 at 1:00 AM Eastern. No new per-raider
+// Midnight Season 2 begins at the US weekly reset on Tuesday 2026-08-18 at
+// 11:00 AM Eastern. No new per-raider
 // tracking data (gear/ilvl, M+ score, crests, keystones, Great Vault, or any
 // *_history snapshot) should be recorded before this instant, even if the refresh
 // cron or admin "Refresh Now" runs earlier (e.g. during patch-week testing).
-export const SEASON_2_START_TIMESTAMP = easternWallClockToUtcSeconds(2026, 8, 18, 1, 0);
+export const SEASON_2_START_TIMESTAMP = easternWallClockToUtcSeconds(2026, 8, 18, 11, 0);

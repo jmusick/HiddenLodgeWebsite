@@ -19,16 +19,7 @@ const DETAIL_BATCH_SIZE = 6;
 const PREPAREDNESS_HISTORY_WINDOW_SECONDS = 14 * 24 * 60 * 60; // 14 days (2 weeks)
 const PROGRESSION_HISTORY_WINDOW_SECONDS = 28 * 24 * 60 * 60; // 28 days (4 weeks)
 const VAULT_HISTORY_WINDOW_SECONDS = 28 * 24 * 60 * 60; // 28 days (4 weeks)
-const MIDNIGHT_SEASON_1_START_TIMESTAMP = Math.floor(Date.UTC(2026, 2, 24, 15, 0, 0, 0) / 1000);
 const DELVES_TOTAL_STAT_ID = 40734;
-
-const CREST_STAT_IDS = {
-  adventurer: 62292,
-  veteran: 62293,
-  champion: 62294,
-  hero: 62295,
-  myth: 62296,
-} as const;
 
 const UPGRADE_TRACK_IDS = {
   mythic: [12801, 12802, 12803, 12804, 12805, 12806],
@@ -192,7 +183,7 @@ async function countKeystoneRuns(
       .first<{ cnt: number }>(),
     db
       .prepare(`SELECT COUNT(*) AS cnt FROM raider_keystones WHERE blizzard_char_id = ? AND completed_ts >= ?`)
-      .bind(blizzardCharId, MIDNIGHT_SEASON_1_START_TIMESTAMP)
+      .bind(blizzardCharId, SEASON_2_START_TIMESTAMP)
       .first<{ cnt: number }>(),
     db
       .prepare(
@@ -307,6 +298,7 @@ interface BlizzardAchievementStatisticsCategory {
 
 interface BlizzardAchievementStatistic {
   id?: number;
+  name?: string;
   quantity?: number;
 }
 
@@ -643,16 +635,37 @@ function extractCrestCounts(stats: BlizzardAchievementStatisticsResponse | null)
   heroCrests: number | null;
   mythCrests: number | null;
 } {
-  const characterStats = stats?.categories?.find((category) => category.name === 'Character')?.statistics ?? [];
-  const byId = new Map(characterStats.map((stat) => [Number(stat.id ?? -1), Number(stat.quantity ?? 0)]));
-  const read = (id: number) => (byId.has(id) ? byId.get(id) ?? 0 : null);
+  // Crest statistic IDs change between seasons. Match the Season 2 Mistcrest
+  // statistic names so Season 1 Dawncrest lifetime totals cannot leak back into
+  // the freshly-reset cache. Until a character earns a Mistcrest, the API may
+  // omit the statistic entirely; in that case the UI correctly shows no value.
+  const collectStatistics = (categories: BlizzardAchievementStatisticsCategory[] | undefined): BlizzardAchievementStatistic[] => {
+    if (!categories || categories.length === 0) return [];
+
+    const collected: BlizzardAchievementStatistic[] = [];
+    for (const category of categories) {
+      collected.push(...(category.statistics ?? []));
+      if (category.sub_categories?.length) {
+        collected.push(...collectStatistics(category.sub_categories));
+      }
+    }
+    return collected;
+  };
+  const allStatistics = collectStatistics(stats?.categories);
+  const read = (tier: string): number | null => {
+    const pattern = new RegExp(`^${tier}\\s+Mistcrests?\\s+earned$`, 'i');
+    const statistic = allStatistics.find((entry) => pattern.test(entry.name ?? ''));
+    if (!statistic) return null;
+    const quantity = Number(statistic.quantity ?? NaN);
+    return Number.isFinite(quantity) ? Math.max(0, Math.floor(quantity)) : null;
+  };
 
   return {
-    adventurerCrests: read(CREST_STAT_IDS.adventurer),
-    veteranCrests: read(CREST_STAT_IDS.veteran),
-    championCrests: read(CREST_STAT_IDS.champion),
-    heroCrests: read(CREST_STAT_IDS.hero),
-    mythCrests: read(CREST_STAT_IDS.myth),
+    adventurerCrests: read('Adventurer'),
+    veteranCrests: read('Veteran'),
+    championCrests: read('Champion'),
+    heroCrests: read('Hero'),
+    mythCrests: read('Myth'),
   };
 }
 

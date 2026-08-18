@@ -1,6 +1,6 @@
 import { execSync } from 'node:child_process';
 
-const SEASON_START_TS = 1774364400;
+const SEASON_START_TS = 1787065200;
 const WEEK_SECONDS = 7 * 24 * 60 * 60;
 const CURRENT_TS = Math.floor(Date.now() / 1000);
 const CURRENT_SEASON_WEEK = Math.max(1, Math.floor((CURRENT_TS - SEASON_START_TS) / WEEK_SECONDS) + 1);
@@ -44,12 +44,12 @@ function getUsWeeklyResetTimestamp() {
   const dayIndex = weekdayToIndex[weekdayShort] ?? 2;
   const daysSinceTuesday = (dayIndex - 2 + 7) % 7;
 
-  const localResetSeedUtc = new Date(Date.UTC(year, month - 1, day - daysSinceTuesday, 10, 0, 0, 0));
+  const localResetSeedUtc = new Date(Date.UTC(year, month - 1, day - daysSinceTuesday, 11, 0, 0, 0));
   const offsetMinutes = easternUtcOffsetMinutes(localResetSeedUtc);
   let resetUtc = new Date(localResetSeedUtc.getTime() - offsetMinutes * 60 * 1000);
 
   if (resetUtc > now) {
-    const previousWeekLocalSeedUtc = new Date(Date.UTC(year, month - 1, day - daysSinceTuesday - 7, 10, 0, 0, 0));
+    const previousWeekLocalSeedUtc = new Date(Date.UTC(year, month - 1, day - daysSinceTuesday - 7, 11, 0, 0, 0));
     const previousWeekOffsetMinutes = easternUtcOffsetMinutes(previousWeekLocalSeedUtc);
     resetUtc = new Date(previousWeekLocalSeedUtc.getTime() - previousWeekOffsetMinutes * 60 * 1000);
   }
@@ -72,7 +72,7 @@ async function fetchCharacterId(realmSlug, name) {
   const encodedName = encodeURIComponent(name);
 
   const detailsRes = await fetch(
-    `https://raider.io/api/characters/us/${realm}/${encodedName}?season=season-mn-1&tier=35`,
+    `https://raider.io/api/characters/us/${realm}/${encodedName}?season=season-mn-2&tier=36`,
     { headers: { Accept: 'application/json' } }
   );
   if (!detailsRes.ok) return null;
@@ -87,9 +87,9 @@ async function fetchStatsWeekTotal(realmSlug, name, seasonWeek) {
 
   const realm = encodeURIComponent(realmSlug);
   const encodedName = encodeURIComponent(name);
-  const href = `/characters/us/${realm}/${encodedName}/stats/mythic-plus-runs?groupBy=dungeon&statSeason=season-mn-1`;
+  const href = `/characters/us/${realm}/${encodedName}/stats/mythic-plus-runs?groupBy=dungeon&statSeason=season-mn-2`;
   const url = new URL('https://raider.io/api/statistics/get-data');
-  url.searchParams.set('season', 'season-mn-1');
+  url.searchParams.set('season', 'season-mn-2');
   url.searchParams.set('type', 'runs-over-time');
   url.searchParams.set('minMythicLevel', '2');
   url.searchParams.set('maxMythicLevel', '99');
