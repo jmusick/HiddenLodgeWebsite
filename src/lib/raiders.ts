@@ -2073,6 +2073,102 @@ export async function getRaiderGear(charId: number, dbInput?: D1Database): Promi
   return mapEquippedItemsToGearItems(equipment?.equipped_items ?? []);
 }
 
+export interface GearBackfillResult {
+  remaining: number;
+  processed: number;
+  failed: number;
+  done: boolean;
+}
+
+/**
+ * One-shot gear backfill for raiders that have no cached gear yet.
+ *
+ * The normal refresh cron only revisits a raider once its 12h details TTL
+ * expires, so after adding raider_gear_cache the grid stays empty for up to
+ * half a day. This fills it directly and cheaply: unlike enrichRaider it
+ * fetches ONLY /equipment (one request per raider instead of six) and never
+ * touches details_synced_at or any metrics column, so the regular refresh
+ * cadence is left completely undisturbed.
+ */
+export async function backfillRaiderGear(
+  options?: { limit?: number; dbInput?: D1Database }
+): Promise<GearBackfillResult> {
+  const db = getDatabase(options?.dbInput);
+  const limit = Math.max(1, Math.min(options?.limit ?? 25, 100));
+
+  const pendingRow = await db
+    .prepare(
+      `SELECT COUNT(*) AS pending
+       FROM raider_metrics_cache rmc
+       WHERE NOT EXISTS (SELECT 1 FROM raider_gear_cache g WHERE g.blizzard_char_id = rmc.blizzard_char_id)`
+    )
+    .first<{ pending: number }>();
+  const pending = Number(pendingRow?.pending ?? 0);
+  if (pending === 0) return { remaining: 0, processed: 0, failed: 0, done: true };
+
+  const candidates = await db
+    .prepare(
+      `SELECT rmc.blizzard_char_id, rmc.name, rmc.realm_slug
+       FROM raider_metrics_cache rmc
+       WHERE NOT EXISTS (SELECT 1 FROM raider_gear_cache g WHERE g.blizzard_char_id = rmc.blizzard_char_id)
+       ORDER BY rmc.name ASC
+       LIMIT ?`
+    )
+    .bind(limit)
+    .all<{ blizzard_char_id: number; name: string; realm_slug: string }>();
+
+  const rows = candidates.results ?? [];
+  const accessToken = await getBlizzardAppAccessToken();
+  if (!accessToken || rows.length === 0) {
+    return { remaining: pending, processed: 0, failed: rows.length, done: false };
+  }
+
+  const now = Math.floor(Date.now() / 1000);
+  let processed = 0;
+  let failed = 0;
+
+  const results = await mapWithConcurrency(rows, REQUEST_CONCURRENCY, async (row) => {
+    try {
+      const equipment = await fetchBlizzardJsonWithRetry<BlizzardEquipmentResponse>(
+        buildCharacterUrl(row.realm_slug, row.name, '/equipment'),
+        accessToken
+      );
+      if (!equipment) return { row, gear: null };
+      return { row, gear: mapEquippedItemsToGearItems(equipment.equipped_items ?? []) };
+    } catch (error) {
+      console.error('Gear backfill fetch failed', { charId: row.blizzard_char_id, name: row.name, error });
+      return { row, gear: null };
+    }
+  });
+
+  for (const { row, gear } of results) {
+    if (!gear) {
+      failed += 1;
+      continue;
+    }
+    try {
+      await upsertRaiderGearCache(db, row.blizzard_char_id, gear, now);
+      processed += 1;
+      try {
+        await fetchItemIconUrls(
+          db,
+          gear.map((item) => item.itemId ?? 0),
+          env.BLIZZARD_CLIENT_ID,
+          env.BLIZZARD_CLIENT_SECRET
+        );
+      } catch (error) {
+        console.error('Gear backfill icon warm failed', { charId: row.blizzard_char_id, error });
+      }
+    } catch (error) {
+      console.error('Gear backfill write failed', { charId: row.blizzard_char_id, error });
+      failed += 1;
+    }
+  }
+
+  const remaining = Math.max(0, pending - processed);
+  return { remaining, processed, failed, done: remaining === 0 };
+}
+
 export type RaiderGearSummaryItem = RaiderGearItem & { iconUrl: string | null };
 
 export interface RaiderGearSummaryRow {
