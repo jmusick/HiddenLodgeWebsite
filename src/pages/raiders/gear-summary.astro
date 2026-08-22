@@ -77,10 +77,14 @@ function gemAffixState(item: RaiderGearSummaryItem | undefined): { missing: bool
   return { missing: true, tooltip: 'Missing gems' };
 }
 
+const mainCount = raiders.filter((r) => r.isMain).length;
+const altCount = raiders.length - mainCount;
+
 const rows = raiders.map((r) => {
   const dataAttrs: Record<string, string> = {
     'data-name': r.name.toLowerCase(),
     'data-class': r.className,
+    'data-is-main': r.isMain ? '1' : '0',
   };
   for (const slotKey of GEAR_SLOT_ORDER) {
     const item = r.gearBySlot.get(slotKey);
@@ -116,6 +120,8 @@ const rows = raiders.map((r) => {
     blizzardCharId: r.blizzardCharId,
     name: r.name,
     className: r.className,
+    isMain: r.isMain,
+    mainCharacterName: r.mainCharacterName,
     color: classColor(r.className),
     syncedTitle: r.gearSyncedAt
       ? `Gear last synced ${new Date(r.gearSyncedAt * 1000).toLocaleString()}`
@@ -140,7 +146,7 @@ const rows = raiders.map((r) => {
   </section>
 
   <section class="panel">
-    <h2 class="title-row"><Icon name="lucide:list" class="title-icon" aria-hidden="true" />Raiders ({raiders.length})</h2>
+    <h2 class="title-row"><Icon name="lucide:list" class="title-icon" aria-hidden="true" />Raiders ({mainCount} mains / {altCount} alts)</h2>
     <div class="controls" aria-label="Gear summary controls">
       <label>
         Search
@@ -152,6 +158,13 @@ const rows = raiders.map((r) => {
           <option value="all">All Classes</option>
           {classOptions.map((className) => <option value={className}>{className}</option>)}
         </select>
+      </label>
+      <label class="toggle-label">
+        Alts
+        <span class="toggle-row">
+          <input id="gear-show-alts" type="checkbox" />
+          <span>Show alts ({altCount})</span>
+        </span>
       </label>
     </div>
 
@@ -195,6 +208,9 @@ const rows = raiders.map((r) => {
                 <a href={`/raiders/${row.blizzardCharId}`} class="name-link">
                   <span class="name-pill" style={`--class-color: ${row.color}`}>{row.name}</span>
                 </a>
+                {!row.isMain && (
+                  <span class="alt-tag" title={`Alt of ${row.mainCharacterName}`}>alt</span>
+                )}
               </td>
               <td>{row.className}</td>
               {row.cells.map(({ item, wowhead, iconUrl, title }) => (
@@ -252,6 +268,7 @@ const rows = raiders.map((r) => {
 
   const searchInput = document.querySelector<HTMLInputElement>('#gear-search');
   const classFilter = document.querySelector<HTMLSelectElement>('#gear-class-filter');
+  const showAltsToggle = document.querySelector<HTMLInputElement>('#gear-show-alts');
   const countLabel = document.querySelector<HTMLParagraphElement>('#gear-count');
   const table = document.querySelector<HTMLTableElement>('#gear-table');
   const tableBody = table?.querySelector('tbody');
@@ -267,16 +284,19 @@ const rows = raiders.map((r) => {
 
     const query = searchInput?.value.trim().toLowerCase() ?? '';
     const selectedClass = classFilter?.value ?? 'all';
+    const showAlts = showAltsToggle?.checked ?? false;
 
     const rows = [...tableBody.querySelectorAll('tr')];
     const visibleRows = rows.filter((row) => {
       const rowName = (row as HTMLElement).dataset.name ?? '';
       const rowClass = (row as HTMLElement).dataset.class ?? '';
+      const rowIsMain = (row as HTMLElement).dataset.isMain === '1';
 
       const matchesSearch = query.length === 0 || rowName.includes(query);
       const matchesClass = selectedClass === 'all' || rowClass === selectedClass;
+      const matchesAlt = showAlts || rowIsMain;
 
-      return matchesSearch && matchesClass;
+      return matchesSearch && matchesClass && matchesAlt;
     });
 
     rows.forEach((row) => {
@@ -344,6 +364,10 @@ const rows = raiders.map((r) => {
 
   searchInput?.addEventListener('input', applyFiltersAndSort);
   classFilter?.addEventListener('change', applyFiltersAndSort);
+  showAltsToggle?.addEventListener('change', () => {
+    currentPage = 1;
+    applyFiltersAndSort();
+  });
 
   sortButtons.forEach((button) => {
     button.addEventListener('click', () => {
@@ -427,9 +451,43 @@ const rows = raiders.map((r) => {
   .controls {
     margin-top: 1rem;
     display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-columns: repeat(3, minmax(0, 1fr));
     gap: 0.65rem;
     align-items: end;
+  }
+
+  .toggle-row {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.45rem;
+    border: 1px solid rgba(214, 176, 106, 0.4);
+    border-radius: 0.45rem;
+    background: rgba(7, 14, 22, 0.85);
+    color: #d8e2e8;
+    padding: 0.5rem 0.6rem;
+    font-size: 0.94rem;
+    text-transform: none;
+    letter-spacing: normal;
+    cursor: pointer;
+  }
+
+  .toggle-row input {
+    accent-color: #d6b06a;
+    cursor: pointer;
+    margin: 0;
+  }
+
+  .alt-tag {
+    margin-left: 0.35rem;
+    padding: 0 0.3rem;
+    border-radius: 0.25rem;
+    border: 1px solid rgba(214, 176, 106, 0.32);
+    color: #9fb0bf;
+    font-size: 0.62rem;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    vertical-align: middle;
   }
 
   .controls label {

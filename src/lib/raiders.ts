@@ -2176,6 +2176,8 @@ export interface RaiderGearSummaryRow {
   name: string;
   realm: string;
   className: string;
+  isMain: boolean;
+  mainCharacterName: string;
   gearBySlot: Map<string, RaiderGearSummaryItem>;
   gearSyncedAt: number | null;
 }
@@ -2217,17 +2219,38 @@ async function readCachedItemIcons(db: D1Database, itemIds: number[]): Promise<M
 export async function getAllRaidersGear(dbInput?: D1Database): Promise<RaiderGearSummaryRow[]> {
   const db = getDatabase(dbInput);
 
+  // Main/alt resolution matches loadCachedRaiders(): a character with no linked
+  // account resolves to itself, so unlinked characters count as mains.
   const raiderRows = await db
     .prepare(
-      `SELECT rmc.blizzard_char_id, rmc.name, rmc.realm, rmc.class_name
+      `SELECT rmc.blizzard_char_id, rmc.name, rmc.realm, rmc.class_name,
+              c.is_main,
+              COALESCE(main_c.blizzard_char_id, rmc.blizzard_char_id) AS main_char_id,
+              COALESCE(main_c.name, rmc.name) AS main_character_name
        FROM roster_members_cache rmc
+       LEFT JOIN characters c
+         ON c.blizzard_char_id = rmc.blizzard_char_id
+       LEFT JOIN characters main_c
+         ON main_c.user_id = c.user_id
+        AND main_c.is_main = 1
        WHERE rmc.level = 90
        ORDER BY rmc.name ASC`
     )
-    .all<{ blizzard_char_id: number; name: string; realm: string; class_name: string }>();
+    .all<{
+      blizzard_char_id: number;
+      name: string;
+      realm: string;
+      class_name: string;
+      is_main: number | null;
+      main_char_id: number;
+      main_character_name: string;
+    }>();
 
   const raiders = raiderRows.results ?? [];
   if (raiders.length === 0) return [];
+
+  const isMainRow = (r: (typeof raiders)[number]) =>
+    r.is_main === 1 || r.main_char_id === r.blizzard_char_id;
 
   const emptyGrid = () =>
     raiders.map((r) => ({
@@ -2235,6 +2258,8 @@ export async function getAllRaidersGear(dbInput?: D1Database): Promise<RaiderGea
       name: r.name,
       realm: r.realm,
       className: r.class_name,
+      isMain: isMainRow(r),
+      mainCharacterName: r.main_character_name ?? r.name,
       gearBySlot: new Map<string, RaiderGearSummaryItem>(),
       gearSyncedAt: null,
     }));
@@ -2302,6 +2327,8 @@ export async function getAllRaidersGear(dbInput?: D1Database): Promise<RaiderGea
     name: r.name,
     realm: r.realm,
     className: r.class_name,
+    isMain: isMainRow(r),
+    mainCharacterName: r.main_character_name ?? r.name,
     gearBySlot: gearByChar.get(r.blizzard_char_id) ?? new Map(),
     gearSyncedAt: syncedAtByChar.get(r.blizzard_char_id) ?? null,
   }));
