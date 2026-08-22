@@ -4,6 +4,7 @@ export const prerender = false;
 import Layout from '../../layouts/Layout.astro';
 import { Icon } from 'astro-icon/components';
 import { classColor } from '../../lib/wow';
+import { classRaidData } from '../../lib/raid-teams';
 import { getAllRaidersGear, type RaiderGearSummaryItem } from '../../lib/raiders';
 
 const FALLBACK_ICON = 'https://wow.zamimg.com/images/wow/icons/large/inv_misc_questionmark.jpg';
@@ -57,6 +58,15 @@ const raiders = await getAllRaidersGear();
 
 const classOptions = [...new Set(raiders.map((r) => r.className))].sort((a, b) => a.localeCompare(b));
 
+// Armor type comes from the class → token mapping already used for raid team
+// composition, so the two views can't disagree about what a class wears.
+const armorTypeFor = (className: string) => classRaidData(className).token;
+
+const ARMOR_ORDER = ['Cloth', 'Leather', 'Mail', 'Plate', 'Unknown'];
+const armorOptions = [...new Set(raiders.map((r) => armorTypeFor(r.className)))].sort(
+  (a, b) => ARMOR_ORDER.indexOf(a) - ARMOR_ORDER.indexOf(b)
+);
+
 function enchantAffixState(item: RaiderGearSummaryItem | undefined): { missing: boolean; tooltip: string } {
   if (!item?.itemName || !item.canEnchant) {
     return { missing: false, tooltip: 'Enchant not available for this item' };
@@ -84,6 +94,7 @@ const rows = raiders.map((r) => {
   const dataAttrs: Record<string, string> = {
     'data-name': r.name.toLowerCase(),
     'data-class': r.className,
+    'data-armor': armorTypeFor(r.className),
     'data-is-main': r.isMain ? '1' : '0',
   };
   for (const slotKey of GEAR_SLOT_ORDER) {
@@ -157,6 +168,13 @@ const rows = raiders.map((r) => {
         <select id="gear-class-filter">
           <option value="all">All Classes</option>
           {classOptions.map((className) => <option value={className}>{className}</option>)}
+        </select>
+      </label>
+      <label>
+        Armor
+        <select id="gear-armor-filter">
+          <option value="all">All Armor</option>
+          {armorOptions.map((armor) => <option value={armor}>{armor}</option>)}
         </select>
       </label>
       <label class="toggle-label">
@@ -268,6 +286,7 @@ const rows = raiders.map((r) => {
 
   const searchInput = document.querySelector<HTMLInputElement>('#gear-search');
   const classFilter = document.querySelector<HTMLSelectElement>('#gear-class-filter');
+  const armorFilter = document.querySelector<HTMLSelectElement>('#gear-armor-filter');
   const showAltsToggle = document.querySelector<HTMLInputElement>('#gear-show-alts');
   const countLabel = document.querySelector<HTMLParagraphElement>('#gear-count');
   const table = document.querySelector<HTMLTableElement>('#gear-table');
@@ -284,19 +303,22 @@ const rows = raiders.map((r) => {
 
     const query = searchInput?.value.trim().toLowerCase() ?? '';
     const selectedClass = classFilter?.value ?? 'all';
+    const selectedArmor = armorFilter?.value ?? 'all';
     const showAlts = showAltsToggle?.checked ?? false;
 
     const rows = [...tableBody.querySelectorAll('tr')];
     const visibleRows = rows.filter((row) => {
       const rowName = (row as HTMLElement).dataset.name ?? '';
       const rowClass = (row as HTMLElement).dataset.class ?? '';
+      const rowArmor = (row as HTMLElement).dataset.armor ?? '';
       const rowIsMain = (row as HTMLElement).dataset.isMain === '1';
 
       const matchesSearch = query.length === 0 || rowName.includes(query);
       const matchesClass = selectedClass === 'all' || rowClass === selectedClass;
+      const matchesArmor = selectedArmor === 'all' || rowArmor === selectedArmor;
       const matchesAlt = showAlts || rowIsMain;
 
-      return matchesSearch && matchesClass && matchesAlt;
+      return matchesSearch && matchesClass && matchesArmor && matchesAlt;
     });
 
     rows.forEach((row) => {
@@ -364,6 +386,10 @@ const rows = raiders.map((r) => {
 
   searchInput?.addEventListener('input', applyFiltersAndSort);
   classFilter?.addEventListener('change', applyFiltersAndSort);
+  armorFilter?.addEventListener('change', () => {
+    currentPage = 1;
+    applyFiltersAndSort();
+  });
   showAltsToggle?.addEventListener('change', () => {
     currentPage = 1;
     applyFiltersAndSort();
@@ -451,9 +477,15 @@ const rows = raiders.map((r) => {
   .controls {
     margin-top: 1rem;
     display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-columns: repeat(4, minmax(0, 1fr));
     gap: 0.65rem;
     align-items: end;
+  }
+
+  @media (max-width: 1000px) {
+    .controls {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
   }
 
   .toggle-row {
