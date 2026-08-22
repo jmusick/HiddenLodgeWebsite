@@ -1964,7 +1964,13 @@ export async function refreshRaidersCache(
       .run();
 
     if (gearItems) {
-      await upsertRaiderGearCache(db, source.blizzard_char_id, gearItems, now);
+      // Isolated so a gear-cache problem (e.g. migration 0066 not yet applied
+      // to this database) can never break the raider metrics refresh itself.
+      try {
+        await upsertRaiderGearCache(db, source.blizzard_char_id, gearItems, now);
+      } catch (error) {
+        console.error('Raider gear cache write failed', { charId: source.blizzard_char_id, error });
+      }
 
       // Warm the shared item icon cache a raider at a time (~16 items) so the
       // gear summary page can render icons from a plain DB read instead of
@@ -2126,6 +2132,23 @@ export async function getAllRaidersGear(dbInput?: D1Database): Promise<RaiderGea
 
   const raiders = raiderRows.results ?? [];
   if (raiders.length === 0) return [];
+
+  const emptyGrid = () =>
+    raiders.map((r) => ({
+      blizzardCharId: r.blizzard_char_id,
+      name: r.name,
+      realm: r.realm,
+      className: r.class_name,
+      gearBySlot: new Map<string, RaiderGearSummaryItem>(),
+      gearSyncedAt: null,
+    }));
+
+  // Degrade to an empty grid rather than erroring when migration 0066 has not
+  // been applied to this database yet (same guard style as item_icon_cache).
+  const hasGearTable = await db
+    .prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='raider_gear_cache' LIMIT 1")
+    .first<{ '1': number }>();
+  if (!hasGearTable) return emptyGrid();
 
   const gearRows = await db
     .prepare(`SELECT * FROM raider_gear_cache`)
