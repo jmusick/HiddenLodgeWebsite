@@ -6,6 +6,7 @@ import { Icon } from 'astro-icon/components';
 import { classColor } from '../../lib/wow';
 import { classRaidData } from '../../lib/raid-teams';
 import { getAllRaidersGear, type RaiderGearSummaryItem } from '../../lib/raiders';
+import { getRaidLogActivity, RECENT_LOG_WINDOW_DAYS } from '../../lib/raid-log-activity';
 
 const FALLBACK_ICON = 'https://wow.zamimg.com/images/wow/icons/large/inv_misc_questionmark.jpg';
 
@@ -54,7 +55,41 @@ const GEAR_SLOT_SHORT_LABELS: Record<string, string> = {
   OFF_HAND: 'OH',
 };
 
-const raiders = await getAllRaidersGear();
+const [raiders, logActivity] = await Promise.all([getAllRaidersGear(), getRaidLogActivity()]);
+
+// Recency is per person, not per character: raiding a stretch on an alt keeps
+// the whole group (main included) in the default view. With nothing synced yet
+// every raider counts as recent so the grid can't come up empty.
+const lastLogSeenByMainCharId = new Map<number, number>();
+for (const raider of raiders) {
+  const seenAt = logActivity.lastSeenByCharId.get(raider.blizzardCharId);
+  if (seenAt === undefined) continue;
+  const current = lastLogSeenByMainCharId.get(raider.mainCharId);
+  if (current === undefined || seenAt > current) lastLogSeenByMainCharId.set(raider.mainCharId, seenAt);
+}
+
+function lastLogSeenAtFor(raider: (typeof raiders)[number]): number | null {
+  return lastLogSeenByMainCharId.get(raider.mainCharId) ?? null;
+}
+
+function isRecentlyActive(raider: (typeof raiders)[number]): boolean {
+  if (!logActivity.hasData) return true;
+  const seenAt = lastLogSeenAtFor(raider);
+  return seenAt !== null && seenAt >= logActivity.cutoffUtc;
+}
+
+function lastLogSeenLabel(raider: (typeof raiders)[number]): string {
+  if (!logActivity.hasData) return 'Warcraft Logs activity has not synced yet';
+  const seenAt = lastLogSeenAtFor(raider);
+  if (seenAt === null) return 'No Hidden Lodge log appearance on record';
+
+  const daysAgo = Math.max(0, Math.floor((Date.now() / 1000 - seenAt) / 86400));
+  const when = new Date(seenAt * 1000).toLocaleDateString();
+  if (daysAgo === 0) return `Last seen in a Hidden Lodge log today (${when})`;
+  return `Last seen in a Hidden Lodge log ${daysAgo} day${daysAgo === 1 ? '' : 's'} ago (${when})`;
+}
+
+const recentCount = raiders.filter((r) => isRecentlyActive(r)).length;
 
 const classOptions = [...new Set(raiders.map((r) => r.className))].sort((a, b) => a.localeCompare(b));
 
@@ -96,6 +131,7 @@ const rows = raiders.map((r) => {
     'data-class': r.className,
     'data-armor': armorTypeFor(r.className),
     'data-is-main': r.isMain ? '1' : '0',
+    'data-recent-log': isRecentlyActive(r) ? '1' : '0',
   };
   for (const slotKey of GEAR_SLOT_ORDER) {
     const item = r.gearBySlot.get(slotKey);
@@ -113,6 +149,7 @@ const rows = raiders.map((r) => {
       ? [
           `${slotLabel}: ${item.itemName}`,
           `iLvl ${item.itemLevel ?? '—'}`,
+          ...(item.isTierSet ? ['Tier set piece'] : []),
           ...(item.canEnchant ? [enchantState.missing ? 'Missing enchant' : `Enchant: ${enchantState.tooltip}`] : []),
           ...(item.canGem ? [gemState.missing ? 'Missing gems' : `Gems: ${gemState.tooltip}`] : []),
         ]
@@ -134,9 +171,12 @@ const rows = raiders.map((r) => {
     isMain: r.isMain,
     mainCharacterName: r.mainCharacterName,
     color: classColor(r.className),
-    syncedTitle: r.gearSyncedAt
-      ? `Gear last synced ${new Date(r.gearSyncedAt * 1000).toLocaleString()}`
-      : 'Gear not synced yet',
+    syncedTitle: [
+      r.gearSyncedAt
+        ? `Gear last synced ${new Date(r.gearSyncedAt * 1000).toLocaleString()}`
+        : 'Gear not synced yet',
+      lastLogSeenLabel(r),
+    ].join(' · '),
     dataAttrs,
     cells,
   };
@@ -184,7 +224,18 @@ const rows = raiders.map((r) => {
           <span>Show alts ({altCount})</span>
         </span>
       </label>
+      <label class="toggle-label">
+        Activity
+        <span class="toggle-row">
+          <input id="gear-show-all" type="checkbox" />
+          <span>Show all raiders ({raiders.length})</span>
+        </span>
+      </label>
     </div>
+    <p class="activity-note">
+      Showing raiders seen in a Hidden Lodge Warcraft Logs report in the last {RECENT_LOG_WINDOW_DAYS} days
+      ({recentCount} of {raiders.length} characters). Tick <strong>Show all raiders</strong> for the full roster.
+    </p>
 
     <div class="table-wrap">
       <div class="pagination-controls">
@@ -252,6 +303,11 @@ const rows = raiders.map((r) => {
                         onerror={`this.src='${FALLBACK_ICON}'`}
                       />
                       <span class="gear-icon-ilvl">{item.itemLevel ?? '—'}</span>
+                      {item.isTierSet && (
+                        <span class="tier-badge" title="Tier set piece" aria-label="Tier set piece">
+                          <Icon name="lucide:shield" aria-hidden="true" />
+                        </span>
+                      )}
                     </a>
                   ) : (
                     <span class="gear-empty">—</span>
@@ -288,6 +344,7 @@ const rows = raiders.map((r) => {
   const classFilter = document.querySelector<HTMLSelectElement>('#gear-class-filter');
   const armorFilter = document.querySelector<HTMLSelectElement>('#gear-armor-filter');
   const showAltsToggle = document.querySelector<HTMLInputElement>('#gear-show-alts');
+  const showAllToggle = document.querySelector<HTMLInputElement>('#gear-show-all');
   const countLabel = document.querySelector<HTMLParagraphElement>('#gear-count');
   const table = document.querySelector<HTMLTableElement>('#gear-table');
   const tableBody = table?.querySelector('tbody');
@@ -305,6 +362,7 @@ const rows = raiders.map((r) => {
     const selectedClass = classFilter?.value ?? 'all';
     const selectedArmor = armorFilter?.value ?? 'all';
     const showAlts = showAltsToggle?.checked ?? false;
+    const showAll = showAllToggle?.checked ?? false;
 
     const rows = [...tableBody.querySelectorAll('tr')];
     const visibleRows = rows.filter((row) => {
@@ -312,13 +370,15 @@ const rows = raiders.map((r) => {
       const rowClass = (row as HTMLElement).dataset.class ?? '';
       const rowArmor = (row as HTMLElement).dataset.armor ?? '';
       const rowIsMain = (row as HTMLElement).dataset.isMain === '1';
+      const rowIsRecent = (row as HTMLElement).dataset.recentLog === '1';
 
       const matchesSearch = query.length === 0 || rowName.includes(query);
       const matchesClass = selectedClass === 'all' || rowClass === selectedClass;
       const matchesArmor = selectedArmor === 'all' || rowArmor === selectedArmor;
       const matchesAlt = showAlts || rowIsMain;
+      const matchesActivity = showAll || rowIsRecent;
 
-      return matchesSearch && matchesClass && matchesArmor && matchesAlt;
+      return matchesSearch && matchesClass && matchesArmor && matchesAlt && matchesActivity;
     });
 
     rows.forEach((row) => {
@@ -391,6 +451,10 @@ const rows = raiders.map((r) => {
     applyFiltersAndSort();
   });
   showAltsToggle?.addEventListener('change', () => {
+    currentPage = 1;
+    applyFiltersAndSort();
+  });
+  showAllToggle?.addEventListener('change', () => {
     currentPage = 1;
     applyFiltersAndSort();
   });
@@ -477,7 +541,7 @@ const rows = raiders.map((r) => {
   .controls {
     margin-top: 1rem;
     display: grid;
-    grid-template-columns: repeat(4, minmax(0, 1fr));
+    grid-template-columns: repeat(5, minmax(0, 1fr));
     gap: 0.65rem;
     align-items: end;
   }
@@ -507,6 +571,40 @@ const rows = raiders.map((r) => {
     accent-color: #d6b06a;
     cursor: pointer;
     margin: 0;
+  }
+
+  .activity-note {
+    margin: 0.6rem 0 0;
+    color: #9fb2bf;
+    font-size: 0.85rem;
+  }
+
+  .activity-note strong {
+    color: #e7d9bc;
+    font-weight: 600;
+  }
+
+  /* Tier pieces get a corner badge rather than a border tint, so the existing
+     quality-colour border stays the only signal for item quality. */
+  .tier-badge {
+    position: absolute;
+    top: -3px;
+    right: -3px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    background: #1a1207;
+    border: 1px solid #d6b06a;
+    color: #f0c96f;
+    pointer-events: none;
+  }
+
+  .tier-badge svg {
+    width: 7px;
+    height: 7px;
   }
 
   .alt-tag {

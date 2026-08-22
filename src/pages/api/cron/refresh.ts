@@ -5,6 +5,7 @@ import { refreshRaidersCache } from '../../../lib/raiders';
 import { refreshAttendanceCache } from '../../../lib/attendance';
 import { refreshProfessionsCache } from '../../../lib/professions-cache';
 import { warmTrinketTierCacheChunk } from '../../../lib/trinkets';
+import { refreshRaidLogActivity } from '../../../lib/raid-log-activity';
 import { FEATURE_FLAGS } from '../../../lib/feature-flags';
 
 export const GET: APIRoute = async ({ request }) => {
@@ -23,6 +24,9 @@ export const GET: APIRoute = async ({ request }) => {
     : undefined;
   const trinketBatchSize = url.searchParams.get('trinketBatchSize')
     ? Number.parseInt(url.searchParams.get('trinketBatchSize')!, 10)
+    : undefined;
+  const logReportBatchSize = url.searchParams.get('logReportBatchSize')
+    ? Number.parseInt(url.searchParams.get('logReportBatchSize')!, 10)
     : undefined;
 
   // Per-refresh timings: this endpoint runs against a 30s external timeout and
@@ -47,12 +51,16 @@ export const GET: APIRoute = async ({ request }) => {
   const runTools = FEATURE_FLAGS.tools;
 
   const startedAt = Date.now();
-  const [rosterResult, raidersResult, attendanceResult, professionsResult, trinketsResult] = await Promise.allSettled([
+  const [rosterResult, raidersResult, attendanceResult, professionsResult, trinketsResult, logActivityResult] = await Promise.allSettled([
     timed('roster', refreshRosterCache(undefined, rosterOptions)),
     skipRaiders ? Promise.resolve(null) : timed('raiders', refreshRaidersCache()),
     runAttendance ? timed('attendance', refreshAttendanceCache()) : Promise.resolve(null),
     runTools ? timed('professions', refreshProfessionsCache(undefined, { batchSize: professionBatchSize })) : Promise.resolve(null),
     runTools ? timed('trinkets', warmTrinketTierCacheChunk({ batchSize: trinketBatchSize })) : Promise.resolve(null),
+    // Not gated on FEATURE_FLAGS.attendance: this is the small "seen in a guild
+    // log lately" sync that the raiders/gear pages filter on, not the full
+    // scheduled-raid attendance pipeline.
+    timed('logActivity', refreshRaidLogActivity(undefined, { maxReports: logReportBatchSize })),
   ]);
   timings.total = Date.now() - startedAt;
   console.log('Cron refresh timings (ms)', timings);
@@ -78,6 +86,10 @@ export const GET: APIRoute = async ({ request }) => {
     console.error('Cron trinkets refresh failed', trinketsResult.reason);
     failures.push('trinkets');
   }
+  if (logActivityResult.status === 'rejected') {
+    console.error('Cron raid log activity refresh failed', logActivityResult.reason);
+    failures.push('logActivity');
+  }
 
   const attendanceSummary = runAttendance
     ? await env.DB
@@ -99,6 +111,7 @@ export const GET: APIRoute = async ({ request }) => {
     raiders: raidersResult.status === 'fulfilled' ? raidersResult.value : null,
     professions: professionsResult.status === 'fulfilled' ? professionsResult.value : null,
     trinkets: trinketsResult.status === 'fulfilled' ? trinketsResult.value : null,
+    logActivity: logActivityResult.status === 'fulfilled' ? logActivityResult.value : null,
     attendance: {
       totalReports: Number(attendanceSummary?.total_reports ?? 0),
       reportsWithKills: Number(attendanceSummary?.reports_with_kills ?? 0),
@@ -114,5 +127,6 @@ export const GET: APIRoute = async ({ request }) => {
     requestedRosterOptions: rosterOptions,
     requestedProfessionBatchSize: professionBatchSize,
     requestedTrinketBatchSize: trinketBatchSize,
+    requestedLogReportBatchSize: logReportBatchSize,
   });
 };

@@ -6,8 +6,10 @@ import { Icon } from 'astro-icon/components';
 import { classColor } from '../lib/wow';
 import { loadRaidersViewData, type RaiderRecord } from '../lib/raiders';
 import { SEASON_2_START_TIMESTAMP } from '../lib/wow-reset';
+import { getRaidLogActivity, RECENT_LOG_WINDOW_DAYS } from '../lib/raid-log-activity';
 
 const { raiders, totalMembers, readyCount } = await loadRaidersViewData();
+const logActivity = await getRaidLogActivity();
 const nowTs = Math.floor(Date.now() / 1000);
 const isBeforeSeason2 = nowTs < SEASON_2_START_TIMESTAMP;
 const season2StartLabel = new Date(SEASON_2_START_TIMESTAMP * 1000).toLocaleDateString(undefined, {
@@ -31,6 +33,22 @@ interface RaiderGroup {
   altCharacters: RaiderRecord[];
   classNames: string[];
   searchNames: string;
+  /** Newest guild-log appearance across every character this person plays. */
+  lastLogSeenAt: number | null;
+  isRecentlyActive: boolean;
+}
+
+// "Recent" is a property of the person, not the character: raiding a week on an
+// alt still means the raider showed up, so the whole group stays visible.
+// When nothing has synced yet (no WCL credentials, fresh database) every group
+// counts as recent, so the default view can never render an empty roster.
+function groupLastLogSeenAt(characters: RaiderRecord[]): number | null {
+  let newest: number | null = null;
+  for (const character of characters) {
+    const seenAt = logActivity.lastSeenByCharId.get(character.blizzardCharId);
+    if (seenAt !== undefined && (newest === null || seenAt > newest)) newest = seenAt;
+  }
+  return newest;
 }
 
 const raiderGroups = Array.from(
@@ -53,6 +71,8 @@ const raiderGroups = Array.from(
       return a.name.localeCompare(b.name);
     });
 
+    const lastLogSeenAt = groupLastLogSeenAt(orderedCharacters);
+
     return {
       primary,
       characters: orderedCharacters,
@@ -61,6 +81,8 @@ const raiderGroups = Array.from(
         a.localeCompare(b)
       ),
       searchNames: orderedCharacters.map((raider) => raider.name.toLowerCase()).join(' '),
+      lastLogSeenAt,
+      isRecentlyActive: !logActivity.hasData || (lastLogSeenAt !== null && lastLogSeenAt >= logActivity.cutoffUtc),
     };
   })
   .sort((a, b) => compareRaiders(a.primary, b.primary));
@@ -68,6 +90,18 @@ const raiderGroups = Array.from(
 const classOptions = [...new Set(sortedRaiders.map((raider) => raider.className))].sort((a, b) =>
   a.localeCompare(b)
 );
+
+const recentRaiderCount = raiderGroups.filter((group) => group.isRecentlyActive).length;
+
+function lastLogSeenLabel(lastLogSeenAt: number | null): string {
+  if (!logActivity.hasData) return 'Warcraft Logs activity has not synced yet';
+  if (lastLogSeenAt === null) return `No Hidden Lodge log appearance on record`;
+
+  const daysAgo = Math.max(0, Math.floor((Date.now() / 1000 - lastLogSeenAt) / 86400));
+  const when = new Date(lastLogSeenAt * 1000).toLocaleDateString();
+  if (daysAgo === 0) return `Last seen in a Hidden Lodge log today (${when})`;
+  return `Last seen in a Hidden Lodge log ${daysAgo} day${daysAgo === 1 ? '' : 's'} ago (${when})`;
+}
 
 function scoreColor(filled: number | null, total: number | null): string {
   if (filled === null || total === null || total === 0) return '';
@@ -439,7 +473,18 @@ const mplusWinnerData = {
           {classOptions.map((className) => <option value={className}>{className}</option>)}
         </select>
       </label>
+      <label class="toggle-label">
+        Activity
+        <span class="toggle-row">
+          <input id="raiders-show-all" type="checkbox" />
+          <span>Show all raiders ({raiderGroups.length})</span>
+        </span>
+      </label>
     </div>
+    <p class="activity-note">
+      Showing raiders seen in a Hidden Lodge Warcraft Logs report in the last {RECENT_LOG_WINDOW_DAYS} days
+      ({recentRaiderCount} of {raiderGroups.length}). Tick <strong>Show all raiders</strong> for the full roster.
+    </p>
 
     <div class="table-wrap">
       <div class="pagination-controls">
@@ -510,6 +555,9 @@ const mplusWinnerData = {
               data-preparedness-score={String(preparednessSortValue(raider))}
               data-vault-score={String(vaultScore.score)}
               data-vault-score-prev={String(raider.prevVaultScore ?? -1)}
+              data-recent-log={group.isRecentlyActive ? '1' : '0'}
+              data-last-log-seen={String(group.lastLogSeenAt ?? -1)}
+              title={lastLogSeenLabel(group.lastLogSeenAt)}
               class="raider-group"
             >
               {group.characters.map((character) => {
@@ -691,6 +739,7 @@ const mplusWinnerData = {
 
   const searchInput = document.querySelector<HTMLInputElement>('#raiders-search');
   const classFilter = document.getElementById('raiders-class-filter') as unknown as HTMLSelectElement | null;
+  const showAllToggle = document.getElementById('raiders-show-all') as unknown as HTMLInputElement | null;
   const mplusMetricSelect = document.getElementById('mplus-metric-select') as unknown as HTMLSelectElement | null;
   const mplusWinnerSelect = document.getElementById('spotlight-mplus-select') as unknown as HTMLSelectElement | null;
   const vaultMetricSelect = document.getElementById('vault-metric-select') as unknown as HTMLSelectElement | null;
@@ -791,6 +840,7 @@ const mplusWinnerData = {
 
     const query = searchInput?.value.trim().toLowerCase() ?? '';
     const selectedClass = classFilter?.value ?? 'all';
+    const showAll = showAllToggle?.checked ?? false;
 
     const visibleGroups = groupBodies.filter((group) => {
       const rowName = group.dataset.searchName ?? group.dataset.name ?? '';
@@ -799,8 +849,9 @@ const mplusWinnerData = {
 
       const matchesSearch = query.length === 0 || rowName.includes(query);
       const matchesClass = selectedClass === 'all' || rowClasses.includes(selectedClass);
+      const matchesActivity = showAll || group.dataset.recentLog === '1';
 
-      return matchesSearch && matchesClass;
+      return matchesSearch && matchesClass && matchesActivity;
     });
 
     const numericKeys = new Set(['equippedItemLevel', 'raidProgressKills', 'mythicScore', 'crestSort', 'preparednessScore']);
@@ -880,6 +931,10 @@ const mplusWinnerData = {
     applyFiltersAndSort();
   });
   classFilter?.addEventListener('change', () => {
+    currentPage = 1;
+    applyFiltersAndSort();
+  });
+  showAllToggle?.addEventListener('change', () => {
     currentPage = 1;
     applyFiltersAndSort();
   });
@@ -1139,6 +1194,38 @@ const mplusWinnerData = {
     color: #d8e2e8;
     padding: 0.5rem 0.6rem;
     font-size: 0.94rem;
+  }
+
+  .toggle-row {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.45rem;
+    border: 1px solid rgba(214, 176, 106, 0.4);
+    border-radius: 0.45rem;
+    background: rgba(7, 14, 22, 0.85);
+    color: #d8e2e8;
+    padding: 0.5rem 0.6rem;
+    font-size: 0.94rem;
+    text-transform: none;
+    letter-spacing: normal;
+    cursor: pointer;
+  }
+
+  .toggle-row input {
+    accent-color: #d6b06a;
+    cursor: pointer;
+    margin: 0;
+  }
+
+  .activity-note {
+    margin: 0.6rem 0 0;
+    color: #9fb2bf;
+    font-size: 0.85rem;
+  }
+
+  .activity-note strong {
+    color: #e7d9bc;
+    font-weight: 600;
   }
 
   .spotlights {
