@@ -5,6 +5,7 @@ import { refreshRaidersCache } from '../../../lib/raiders';
 import { refreshAttendanceCache } from '../../../lib/attendance';
 import { refreshProfessionsCache } from '../../../lib/professions-cache';
 import { warmTrinketTierCacheChunk } from '../../../lib/trinkets';
+import { FEATURE_FLAGS } from '../../../lib/feature-flags';
 
 export const GET: APIRoute = async ({ request }) => {
   const provided = request.headers.get('X-Cron-Secret');
@@ -24,13 +25,37 @@ export const GET: APIRoute = async ({ request }) => {
     ? Number.parseInt(url.searchParams.get('trinketBatchSize')!, 10)
     : undefined;
 
+  // Per-refresh timings: this endpoint runs against a 30s external timeout and
+  // has little headroom, so record how long each leg takes to make the slow one
+  // identifiable from a successful run's response.
+  const timings: Record<string, number> = {};
+  const timed = <T>(label: string, work: Promise<T>): Promise<T> => {
+    const startedAt = Date.now();
+    return work.finally(() => {
+      timings[label] = Date.now() - startedAt;
+    });
+  };
+
+  // Opt out of the slowest leg when it is scheduled separately against
+  // /api/cron/refresh-raiders, so it is not run twice.
+  const skipRaiders = url.searchParams.get('skipRaiders') === '1';
+
+  // Don't spend the cron budget refreshing caches for features that are on
+  // hiatus. Flipping the flag back in feature-flags.ts restores these with no
+  // other change, same as everywhere else these flags are honoured.
+  const runAttendance = FEATURE_FLAGS.attendance;
+  const runTools = FEATURE_FLAGS.tools;
+
+  const startedAt = Date.now();
   const [rosterResult, raidersResult, attendanceResult, professionsResult, trinketsResult] = await Promise.allSettled([
-    refreshRosterCache(undefined, rosterOptions),
-    refreshRaidersCache(),
-    refreshAttendanceCache(),
-    refreshProfessionsCache(undefined, { batchSize: professionBatchSize }),
-    warmTrinketTierCacheChunk({ batchSize: trinketBatchSize }),
+    timed('roster', refreshRosterCache(undefined, rosterOptions)),
+    skipRaiders ? Promise.resolve(null) : timed('raiders', refreshRaidersCache()),
+    runAttendance ? timed('attendance', refreshAttendanceCache()) : Promise.resolve(null),
+    runTools ? timed('professions', refreshProfessionsCache(undefined, { batchSize: professionBatchSize })) : Promise.resolve(null),
+    runTools ? timed('trinkets', warmTrinketTierCacheChunk({ batchSize: trinketBatchSize })) : Promise.resolve(null),
   ]);
+  timings.total = Date.now() - startedAt;
+  console.log('Cron refresh timings (ms)', timings);
 
   const failures: string[] = [];
   if (rosterResult.status === 'rejected') {
@@ -54,15 +79,17 @@ export const GET: APIRoute = async ({ request }) => {
     failures.push('trinkets');
   }
 
-  const attendanceSummary = await env.DB
-    .prepare(
-      `SELECT
-         COUNT(*) AS total_reports,
-        SUM(CASE WHEN (total_boss_kills + COALESCE(total_boss_wipes, 0)) > 0 THEN 1 ELSE 0 END) AS reports_with_kills,
-         MAX(synced_at) AS last_synced_at
-       FROM raid_attendance_reports`
-    )
-    .first<{ total_reports: number | null; reports_with_kills: number | null; last_synced_at: number | null }>();
+  const attendanceSummary = runAttendance
+    ? await env.DB
+        .prepare(
+          `SELECT
+             COUNT(*) AS total_reports,
+            SUM(CASE WHEN (total_boss_kills + COALESCE(total_boss_wipes, 0)) > 0 THEN 1 ELSE 0 END) AS reports_with_kills,
+             MAX(synced_at) AS last_synced_at
+           FROM raid_attendance_reports`
+        )
+        .first<{ total_reports: number | null; reports_with_kills: number | null; last_synced_at: number | null }>()
+    : null;
 
   return Response.json({
     success: failures.length === 0,
@@ -76,6 +103,13 @@ export const GET: APIRoute = async ({ request }) => {
       totalReports: Number(attendanceSummary?.total_reports ?? 0),
       reportsWithKills: Number(attendanceSummary?.reports_with_kills ?? 0),
       lastSyncedAt: attendanceSummary?.last_synced_at ?? null,
+    },
+    timingsMs: timings,
+    skipped: {
+      raiders: skipRaiders,
+      attendance: !runAttendance,
+      professions: !runTools,
+      trinkets: !runTools,
     },
     requestedRosterOptions: rosterOptions,
     requestedProfessionBatchSize: professionBatchSize,

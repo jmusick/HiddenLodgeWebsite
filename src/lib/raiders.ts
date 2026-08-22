@@ -17,6 +17,13 @@ const LOCALE = 'en_US';
 const REQUEST_CONCURRENCY = 3;
 const DETAILS_TTL_SECONDS = 12 * 60 * 60;
 const DETAIL_BATCH_SIZE = 6;
+/**
+ * Wall-clock budget for enriching raider details. The refresh cron is invoked by
+ * an external scheduler with a 30s timeout, and this is by far its slowest leg,
+ * so once the budget is spent the remaining candidates are skipped and picked up
+ * next tick instead of pushing the whole request past the timeout.
+ */
+const DETAIL_TIME_BUDGET_MS = 18_000;
 const PREPAREDNESS_HISTORY_WINDOW_SECONDS = 14 * 24 * 60 * 60; // 14 days (2 weeks)
 const PROGRESSION_HISTORY_WINDOW_SECONDS = 28 * 24 * 60 * 60; // 28 days (4 weeks)
 const VAULT_HISTORY_WINDOW_SECONDS = 28 * 24 * 60 * 60; // 28 days (4 weeks)
@@ -1788,10 +1795,24 @@ export async function refreshRaidersCache(
         weeklyResetTs,
         effectiveRaidProgressTierId
       );
+  const detailDeadline = Date.now() + DETAIL_TIME_BUDGET_MS;
+  let detailSkippedForTime = 0;
+
   const detailResults = await mapWithConcurrency(
     detailCandidates,
     REQUEST_CONCURRENCY,
     async (row) => {
+      // Skip rather than start new work once the budget is gone; whatever is
+      // skipped stays stalest-first and is picked up on the next tick.
+      if (Date.now() >= detailDeadline) {
+        detailSkippedForTime += 1;
+        return {
+          row,
+          detailed: null as RaiderRecord | null,
+          gear: null as RaiderGearItem[] | null,
+        };
+      }
+
       try {
         const { record, gear } = await enrichRaider(row, now, effectiveRaidProgressTierId);
         return {
@@ -2006,6 +2027,13 @@ export async function refreshRaidersCache(
   // Prune progression history older than 8 weeks
   const progCutoff = now - PROGRESSION_HISTORY_WINDOW_SECONDS;
   await pruneProgressionHistory(db, progCutoff);
+
+  if (detailSkippedForTime > 0) {
+    console.warn(
+      `Raider detail refresh hit its ${DETAIL_TIME_BUDGET_MS}ms budget; ` +
+        `skipped ${detailSkippedForTime} of ${detailCandidates.length} candidates (retried next tick).`
+    );
+  }
 
   return getCacheStatus(db);
 }
