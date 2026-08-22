@@ -220,10 +220,18 @@ export async function fetchItemIconUrls(
         if (!rawUrl) return;
 
         // Normalise to zamimg CDN — more reliably publicly accessible.
+        //
+        // Only for *named* icons though: zamimg serves files by icon name
+        // (inv_helm_leather_...), while Blizzard returns a numeric asset
+        // filename for plenty of items. Rewriting those to zamimg produces a
+        // guaranteed 404, so leave them pointing at Blizzard's render host,
+        // which serves them fine.
         const match = rawUrl.match(/\/icons\/\d+\/([^/?#]+)/);
-        const iconUrl = match
-          ? `https://wow.zamimg.com/images/wow/icons/large/${match[1]}`
-          : rawUrl;
+        const fileName = match?.[1];
+        const iconUrl =
+          fileName && !/^\d+\.\w+$/.test(fileName)
+            ? `https://wow.zamimg.com/images/wow/icons/large/${fileName}`
+            : rawUrl;
 
         result.set(itemId, iconUrl);
         itemIconMemoryCache.set(itemId, iconUrl);
