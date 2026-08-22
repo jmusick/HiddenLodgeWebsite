@@ -52,6 +52,7 @@ console.log(`Backfilling raider gear via ${baseUrl} (limit ${limit} per request)
 
 let totalProcessed = 0;
 let totalFailed = 0;
+let totalIcons = 0;
 let pass = 0;
 
 while (true) {
@@ -80,18 +81,24 @@ while (true) {
 
   totalProcessed += body.processed;
   totalFailed += body.failed;
+  totalIcons += body.iconsWarmed ?? 0;
   console.log(
-    `  pass ${pass}: +${body.processed} processed, ${body.failed} failed, ${body.remaining} remaining`
+    `  pass ${pass}: +${body.processed} raiders, +${body.iconsWarmed ?? 0} icons, ` +
+      `${body.failed} failed, ${body.remaining} raiders / ${body.iconsRemaining ?? 0} icons remaining`
   );
 
   if (body.done) break;
 
-  // No forward progress means every remaining raider is failing (bad token,
-  // unresolvable characters); stop rather than loop forever.
-  if (body.processed === 0) {
-    console.error(`Stopping: no progress on pass ${pass} with ${body.remaining} remaining.`);
+  // No forward progress on either front means the rest are unresolvable (bad
+  // token, missing characters, items neither Blizzard nor Wowhead knows);
+  // stop rather than loop forever.
+  if (body.processed === 0 && (body.iconsWarmed ?? 0) === 0) {
+    console.error(
+      `Stopping: no progress on pass ${pass} ` +
+        `(${body.remaining} raiders / ${body.iconsRemaining ?? 0} icons still unresolved).`
+    );
     break;
   }
 }
 
-console.log(`Done. ${totalProcessed} raiders backfilled, ${totalFailed} failed.`);
+console.log(`Done. ${totalProcessed} raiders backfilled, ${totalIcons} icons warmed, ${totalFailed} failed.`);

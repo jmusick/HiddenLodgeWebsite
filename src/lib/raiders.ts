@@ -1309,8 +1309,11 @@ async function upsertRaiderGearCache(
   gear: RaiderGearItem[],
   syncedAt: number
 ): Promise<void> {
-  for (const item of gear) {
-    await db
+  // Batched: 16 slots per raider as one round-trip instead of 16 sequential
+  // ones. The refresh cron runs against a 30s external timeout, so the
+  // per-statement round-trips here were enough to push it over.
+  const statements = gear.map((item) =>
+    db
       .prepare(
         `INSERT INTO raider_gear_cache (
            blizzard_char_id, slot_key, item_id, item_name, item_level,
@@ -1347,7 +1350,10 @@ async function upsertRaiderGearCache(
         item.canGem ? 1 : 0,
         syncedAt
       )
-      .run();
+  );
+
+  if (statements.length > 0) {
+    await db.batch(statements);
   }
 }
 
@@ -1966,24 +1972,15 @@ export async function refreshRaidersCache(
     if (gearItems) {
       // Isolated so a gear-cache problem (e.g. migration 0066 not yet applied
       // to this database) can never break the raider metrics refresh itself.
+      //
+      // Icon warming deliberately does NOT happen here: resolving item icons
+      // goes out to the Blizzard media API (with a Wowhead XML fallback) and
+      // pushed this loop past the cron's 30s external timeout. Icons are warmed
+      // by /api/cron/backfill-gear instead, which runs on its own schedule.
       try {
         await upsertRaiderGearCache(db, source.blizzard_char_id, gearItems, now);
       } catch (error) {
         console.error('Raider gear cache write failed', { charId: source.blizzard_char_id, error });
-      }
-
-      // Warm the shared item icon cache a raider at a time (~16 items) so the
-      // gear summary page can render icons from a plain DB read instead of
-      // resolving hundreds of them through the media API on every page load.
-      try {
-        await fetchItemIconUrls(
-          db,
-          gearItems.map((item) => item.itemId ?? 0),
-          env.BLIZZARD_CLIENT_ID,
-          env.BLIZZARD_CLIENT_SECRET
-        );
-      } catch (error) {
-        console.error('Item icon cache warm failed', { charId: source.blizzard_char_id, error });
       }
     }
 
@@ -2077,7 +2074,51 @@ export interface GearBackfillResult {
   remaining: number;
   processed: number;
   failed: number;
+  iconsWarmed: number;
+  iconsRemaining: number;
   done: boolean;
+}
+
+/**
+ * Resolves icons for cached gear items that have no item_icon_cache row yet.
+ *
+ * The refresh cron deliberately does not do this (the media API calls pushed it
+ * past its 30s timeout), so this is where gear written by the cron gets its
+ * icons. Bounded per call so it can be looped without running long.
+ */
+async function warmMissingGearIcons(db: D1Database, limit: number): Promise<{ warmed: number; remaining: number }> {
+  const missingRows = await db
+    .prepare(
+      `SELECT DISTINCT g.item_id
+       FROM raider_gear_cache g
+       LEFT JOIN item_icon_cache i ON i.item_id = g.item_id
+       WHERE g.item_id IS NOT NULL AND i.item_id IS NULL
+       LIMIT ?`
+    )
+    .bind(limit)
+    .all<{ item_id: number }>();
+
+  const itemIds = (missingRows.results ?? []).map((r) => r.item_id);
+  if (itemIds.length === 0) return { warmed: 0, remaining: 0 };
+
+  let warmed = 0;
+  try {
+    const icons = await fetchItemIconUrls(db, itemIds, env.BLIZZARD_CLIENT_ID, env.BLIZZARD_CLIENT_SECRET);
+    warmed = icons.size;
+  } catch (error) {
+    console.error('Gear icon warm failed', error);
+  }
+
+  const remainingRow = await db
+    .prepare(
+      `SELECT COUNT(DISTINCT g.item_id) AS remaining
+       FROM raider_gear_cache g
+       LEFT JOIN item_icon_cache i ON i.item_id = g.item_id
+       WHERE g.item_id IS NOT NULL AND i.item_id IS NULL`
+    )
+    .first<{ remaining: number }>();
+
+  return { warmed, remaining: Number(remainingRow?.remaining ?? 0) };
 }
 
 /**
@@ -2104,7 +2145,21 @@ export async function backfillRaiderGear(
     )
     .first<{ pending: number }>();
   const pending = Number(pendingRow?.pending ?? 0);
-  if (pending === 0) return { remaining: 0, processed: 0, failed: 0, done: true };
+
+  // Icon warming runs on every call, not only once all gear is cached: a single
+  // permanently-unresolvable character would otherwise keep `pending` above zero
+  // forever and starve the icon phase completely.
+  if (pending === 0) {
+    const icons = await warmMissingGearIcons(db, limit);
+    return {
+      remaining: 0,
+      processed: 0,
+      failed: 0,
+      iconsWarmed: icons.warmed,
+      iconsRemaining: icons.remaining,
+      done: icons.remaining === 0,
+    };
+  }
 
   const candidates = await db
     .prepare(
@@ -2120,12 +2175,13 @@ export async function backfillRaiderGear(
   const rows = candidates.results ?? [];
   const accessToken = await getBlizzardAppAccessToken();
   if (!accessToken || rows.length === 0) {
-    return { remaining: pending, processed: 0, failed: rows.length, done: false };
+    return { remaining: pending, processed: 0, failed: rows.length, iconsWarmed: 0, iconsRemaining: 0, done: false };
   }
 
   const now = Math.floor(Date.now() / 1000);
   let processed = 0;
   let failed = 0;
+  let iconsWarmed = 0;
 
   const results = await mapWithConcurrency(rows, REQUEST_CONCURRENCY, async (row) => {
     try {
@@ -2150,12 +2206,13 @@ export async function backfillRaiderGear(
       await upsertRaiderGearCache(db, row.blizzard_char_id, gear, now);
       processed += 1;
       try {
-        await fetchItemIconUrls(
+        const icons = await fetchItemIconUrls(
           db,
           gear.map((item) => item.itemId ?? 0),
           env.BLIZZARD_CLIENT_ID,
           env.BLIZZARD_CLIENT_SECRET
         );
+        iconsWarmed += icons.size;
       } catch (error) {
         console.error('Gear backfill icon warm failed', { charId: row.blizzard_char_id, error });
       }
@@ -2166,7 +2223,19 @@ export async function backfillRaiderGear(
   }
 
   const remaining = Math.max(0, pending - processed);
-  return { remaining, processed, failed, done: remaining === 0 };
+
+  // Always give the icon phase a turn, so a batch where every raider failed
+  // still makes forward progress instead of stalling the whole backfill.
+  const icons = await warmMissingGearIcons(db, limit);
+
+  return {
+    remaining,
+    processed,
+    failed,
+    iconsWarmed: iconsWarmed + icons.warmed,
+    iconsRemaining: icons.remaining,
+    done: remaining === 0 && icons.remaining === 0,
+  };
 }
 
 export type RaiderGearSummaryItem = RaiderGearItem & { iconUrl: string | null };
