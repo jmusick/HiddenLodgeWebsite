@@ -9,6 +9,7 @@ import { getBlizzardAppAccessToken as getSharedBlizzardAppAccessToken } from './
 import { fetchBlizzardJsonWithRetry } from './blizzard-fetch';
 import { getCharacterMythicPlusRunCounts, fetchStatisticsWeeklyTotal, type KeystoneRun } from './raider-io';
 import { getUsWeeklyResetTimestamp, WEEK_SECONDS, SEASON_2_START_TIMESTAMP } from './wow-reset';
+import { fetchItemIconUrls } from './upgrades';
 
 const API_BASE = 'https://us.api.blizzard.com';
 const PROFILE_NAMESPACE = 'profile-us';
@@ -526,6 +527,69 @@ function isEnchantableItem(slotType: string, item: BlizzardEquippedItem | null |
   return false;
 }
 
+function mapEquippedItemsToGearItems(items: BlizzardEquippedItem[]): RaiderGearItem[] {
+  const bySlot = new Map<string, BlizzardEquippedItem>();
+  for (const item of items) {
+    const slotType = (item.slot?.type ?? '').toUpperCase();
+    if (!slotType) continue;
+    bySlot.set(slotType, item);
+  }
+
+  return GEAR_SLOT_ORDER.map((slotKey) => {
+    const item = bySlot.get(slotKey);
+    if (!item) {
+      return {
+        slotKey,
+        slotLabel: gearSlotLabel(slotKey),
+        itemName: null,
+        itemId: null,
+        itemLevel: null,
+        quality: null,
+        qualityColor: '#90a4b2',
+        enchantments: [],
+        gems: [],
+        stats: [],
+        socketsFilled: 0,
+        socketsTotal: 0,
+        canEnchant: false,
+        canGem: false,
+      } satisfies RaiderGearItem;
+    }
+
+    const sockets = item.sockets ?? [];
+    const socketsTotal = sockets.length;
+    const socketsFilled = sockets.filter((socket) => socket.item || socket.media || socket.display_string).length;
+    const enchantments = (item.enchantments ?? [])
+      .map((entry) => formatEnchantmentLabel(entry?.display_string ?? ''))
+      .filter((text): text is string => Boolean(text && text.length > 0));
+
+    const gems = sockets
+      .map((socket) => (socket.item?.name ?? socket.display_string ?? '').trim())
+      .filter((text) => text.length > 0);
+
+    const stats = (item.stats ?? [])
+      .map((entry) => formatItemStat(entry))
+      .filter((text): text is string => Boolean(text));
+
+    return {
+      slotKey,
+      slotLabel: gearSlotLabel(slotKey),
+      itemName: item.name ?? null,
+      itemId: item.item?.id ?? null,
+      itemLevel: item.level?.value ?? null,
+      quality: item.quality?.type ?? null,
+      qualityColor: itemQualityColor(item.quality?.type),
+      enchantments,
+      gems,
+      stats,
+      socketsFilled,
+      socketsTotal,
+      canEnchant: isEnchantableItem(slotKey, item),
+      canGem: socketsTotal > 0,
+    } satisfies RaiderGearItem;
+  });
+}
+
 export interface RaiderRecord {
   blizzardCharId: number;
   userId: number | null;
@@ -933,7 +997,11 @@ function parseRaidVaultPayload(label: string | null): { weeklyBossKills: number;
   }
 }
 
-async function enrichRaider(row: RaiderSourceRow, now: number, raidProgressTarget: string): Promise<RaiderRecord> {
+async function enrichRaider(
+  row: RaiderSourceRow,
+  now: number,
+  raidProgressTarget: string
+): Promise<{ record: RaiderRecord; gear: RaiderGearItem[] | null }> {
   const baseRecord: RaiderRecord = {
     blizzardCharId: row.blizzard_char_id,
     name: row.name,
@@ -988,7 +1056,7 @@ async function enrichRaider(row: RaiderSourceRow, now: number, raidProgressTarge
 
   const accessToken = await getBlizzardAppAccessToken();
   if (!accessToken) {
-    return { ...baseRecord, authState: 'unavailable' };
+    return { record: { ...baseRecord, authState: 'unavailable' }, gear: null };
   }
 
   const [summary, equipment, mythicProfile, achievementStatistics, raidEncounters, mythicPlusRunCount] = await Promise.all([
@@ -1016,10 +1084,11 @@ async function enrichRaider(row: RaiderSourceRow, now: number, raidProgressTarge
   ]);
 
   if (!summary || !equipment) {
-    return { ...baseRecord, authState: 'unavailable' };
+    return { record: { ...baseRecord, authState: 'unavailable' }, gear: null };
   }
 
   const equippedItems = equipment.equipped_items ?? [];
+  const gearItems = mapEquippedItemsToGearItems(equippedItems);
   const socketCounts = countSockets(equippedItems);
   const enchantCounts = countEnchants(equippedItems);
   const crestCounts = extractCrestCounts(achievementStatistics);
@@ -1028,7 +1097,7 @@ async function enrichRaider(row: RaiderSourceRow, now: number, raidProgressTarge
   const raidProgress = extractRaidProgress(raidEncounters, raidProgressTarget);
   const totalUpgradesMissing = computeTotalUpgradesMissing(equippedItems);
 
-  return {
+  const record: RaiderRecord = {
     ...baseRecord,
     authState: 'ready',
     lastCheckedAt: now,
@@ -1071,6 +1140,8 @@ async function enrichRaider(row: RaiderSourceRow, now: number, raidProgressTarge
     avg30dEnchantedSlots: null,
     avg30dEnchantableSlots: null,
   };
+
+  return { record, gear: gearItems };
 }
 
 async function mapWithConcurrency<TInput, TOutput>(
@@ -1230,6 +1301,54 @@ async function listCachedRaiders(db: D1Database): Promise<RaiderRecord[]> {
     attendanceBenchBonusPoints: 0,
     prevVaultScore: null,
   }));
+}
+
+async function upsertRaiderGearCache(
+  db: D1Database,
+  blizzardCharId: number,
+  gear: RaiderGearItem[],
+  syncedAt: number
+): Promise<void> {
+  for (const item of gear) {
+    await db
+      .prepare(
+        `INSERT INTO raider_gear_cache (
+           blizzard_char_id, slot_key, item_id, item_name, item_level,
+           quality, quality_color, enchantments_json, gems_json,
+           sockets_filled, sockets_total, can_enchant, can_gem, synced_at
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT (blizzard_char_id, slot_key) DO UPDATE SET
+           item_id = excluded.item_id,
+           item_name = excluded.item_name,
+           item_level = excluded.item_level,
+           quality = excluded.quality,
+           quality_color = excluded.quality_color,
+           enchantments_json = excluded.enchantments_json,
+           gems_json = excluded.gems_json,
+           sockets_filled = excluded.sockets_filled,
+           sockets_total = excluded.sockets_total,
+           can_enchant = excluded.can_enchant,
+           can_gem = excluded.can_gem,
+           synced_at = excluded.synced_at`
+      )
+      .bind(
+        blizzardCharId,
+        item.slotKey,
+        item.itemId,
+        item.itemName,
+        item.itemLevel,
+        item.quality,
+        item.qualityColor,
+        JSON.stringify(item.enchantments),
+        JSON.stringify(item.gems),
+        item.socketsFilled,
+        item.socketsTotal,
+        item.canEnchant ? 1 : 0,
+        item.canGem ? 1 : 0,
+        syncedAt
+      )
+      .run();
+  }
 }
 
 async function recordPreparednessHistory(db: D1Database, raider: RaiderRecord, now: number): Promise<void> {
@@ -1668,9 +1787,11 @@ export async function refreshRaidersCache(
     REQUEST_CONCURRENCY,
     async (row) => {
       try {
+        const { record, gear } = await enrichRaider(row, now, effectiveRaidProgressTierId);
         return {
           row,
-          detailed: await enrichRaider(row, now, effectiveRaidProgressTierId),
+          detailed: record,
+          gear,
         };
       } catch (error) {
         console.error('Raider detail enrichment failed', {
@@ -1682,6 +1803,7 @@ export async function refreshRaidersCache(
         return {
           row,
           detailed: null as RaiderRecord | null,
+          gear: null as RaiderGearItem[] | null,
         };
       }
     }
@@ -1722,6 +1844,7 @@ export async function refreshRaidersCache(
     const source = detailCandidates[i];
     const detailed = detailResults[i]?.detailed ?? null;
     if (!detailed) continue;
+    const gearItems = detailResults[i]?.gear ?? null;
 
     // Accumulate keystones from this refresh into the persistent keystones table,
     // then count weekly/season totals directly from that table.
@@ -1840,6 +1963,24 @@ export async function refreshRaidersCache(
       )
       .run();
 
+    if (gearItems) {
+      await upsertRaiderGearCache(db, source.blizzard_char_id, gearItems, now);
+
+      // Warm the shared item icon cache a raider at a time (~16 items) so the
+      // gear summary page can render icons from a plain DB read instead of
+      // resolving hundreds of them through the media API on every page load.
+      try {
+        await fetchItemIconUrls(
+          db,
+          gearItems.map((item) => item.itemId ?? 0),
+          env.BLIZZARD_CLIENT_ID,
+          env.BLIZZARD_CLIENT_SECRET
+        );
+      } catch (error) {
+        console.error('Item icon cache warm failed', { charId: source.blizzard_char_id, error });
+      }
+    }
+
     // Record histories independently so one schema drift does not block the other.
     await recordPreparednessHistory(db, detailed, now);
     await recordProgressionHistory(db, detailed, now);
@@ -1923,68 +2064,128 @@ export async function getRaiderGear(charId: number, dbInput?: D1Database): Promi
 
   const url = buildCharacterUrl(row.realm_slug, row.name, '/equipment');
   const equipment = await fetchBlizzardJsonWithRetry<BlizzardEquipmentResponse>(url, accessToken);
-  const items = equipment?.equipped_items ?? [];
+  return mapEquippedItemsToGearItems(equipment?.equipped_items ?? []);
+}
 
-  const bySlot = new Map<string, BlizzardEquippedItem>();
-  for (const item of items) {
-    const slotType = (item.slot?.type ?? '').toUpperCase();
-    if (!slotType) continue;
-    bySlot.set(slotType, item);
+export type RaiderGearSummaryItem = RaiderGearItem & { iconUrl: string | null };
+
+export interface RaiderGearSummaryRow {
+  blizzardCharId: number;
+  name: string;
+  realm: string;
+  className: string;
+  gearBySlot: Map<string, RaiderGearSummaryItem>;
+  gearSyncedAt: number | null;
+}
+
+/**
+ * Reads cached item icons for the given ids. Read-only on purpose: the gear
+ * summary page renders the whole roster at once, so resolving misses through
+ * the Blizzard media API here would mean hundreds of parallel fetches per page
+ * load. The cache is warmed a tick at a time by the raider details refresh
+ * instead (see refreshRaidersCache).
+ */
+async function readCachedItemIcons(db: D1Database, itemIds: number[]): Promise<Map<number, string>> {
+  const icons = new Map<number, string>();
+  const uniqueIds = [...new Set(itemIds.filter((id) => Number.isFinite(id) && id > 0))];
+  if (uniqueIds.length === 0) return icons;
+
+  const hasIconTable = await db
+    .prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='item_icon_cache' LIMIT 1")
+    .first<{ '1': number }>();
+  if (!hasIconTable) return icons;
+
+  // D1 limits bound parameters per query — chunk the lookup.
+  const CHUNK = 90;
+  for (let i = 0; i < uniqueIds.length; i += CHUNK) {
+    const chunk = uniqueIds.slice(i, i + CHUNK);
+    const placeholders = chunk.map(() => '?').join(',');
+    const rows = await db
+      .prepare(`SELECT item_id, icon_url FROM item_icon_cache WHERE item_id IN (${placeholders})`)
+      .bind(...chunk)
+      .all<{ item_id: number; icon_url: string }>();
+    for (const row of rows.results ?? []) {
+      icons.set(row.item_id, row.icon_url);
+    }
   }
 
-  return GEAR_SLOT_ORDER.map((slotKey) => {
-    const item = bySlot.get(slotKey);
-    if (!item) {
-      return {
-        slotKey,
-        slotLabel: gearSlotLabel(slotKey),
-        itemName: null,
-        itemId: null,
-        itemLevel: null,
-        quality: null,
-        qualityColor: '#90a4b2',
-        enchantments: [],
-        gems: [],
-        stats: [],
-        socketsFilled: 0,
-        socketsTotal: 0,
-        canEnchant: false,
-        canGem: false,
-      } satisfies RaiderGearItem;
-    }
+  return icons;
+}
 
-    const sockets = item.sockets ?? [];
-    const socketsTotal = sockets.length;
-    const socketsFilled = sockets.filter((socket) => socket.item || socket.media || socket.display_string).length;
-    const enchantments = (item.enchantments ?? [])
-      .map((entry) => formatEnchantmentLabel(entry?.display_string ?? ''))
-      .filter((text): text is string => Boolean(text && text.length > 0));
+export async function getAllRaidersGear(dbInput?: D1Database): Promise<RaiderGearSummaryRow[]> {
+  const db = getDatabase(dbInput);
 
-    const gems = sockets
-      .map((socket) => (socket.item?.name ?? socket.display_string ?? '').trim())
-      .filter((text) => text.length > 0);
+  const raiderRows = await db
+    .prepare(
+      `SELECT rmc.blizzard_char_id, rmc.name, rmc.realm, rmc.class_name
+       FROM roster_members_cache rmc
+       WHERE rmc.level = 90
+       ORDER BY rmc.name ASC`
+    )
+    .all<{ blizzard_char_id: number; name: string; realm: string; class_name: string }>();
 
-    const stats = (item.stats ?? [])
-      .map((entry) => formatItemStat(entry))
-      .filter((text): text is string => Boolean(text));
+  const raiders = raiderRows.results ?? [];
+  if (raiders.length === 0) return [];
 
-    return {
-      slotKey,
-      slotLabel: gearSlotLabel(slotKey),
-      itemName: item.name ?? null,
-      itemId: item.item?.id ?? null,
-      itemLevel: item.level?.value ?? null,
-      quality: item.quality?.type ?? null,
-      qualityColor: itemQualityColor(item.quality?.type),
-      enchantments,
-      gems,
-      stats,
-      socketsFilled,
-      socketsTotal,
-      canEnchant: isEnchantableItem(slotKey, item),
-      canGem: socketsTotal > 0,
-    } satisfies RaiderGearItem;
-  });
+  const gearRows = await db
+    .prepare(`SELECT * FROM raider_gear_cache`)
+    .all<{
+      blizzard_char_id: number;
+      slot_key: string;
+      item_id: number | null;
+      item_name: string | null;
+      item_level: number | null;
+      quality: string | null;
+      quality_color: string;
+      enchantments_json: string;
+      gems_json: string;
+      sockets_filled: number;
+      sockets_total: number;
+      can_enchant: number;
+      can_gem: number;
+      synced_at: number;
+    }>();
+
+  const cachedRows = gearRows.results ?? [];
+  const iconsByItemId = await readCachedItemIcons(
+    db,
+    cachedRows.map((row) => row.item_id ?? 0)
+  );
+
+  const gearByChar = new Map<number, Map<string, RaiderGearSummaryItem>>();
+  const syncedAtByChar = new Map<number, number>();
+  for (const row of cachedRows) {
+    const slotMap = gearByChar.get(row.blizzard_char_id) ?? new Map<string, RaiderGearSummaryItem>();
+    slotMap.set(row.slot_key, {
+      slotKey: row.slot_key,
+      slotLabel: gearSlotLabel(row.slot_key),
+      itemName: row.item_name,
+      itemId: row.item_id,
+      itemLevel: row.item_level,
+      quality: row.quality,
+      qualityColor: row.quality_color,
+      enchantments: JSON.parse(row.enchantments_json || '[]'),
+      gems: JSON.parse(row.gems_json || '[]'),
+      stats: [],
+      socketsFilled: row.sockets_filled,
+      socketsTotal: row.sockets_total,
+      canEnchant: row.can_enchant === 1,
+      canGem: row.can_gem === 1,
+      iconUrl: row.item_id ? iconsByItemId.get(row.item_id) ?? null : null,
+    });
+    gearByChar.set(row.blizzard_char_id, slotMap);
+    const prevSync = syncedAtByChar.get(row.blizzard_char_id) ?? 0;
+    syncedAtByChar.set(row.blizzard_char_id, Math.max(prevSync, row.synced_at));
+  }
+
+  return raiders.map((r) => ({
+    blizzardCharId: r.blizzard_char_id,
+    name: r.name,
+    realm: r.realm,
+    className: r.class_name,
+    gearBySlot: gearByChar.get(r.blizzard_char_id) ?? new Map(),
+    gearSyncedAt: syncedAtByChar.get(r.blizzard_char_id) ?? null,
+  }));
 }
 
 export interface PreparednessHistoryRow {

@@ -1,0 +1,634 @@
+---
+export const prerender = false;
+
+import Layout from '../../layouts/Layout.astro';
+import { Icon } from 'astro-icon/components';
+import { classColor } from '../../lib/wow';
+import { getAllRaidersGear, type RaiderGearSummaryItem } from '../../lib/raiders';
+
+const FALLBACK_ICON = 'https://wow.zamimg.com/images/wow/icons/large/inv_misc_questionmark.jpg';
+
+const GEAR_SLOT_ORDER = [
+  'HEAD', 'NECK', 'SHOULDER', 'BACK', 'CHEST', 'WRIST', 'HANDS', 'WAIST', 'LEGS', 'FEET',
+  'FINGER_1', 'FINGER_2', 'TRINKET_1', 'TRINKET_2', 'MAIN_HAND', 'OFF_HAND',
+] as const;
+
+const GEAR_SLOT_LABELS: Record<string, string> = {
+  HEAD: 'Head',
+  NECK: 'Neck',
+  SHOULDER: 'Shoulder',
+  BACK: 'Back',
+  CHEST: 'Chest',
+  WRIST: 'Wrist',
+  HANDS: 'Hands',
+  WAIST: 'Waist',
+  LEGS: 'Legs',
+  FEET: 'Feet',
+  FINGER_1: 'Finger 1',
+  FINGER_2: 'Finger 2',
+  TRINKET_1: 'Trinket 1',
+  TRINKET_2: 'Trinket 2',
+  MAIN_HAND: 'Main Hand',
+  OFF_HAND: 'Off Hand',
+};
+
+// Icon cells are only ~34px wide; full slot names would force the columns much
+// wider than their content. Full names still show in each cell's tooltip.
+const GEAR_SLOT_SHORT_LABELS: Record<string, string> = {
+  HEAD: 'Head',
+  NECK: 'Neck',
+  SHOULDER: 'Shld',
+  BACK: 'Back',
+  CHEST: 'Chest',
+  WRIST: 'Wrist',
+  HANDS: 'Hands',
+  WAIST: 'Waist',
+  LEGS: 'Legs',
+  FEET: 'Feet',
+  FINGER_1: 'Ring 1',
+  FINGER_2: 'Ring 2',
+  TRINKET_1: 'Trk 1',
+  TRINKET_2: 'Trk 2',
+  MAIN_HAND: 'MH',
+  OFF_HAND: 'OH',
+};
+
+const raiders = await getAllRaidersGear();
+
+const classOptions = [...new Set(raiders.map((r) => r.className))].sort((a, b) => a.localeCompare(b));
+
+function enchantAffixState(item: RaiderGearSummaryItem | undefined): { missing: boolean; tooltip: string } {
+  if (!item?.itemName || !item.canEnchant) {
+    return { missing: false, tooltip: 'Enchant not available for this item' };
+  }
+  if (item.enchantments.length > 0) {
+    return { missing: false, tooltip: item.enchantments[0]?.trim() || 'Enchant applied' };
+  }
+  return { missing: true, tooltip: 'Missing enchant' };
+}
+
+function gemAffixState(item: RaiderGearSummaryItem | undefined): { missing: boolean; tooltip: string } {
+  if (!item?.itemName || !item.canGem) {
+    return { missing: false, tooltip: 'No gem socket on this item' };
+  }
+  if (item.gems.length > 0) {
+    return { missing: false, tooltip: item.gems.join(' | ') };
+  }
+  return { missing: true, tooltip: 'Missing gems' };
+}
+
+const rows = raiders.map((r) => {
+  const dataAttrs: Record<string, string> = {
+    'data-name': r.name.toLowerCase(),
+    'data-class': r.className,
+  };
+  for (const slotKey of GEAR_SLOT_ORDER) {
+    const item = r.gearBySlot.get(slotKey);
+    dataAttrs[`data-slot-${slotKey.toLowerCase()}`] = String(item?.itemLevel ?? -1);
+  }
+
+  const cells = GEAR_SLOT_ORDER.map((slotKey) => {
+    const item = r.gearBySlot.get(slotKey);
+    const enchantState = enchantAffixState(item);
+    const gemState = gemAffixState(item);
+    const slotLabel = GEAR_SLOT_LABELS[slotKey];
+
+    // Native title as a fallback for when the Wowhead tooltip script is blocked.
+    const titleParts = item?.itemName
+      ? [
+          `${slotLabel}: ${item.itemName}`,
+          `iLvl ${item.itemLevel ?? '—'}`,
+          ...(item.canEnchant ? [enchantState.missing ? 'Missing enchant' : `Enchant: ${enchantState.tooltip}`] : []),
+          ...(item.canGem ? [gemState.missing ? 'Missing gems' : `Gems: ${gemState.tooltip}`] : []),
+        ]
+      : [`${slotLabel}: empty`];
+
+    return {
+      slotKey,
+      item,
+      wowhead: item?.itemId ? `https://www.wowhead.com/item=${item.itemId}` : null,
+      iconUrl: item?.iconUrl ?? FALLBACK_ICON,
+      title: titleParts.join(' · '),
+    };
+  });
+
+  return {
+    blizzardCharId: r.blizzardCharId,
+    name: r.name,
+    className: r.className,
+    color: classColor(r.className),
+    syncedTitle: r.gearSyncedAt
+      ? `Gear last synced ${new Date(r.gearSyncedAt * 1000).toLocaleString()}`
+      : 'Gear not synced yet',
+    dataAttrs,
+    cells,
+  };
+});
+---
+
+<Layout title="The Hidden Lodge | Gear Summary" description="Full roster gear grid sourced from the raider details cache.">
+  <section>
+    <a href="/raiders" class="back-link">
+      <Icon name="lucide:arrow-left" aria-hidden="true" />
+      Back to Raiders
+    </a>
+    <h1 class="title-row"><Icon name="lucide:swords" class="title-icon" aria-hidden="true" />Gear Summary</h1>
+    <p class="panel-text">
+      Rows populate gradually as the raider-details sync (roughly every 12 hours) catches each character —
+      a dash means that raider hasn't synced gear data yet.
+    </p>
+  </section>
+
+  <section class="panel">
+    <h2 class="title-row"><Icon name="lucide:list" class="title-icon" aria-hidden="true" />Raiders ({raiders.length})</h2>
+    <div class="controls" aria-label="Gear summary controls">
+      <label>
+        Search
+        <input id="gear-search" type="search" placeholder="Character name..." autocomplete="off" />
+      </label>
+      <label>
+        Class
+        <select id="gear-class-filter">
+          <option value="all">All Classes</option>
+          {classOptions.map((className) => <option value={className}>{className}</option>)}
+        </select>
+      </label>
+    </div>
+
+    <div class="table-wrap">
+      <div class="pagination-controls">
+        <label>
+          Per page
+          <select id="gear-page-size">
+            <option value="25" selected>25</option>
+            <option value="50">50</option>
+            <option value="100">100</option>
+            <option value="200">200</option>
+          </select>
+        </label>
+        <button id="gear-prev-page" type="button">Prev</button>
+        <span id="gear-page-info">Page 1</span>
+        <button id="gear-next-page" type="button">Next</button>
+        <p id="gear-count" class="results-count" aria-live="polite">Showing {raiders.length} raiders</p>
+      </div>
+      <table class="gear-table" id="gear-table">
+        <thead>
+          <tr>
+            <th><button class="sort-btn" type="button" data-sort-key="name">Name</button></th>
+            <th><button class="sort-btn" type="button" data-sort-key="class">Class</button></th>
+            {GEAR_SLOT_ORDER.map((slotKey) => (
+              <th class="slot-col">
+                <button
+                  class="sort-btn"
+                  type="button"
+                  data-sort-key={`slot-${slotKey}`}
+                  title={`Sort by ${GEAR_SLOT_LABELS[slotKey]} item level`}
+                >{GEAR_SLOT_SHORT_LABELS[slotKey]}</button>
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((row) => (
+            <tr {...row.dataAttrs} title={row.syncedTitle}>
+              <td>
+                <a href={`/raiders/${row.blizzardCharId}`} class="name-link">
+                  <span class="name-pill" style={`--class-color: ${row.color}`}>{row.name}</span>
+                </a>
+              </td>
+              <td>{row.className}</td>
+              {row.cells.map(({ item, wowhead, iconUrl, title }) => (
+                <td class="gear-cell">
+                  {item?.itemName ? (
+                    <a
+                      href={wowhead ?? '#'}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      class="gear-icon-link"
+                      style={`--quality-color: ${item.qualityColor}`}
+                      title={title}
+                      aria-label={title}
+                    >
+                      <img
+                        src={iconUrl}
+                        alt={item.itemName}
+                        class="gear-icon"
+                        loading="lazy"
+                        decoding="async"
+                        onerror={`this.src='${FALLBACK_ICON}'`}
+                      />
+                      <span class="gear-icon-ilvl">{item.itemLevel ?? '—'}</span>
+                    </a>
+                  ) : (
+                    <span class="gear-empty">—</span>
+                  )}
+                </td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  </section>
+</Layout>
+
+<script is:inline>
+  window.whTooltips = {
+    colorLinks: true,
+    iconizeLinks: false,
+    renameLinks: false,
+  };
+</script>
+<script is:inline src="https://wow.zamimg.com/js/tooltips.js"></script>
+
+<script>
+  const pageSizeSelect = document.querySelector<HTMLSelectElement>('#gear-page-size');
+  const prevPageBtn = document.querySelector<HTMLButtonElement>('#gear-prev-page');
+  const nextPageBtn = document.querySelector<HTMLButtonElement>('#gear-next-page');
+  const pageInfo = document.querySelector<HTMLSpanElement>('#gear-page-info');
+
+  let currentPage = 1;
+  let pageSize = 25;
+
+  const searchInput = document.querySelector<HTMLInputElement>('#gear-search');
+  const classFilter = document.querySelector<HTMLSelectElement>('#gear-class-filter');
+  const countLabel = document.querySelector<HTMLParagraphElement>('#gear-count');
+  const table = document.querySelector<HTMLTableElement>('#gear-table');
+  const tableBody = table?.querySelector('tbody');
+  const sortButtons = [...document.querySelectorAll<HTMLButtonElement>('.sort-btn')];
+
+  let sortKey = 'name';
+  let sortDirection = 'asc';
+
+  const compareText = (a: string, b: string) => a.localeCompare(b, undefined, { sensitivity: 'base' });
+
+  function applyFiltersAndSort() {
+    if (!tableBody) return;
+
+    const query = searchInput?.value.trim().toLowerCase() ?? '';
+    const selectedClass = classFilter?.value ?? 'all';
+
+    const rows = [...tableBody.querySelectorAll('tr')];
+    const visibleRows = rows.filter((row) => {
+      const rowName = (row as HTMLElement).dataset.name ?? '';
+      const rowClass = (row as HTMLElement).dataset.class ?? '';
+
+      const matchesSearch = query.length === 0 || rowName.includes(query);
+      const matchesClass = selectedClass === 'all' || rowClass === selectedClass;
+
+      return matchesSearch && matchesClass;
+    });
+
+    rows.forEach((row) => {
+      (row as HTMLElement).hidden = !visibleRows.includes(row);
+    });
+
+    visibleRows.sort((rowA, rowB) => {
+      let order = 0;
+      if (sortKey === 'class') {
+        order = compareText((rowA as HTMLElement).dataset.class ?? '', (rowB as HTMLElement).dataset.class ?? '');
+      } else if (sortKey.startsWith('slot-')) {
+        const slotAttr = `data-slot-${sortKey.slice(5).toLowerCase()}`;
+        const valueA = Number(rowA.getAttribute(slotAttr) ?? -1);
+        const valueB = Number(rowB.getAttribute(slotAttr) ?? -1);
+        order = valueA - valueB;
+      } else {
+        order = compareText((rowA as HTMLElement).dataset.name ?? '', (rowB as HTMLElement).dataset.name ?? '');
+      }
+
+      return sortDirection === 'asc' ? order : order * -1;
+    });
+
+    const totalPages = Math.max(1, Math.ceil(visibleRows.length / pageSize));
+    if (currentPage > totalPages) currentPage = totalPages;
+    const startIdx = (currentPage - 1) * pageSize;
+    const endIdx = startIdx + pageSize;
+    const pageRows = visibleRows.slice(startIdx, endIdx);
+
+    rows.forEach((row) => {
+      (row as HTMLElement).hidden = !pageRows.includes(row);
+    });
+
+    if (pageInfo) pageInfo.textContent = `Page ${currentPage} of ${totalPages}`;
+    if (prevPageBtn) prevPageBtn.disabled = currentPage <= 1;
+    if (nextPageBtn) nextPageBtn.disabled = currentPage >= totalPages;
+
+    visibleRows.forEach((row) => tableBody.appendChild(row));
+    if (countLabel) {
+      countLabel.textContent = `Showing ${visibleRows.length} raider${visibleRows.length === 1 ? '' : 's'} (page ${currentPage})`;
+    }
+
+    sortButtons.forEach((button) => {
+      const isActive = button.dataset.sortKey === sortKey;
+      button.setAttribute('aria-sort', isActive ? sortDirection : 'none');
+    });
+  }
+
+  pageSizeSelect?.addEventListener('change', () => {
+    pageSize = Number(pageSizeSelect.value) || 25;
+    currentPage = 1;
+    applyFiltersAndSort();
+  });
+
+  prevPageBtn?.addEventListener('click', () => {
+    if (currentPage > 1) {
+      currentPage -= 1;
+      applyFiltersAndSort();
+    }
+  });
+
+  nextPageBtn?.addEventListener('click', () => {
+    currentPage += 1;
+    applyFiltersAndSort();
+  });
+
+  searchInput?.addEventListener('input', applyFiltersAndSort);
+  classFilter?.addEventListener('change', applyFiltersAndSort);
+
+  sortButtons.forEach((button) => {
+    button.addEventListener('click', () => {
+      const nextKey = button.dataset.sortKey;
+      if (!nextKey) return;
+
+      if (nextKey === sortKey) {
+        sortDirection = sortDirection === 'asc' ? 'desc' : 'asc';
+      } else {
+        sortKey = nextKey;
+        sortDirection = 'asc';
+      }
+
+      applyFiltersAndSort();
+    });
+  });
+
+  applyFiltersAndSort();
+</script>
+
+<style>
+  h1 {
+    margin-top: 0;
+    font-size: clamp(2rem, 3.1vw, 2.95rem);
+  }
+
+  .panel-text {
+    max-width: 70ch;
+    color: #d8e2e8;
+    font-size: 1.05rem;
+  }
+
+  .panel {
+    margin-top: 1rem;
+    border: 1px solid rgba(214, 176, 106, 0.38);
+    border-radius: 0.75rem;
+    background:
+      linear-gradient(155deg, rgba(214, 176, 106, 0.08), transparent 45%),
+      rgba(11, 21, 32, 0.78);
+    padding: 1rem;
+    box-shadow: 0 14px 28px rgba(0, 0, 0, 0.22);
+  }
+
+  h2 {
+    margin: 0;
+    color: #e4c27a;
+  }
+
+  .title-row {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+
+  .title-icon {
+    width: 1rem;
+    height: 1rem;
+    color: #f1d9a9;
+  }
+
+  .back-link {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    color: #b0c4d0;
+    font-size: 0.9rem;
+    text-decoration: none;
+    margin-bottom: 1.25rem;
+    transition: color 0.15s;
+  }
+
+  .back-link:hover {
+    color: #f1d9a9;
+  }
+
+  .back-link svg {
+    width: 0.95rem;
+    height: 0.95rem;
+  }
+
+  .controls {
+    margin-top: 1rem;
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.65rem;
+    align-items: end;
+  }
+
+  .controls label {
+    display: grid;
+    gap: 0.4rem;
+    color: #e7d9bc;
+    font-size: 0.86rem;
+    letter-spacing: 0.03em;
+    text-transform: uppercase;
+  }
+
+  .controls input,
+  .controls select {
+    border: 1px solid rgba(214, 176, 106, 0.4);
+    border-radius: 0.45rem;
+    background: rgba(7, 14, 22, 0.85);
+    color: #d8e2e8;
+    padding: 0.5rem 0.6rem;
+    font-size: 0.94rem;
+  }
+
+  .results-count {
+    margin: 0 0 0 auto;
+    text-align: right;
+    font-size: 0.95rem;
+    color: #d8e2e8;
+    white-space: nowrap;
+  }
+
+  .table-wrap {
+    margin-top: 0.85rem;
+    overflow-x: auto;
+    border: 1px solid rgba(214, 176, 106, 0.24);
+    border-radius: 0.65rem;
+    background: rgba(5, 10, 16, 0.55);
+  }
+
+  .pagination-controls {
+    display: flex;
+    align-items: center;
+    gap: 0.7rem;
+    padding: 0.9rem 1rem;
+    border-bottom: 1px solid rgba(214, 176, 106, 0.18);
+    background: rgba(15, 28, 43, 0.55);
+  }
+
+  .pagination-controls label {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin-right: 0.35rem;
+    color: #e7d9bc;
+    font-size: 0.82rem;
+    letter-spacing: 0.03em;
+    text-transform: uppercase;
+  }
+
+  .pagination-controls select,
+  .pagination-controls button {
+    border: 1px solid rgba(214, 176, 106, 0.42);
+    border-radius: 0.45rem;
+    background: rgba(7, 14, 22, 0.85);
+    color: #d8e2e8;
+    height: 2rem;
+    padding: 0 0.6rem;
+    font-size: 0.9rem;
+  }
+
+  .pagination-controls button {
+    cursor: pointer;
+  }
+
+  .pagination-controls button:disabled {
+    opacity: 0.45;
+    cursor: default;
+  }
+
+  #gear-page-info {
+    min-width: 7.8rem;
+    text-align: center;
+    color: #d8e2e8;
+    font-size: 0.9rem;
+  }
+
+  .gear-table {
+    width: 100%;
+    border-collapse: collapse;
+    min-width: 1000px;
+  }
+
+  .gear-table th,
+  .gear-table td {
+    border-bottom: 1px solid rgba(214, 176, 106, 0.18);
+    padding: 0.4rem 0.35rem;
+    text-align: left;
+    color: #d8e2e8;
+    font-size: 0.85rem;
+    white-space: nowrap;
+  }
+
+  .gear-table thead th {
+    background: rgba(15, 28, 43, 0.88);
+    position: sticky;
+    top: 0;
+    z-index: 1;
+  }
+
+  .gear-table tbody tr:hover {
+    background: rgba(214, 176, 106, 0.08);
+  }
+
+  .slot-col {
+    text-align: center;
+  }
+
+  .slot-col .sort-btn {
+    text-align: center;
+  }
+
+  .sort-btn {
+    width: 100%;
+    border: 0;
+    background: transparent;
+    color: #e4c27a;
+    font-weight: 700;
+    letter-spacing: 0.03em;
+    text-transform: uppercase;
+    font-size: 0.72rem;
+    text-align: left;
+    cursor: pointer;
+    padding: 0;
+  }
+
+  .sort-btn[aria-sort='asc']::after {
+    content: ' ▲';
+    font-size: 0.65rem;
+  }
+
+  .sort-btn[aria-sort='desc']::after {
+    content: ' ▼';
+    font-size: 0.65rem;
+  }
+
+  .name-link {
+    text-decoration: none;
+  }
+
+  .name-pill {
+    color: var(--class-color, #d8e2e8);
+    font-weight: 700;
+  }
+
+  .gear-cell {
+    width: 3.4rem;
+    text-align: center;
+  }
+
+  .gear-icon-link {
+    position: relative;
+    display: inline-block;
+    line-height: 0;
+    text-decoration: none;
+  }
+
+  .gear-icon {
+    width: 34px;
+    height: 34px;
+    border-radius: 4px;
+    /* Quality color reads as the item's rarity border, like the in-game armory. */
+    border: 2px solid var(--quality-color, rgba(214, 176, 106, 0.3));
+    background: rgba(214, 176, 106, 0.08);
+    object-fit: cover;
+    display: block;
+  }
+
+  .gear-icon-link:hover .gear-icon {
+    filter: brightness(1.15);
+  }
+
+  .gear-icon-ilvl {
+    position: absolute;
+    right: -2px;
+    bottom: -3px;
+    padding: 0 0.2rem;
+    border-radius: 0.25rem;
+    background: rgba(4, 10, 16, 0.92);
+    color: #f1d9a9;
+    font-size: 0.62rem;
+    font-weight: 700;
+    line-height: 1.25;
+  }
+
+  .gear-empty {
+    color: #6b7c88;
+  }
+
+  @media (max-width: 640px) {
+    .controls {
+      grid-template-columns: 1fr;
+    }
+  }
+</style>

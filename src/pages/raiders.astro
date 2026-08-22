@@ -420,7 +420,13 @@ const mplusWinnerData = {
   </section>
 
   <section class="panel">
-    <h2 class="title-row"><Icon name="lucide:list" class="title-icon" aria-hidden="true" />Raiders ({raiderGroups.length} people / {sortedRaiders.length} characters)</h2>
+    <div class="panel-header-row">
+      <h2 class="title-row"><Icon name="lucide:list" class="title-icon" aria-hidden="true" />Raiders ({raiderGroups.length} people / {sortedRaiders.length} characters)</h2>
+      <a href="/raiders/gear-summary" class="gear-summary-link">
+        <Icon name="lucide:swords" aria-hidden="true" />
+        Gear Summary
+      </a>
+    </div>
     <div class="controls" aria-label="Raiders controls">
       <label>
         Search
@@ -1071,6 +1077,39 @@ const mplusWinnerData = {
     width: 1rem;
     height: 1rem;
     color: #f1d9a9;
+  }
+
+  .panel-header-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 0.75rem;
+  }
+
+  .gear-summary-link {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0.35rem 0.75rem;
+    border: 1px solid rgba(214, 176, 106, 0.4);
+    border-radius: 0.5rem;
+    background: rgba(7, 14, 22, 0.85);
+    color: #e4c27a;
+    font-size: 0.85rem;
+    text-decoration: none;
+    vertical-align: middle;
+    transition: border-color 0.15s, background 0.15s;
+  }
+
+  .gear-summary-link:hover {
+    border-color: rgba(214, 176, 106, 0.75);
+    background: rgba(214, 176, 106, 0.1);
+  }
+
+  .gear-summary-link svg {
+    width: 0.95rem;
+    height: 0.95rem;
   }
 
   .controls {

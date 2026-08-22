@@ -166,6 +166,12 @@ const spotlights = [
 <Layout title="The Hidden Lodge | Roster" description="Full guild roster sourced live from the Blizzard API.">
   <section>
     <h1 class="title-row"><Icon name="lucide:users-round" class="title-icon" aria-hidden="true" />Roster</h1>
+    {Astro.locals.isGuildMember && (
+      <a href="/raiders/gear-summary" class="gear-summary-link">
+        <Icon name="lucide:swords" aria-hidden="true" />
+        Gear Summary
+      </a>
+    )}
   </section>
 
   {!errorMessage && (
@@ -567,6 +573,32 @@ const spotlights = [
     width: 1rem;
     height: 1rem;
     color: #f1d9a9;
+  }
+
+  .gear-summary-link {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    margin-left: 0.85rem;
+    padding: 0.35rem 0.75rem;
+    border: 1px solid rgba(214, 176, 106, 0.4);
+    border-radius: 0.5rem;
+    background: rgba(7, 14, 22, 0.85);
+    color: #e4c27a;
+    font-size: 0.85rem;
+    text-decoration: none;
+    vertical-align: middle;
+    transition: border-color 0.15s, background 0.15s;
+  }
+
+  .gear-summary-link:hover {
+    border-color: rgba(214, 176, 106, 0.75);
+    background: rgba(214, 176, 106, 0.1);
+  }
+
+  .gear-summary-link svg {
+    width: 0.95rem;
+    height: 0.95rem;
   }
 
   .panel-text {
