@@ -19,7 +19,7 @@ const DATABASE_NAME = 'hidden-lodge-db';
 const SKIP_TABLES = ['sessions', 'sqlite_sequence', '_cf_KV', '_cf_METADATA', 'd1_migrations'];
 
 // Tables we prefer to skip (seed data that's consistent)
-const PREFER_SKIP = ['link_categories', 'links', 'roster_cache_meta', 'site_settings'];
+const PREFER_SKIP = ['roster_cache_meta', 'site_settings'];
 
 const INCLUDE_PREFERRED_SKIP = process.env.COPY_PROD_INCLUDE_SEEDED === '1';
 

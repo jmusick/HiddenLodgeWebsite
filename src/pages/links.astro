@@ -3,45 +3,20 @@ export const prerender = false;
 
 import Layout from '../layouts/Layout.astro';
 import { Icon } from 'astro-icon/components';
-import { env } from 'cloudflare:workers';
+import { fetchBookmarksByTag, countCategories, TAGSTASH_PROFILE_URL, type Bookmark } from '../lib/bookmarks';
 
-interface CategoryRow {
-  id: number;
-  title: string;
-  icon: string;
-  sort_order: number;
+const TAG = 'wow';
+
+let bookmarks: Bookmark[] = [];
+let loadFailed = false;
+try {
+  bookmarks = await fetchBookmarksByTag(TAG);
+} catch {
+  loadFailed = true;
 }
 
-interface LinkRow {
-  id: number;
-  category_id: number;
-  name: string;
-  href: string;
-  sort_order: number;
-}
-
-const [catsResult, linksResult] = await env.DB.batch([
-  env.DB.prepare(`SELECT id, title, icon, sort_order FROM link_categories ORDER BY sort_order ASC, title ASC`),
-  env.DB.prepare(`SELECT id, category_id, name, href, sort_order FROM links ORDER BY sort_order ASC, name ASC`),
-]);
-
-const rawCategories = (catsResult.results ?? []) as CategoryRow[];
-const rawLinks = (linksResult.results ?? []) as LinkRow[];
-
-const linksByCategory = new Map<number, LinkRow[]>();
-for (const link of rawLinks) {
-  const arr = linksByCategory.get(link.category_id) ?? [];
-  arr.push(link);
-  linksByCategory.set(link.category_id, arr);
-}
-
-const linkGroups = rawCategories.map((cat) => ({
-  title: cat.title,
-  icon: cat.icon,
-  links: linksByCategory.get(cat.id) ?? [],
-}));
-
-const getFavicon = (href: string) => `https://www.google.com/s2/favicons?sz=64&domain_url=${encodeURIComponent(href)}`;
+const categories = countCategories(bookmarks);
+const creditUrl = 'https://tagsta.sh/?utm_source=hiddenlodge&utm_medium=referral&utm_campaign=links_credit';
 ---
 
 <Layout title="The Hidden Lodge | Useful Links" description="Curated WoW resources for raiding, M+, UI, and gearing.">
@@ -53,31 +28,95 @@ const getFavicon = (href: string) => `https://www.google.com/s2/favicons?sz=64&d
     </p>
   </section>
 
-  <section class="grid" aria-label="Useful links by category">
-    {
-      linkGroups.map((group) => (
-        <article class="panel">
-          <h2 class="title-row">
-            <Icon name={group.icon} class="title-icon" aria-hidden="true" />
-            {group.title}
-          </h2>
-          <ul>
-            {
-              group.links.map((link) => (
-                <li>
-                  <a href={link.href} target="_blank" rel="noopener noreferrer">
-                    <img src={getFavicon(link.href)} alt="" loading="lazy" />
-                    <span>{link.name}</span>
-                  </a>
-                </li>
-              ))
-            }
-          </ul>
-        </article>
-      ))
-    }
-  </section>
+  {
+    loadFailed && (
+      <p class="notice">Couldn't load the link list right now. Try again in a few minutes.</p>
+    )
+  }
+
+  {
+    !loadFailed && bookmarks.length === 0 && (
+      <p class="notice">No links have been tagged "{TAG}" yet.</p>
+    )
+  }
+
+  {
+    bookmarks.length > 0 && (
+      <div id="links-root">
+        {categories.length > 0 && (
+          <div class="cats" role="group" aria-label="Filter links by category">
+            <button type="button" class="cat cat--active" data-category="">
+              All <span class="cat-count">{bookmarks.length}</span>
+            </button>
+            {categories.map((cat) => (
+              <button type="button" class="cat" data-category={cat.name}>
+                {cat.name} <span class="cat-count">{cat.count}</span>
+              </button>
+            ))}
+          </div>
+        )}
+
+        <div class="link-grid">
+          {bookmarks.map((b) => (
+            <a
+              class="link-card"
+              data-categories={b.categories.join(' ')}
+              href={b.url}
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              {b.faviconUrl ? (
+                <img class="link-favicon" src={b.faviconUrl} alt="" loading="lazy" referrerpolicy="no-referrer" />
+              ) : (
+                <span class="link-favicon link-favicon--placeholder" aria-hidden="true" />
+              )}
+              <span class="link-body">
+                <span class="link-title">{b.title}</span>
+                {b.description && <span class="link-desc">{b.description}</span>}
+              </span>
+            </a>
+          ))}
+        </div>
+
+        <p class="credit">
+          <Icon name="lucide:tag" class="credit-icon" aria-hidden="true" />
+          <span>
+            This list is powered by <a href={creditUrl} target="_blank" rel="noopener noreferrer">Tagstash</a> —
+            organize and share your own bookmarks, or browse
+            <a href={TAGSTASH_PROFILE_URL} target="_blank" rel="noopener noreferrer">the full collection</a>.
+          </span>
+        </p>
+      </div>
+    )
+  }
 </Layout>
+
+<script>
+  function initLinkFilters() {
+    const root = document.getElementById('links-root');
+    if (!root || root.dataset.filtersInit) return;
+    root.dataset.filtersInit = '1';
+
+    const chips = root.querySelectorAll<HTMLButtonElement>('.cat');
+    const cards = root.querySelectorAll<HTMLAnchorElement>('.link-card');
+
+    chips.forEach((chip) => {
+      chip.addEventListener('click', () => {
+        chips.forEach((c) => c.classList.remove('cat--active'));
+        chip.classList.add('cat--active');
+
+        const category = chip.dataset.category ?? '';
+        cards.forEach((card) => {
+          const cats = (card.dataset.categories || '').split(' ');
+          card.hidden = category !== '' && !cats.includes(category);
+        });
+      });
+    });
+  }
+
+  initLinkFilters();
+  document.addEventListener('astro:page-load', initLinkFilters);
+</script>
 
 <style>
   .intro h1 {
@@ -92,27 +131,153 @@ const getFavicon = (href: string) => `https://www.google.com/s2/favicons?sz=64&d
     font-size: 1.05rem;
   }
 
-  .grid {
+  .notice {
     margin-top: 1.25rem;
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 1rem;
+    color: #d8e2e8;
+    font-style: italic;
   }
 
-  .panel {
+  .cats {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4rem;
+    margin: 1.25rem 0 1rem;
+  }
+
+  .cat {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    padding: 0.3rem 0.7rem;
     border: 1px solid rgba(214, 176, 106, 0.38);
-    border-radius: 0.75rem;
+    border-radius: 999px;
+    background: transparent;
+    color: #d8e2e8;
+    font: inherit;
+    font-size: 0.82rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+  }
+
+  .cat:hover,
+  .cat:focus-visible {
+    border-color: rgba(214, 176, 106, 0.7);
+    background: rgba(214, 176, 106, 0.1);
+    color: #f5e4be;
+  }
+
+  .cat--active,
+  .cat--active:hover {
+    background: rgba(214, 176, 106, 0.85);
+    border-color: rgba(214, 176, 106, 0.85);
+    color: #0b1520;
+  }
+
+  .cat-count {
+    font-size: 0.74rem;
+    opacity: 0.75;
+  }
+
+  .link-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.5rem;
+  }
+
+  .link-card {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    min-width: 0;
+    padding: 0.55rem 0.75rem;
+    border: 1px solid rgba(214, 176, 106, 0.38);
+    border-left: 3px solid rgba(214, 176, 106, 0.85);
+    border-radius: 0.6rem;
     background:
       linear-gradient(160deg, rgba(214, 176, 106, 0.08), transparent 45%),
       rgba(11, 21, 32, 0.78);
-    padding: 1rem;
-    box-shadow: 0 14px 28px rgba(0, 0, 0, 0.22);
+    color: #d8e2e8;
+    text-decoration: none;
+    transition: border-color 0.18s ease, background 0.18s ease, box-shadow 0.18s ease;
   }
 
-  .panel h2 {
-    margin: 0;
+  .link-card:hover,
+  .link-card:focus-visible {
+    border-color: rgba(214, 176, 106, 0.7);
+    background:
+      linear-gradient(160deg, rgba(214, 176, 106, 0.16), transparent 55%),
+      rgba(11, 21, 32, 0.85);
+    box-shadow: 0 10px 22px rgba(0, 0, 0, 0.28);
+    color: #f5e4be;
+  }
+
+  .link-card[hidden] {
+    display: none;
+  }
+
+  .link-favicon {
+    width: 1rem;
+    height: 1rem;
+    flex: none;
+    border-radius: 2px;
+  }
+
+  .link-favicon--placeholder {
+    background: rgba(214, 176, 106, 0.12);
+    border: 1px solid rgba(214, 176, 106, 0.38);
+  }
+
+  .link-body {
+    display: flex;
+    flex-direction: column;
+    gap: 0.1rem;
+    min-width: 0;
+  }
+
+  .link-title {
+    font-size: 1.01rem;
+    font-weight: 600;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .link-desc {
+    color: #9fb0bd;
+    font-size: 0.8rem;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .credit {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    margin: 1.5rem 0 0;
+    padding: 0.75rem 1rem;
+    border: 1px solid rgba(214, 176, 106, 0.28);
+    border-radius: 0.6rem;
+    background: rgba(11, 21, 32, 0.6);
+    color: #d8e2e8;
+    font-size: 0.88rem;
+  }
+
+  .credit-icon {
+    width: 1.1rem;
+    height: 1.1rem;
+    flex: none;
     color: #e4c27a;
-    font-size: 1.2rem;
+  }
+
+  .credit a {
+    color: #e4c27a;
+    font-weight: 600;
+  }
+
+  .credit a:hover {
+    text-decoration: underline;
   }
 
   .title-row {
@@ -128,40 +293,8 @@ const getFavicon = (href: string) => `https://www.google.com/s2/favicons?sz=64&d
     flex-shrink: 0;
   }
 
-  .panel ul {
-    margin: 0.75rem 0 0;
-    padding: 0;
-    list-style: none;
-    display: grid;
-    gap: 0.45rem;
-  }
-
-  .panel a {
-    display: inline-flex;
-    align-items: center;
-    gap: 0.55rem;
-    color: #d8e2e8;
-    padding: 0.32rem 0.4rem;
-    border-radius: 0.45rem;
-    border: 1px solid transparent;
-    font-size: 1.01rem;
-  }
-
-  .panel a:hover,
-  .panel a:focus-visible {
-    border-color: rgba(214, 176, 106, 0.45);
-    background: rgba(214, 176, 106, 0.08);
-    color: #f5e4be;
-  }
-
-  .panel img {
-    width: 0.95rem;
-    height: 0.95rem;
-    border-radius: 2px;
-  }
-
   @media (max-width: 900px) {
-    .grid {
+    .link-grid {
       grid-template-columns: 1fr;
     }
   }
