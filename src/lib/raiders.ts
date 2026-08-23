@@ -31,17 +31,38 @@ const DELVES_TOTAL_STAT_ID = 40734;
 /** Items per refresh-cron icon warm; see warmGearIcons(). */
 const GEAR_ICON_WARM_BATCH_SIZE = 20;
 
-const UPGRADE_TRACK_IDS = {
-  mythic: [12801, 12802, 12803, 12804, 12805, 12806],
-  heroic: [12793, 12794, 12795, 12796, 12797, 12798],
-  normal: [12785, 12786, 12787, 12788, 12789, 12790],
-  raidFinder: [12777, 12778, 12779, 12780, 12781, 12782],
-  worldAdvanced: [12769, 12770, 12771, 12772, 12773, 12774],
-} as const;
+/**
+ * Upgrade-track bonus ids, used to work out how many upgrade steps an equipped
+ * item still has left (see computeTotalUpgradesMissing).
+ *
+ * Blizzard lays these out very regularly: each season gets one contiguous
+ * block of five tracks (World/Advanced, Raid Finder, Normal, Heroic, Mythic),
+ * the tracks sit 8 ids apart, and each track is 6 consecutive steps. A season's
+ * block starts 40 ids above the previous season's — Midnight S1 begins at
+ * 12769, S2 at 12809.
+ *
+ * IMPORTANT: an item whose track id isn't listed here is treated as having no
+ * upgrades left, so forgetting a new season makes every raider show 0 missing
+ * upgrades. When Season 3 lands, append its base id below.
+ */
+const UPGRADE_TRACK_STEPS = 6;
+const UPGRADE_TRACK_ID_STRIDE = 8;
+const UPGRADE_TRACKS_PER_SEASON = 5;
+/** Lowest track (World/Advanced) base id of each season's block. */
+const UPGRADE_TRACK_SEASON_BASE_IDS = [
+  12769, // Midnight Season 1 (12.0)
+  12809, // Midnight Season 2 (12.1)
+] as const;
 
 const UPGRADE_STEPS_BY_BONUS_ID = new Map<number, { current: number; max: number }>(
-  Object.values(UPGRADE_TRACK_IDS).flatMap((ids) =>
-    ids.map((id, index) => [id, { current: index + 1, max: ids.length }] as const)
+  UPGRADE_TRACK_SEASON_BASE_IDS.flatMap((seasonBaseId) =>
+    Array.from({ length: UPGRADE_TRACKS_PER_SEASON }, (_, track) => seasonBaseId + track * UPGRADE_TRACK_ID_STRIDE).flatMap(
+      (trackBaseId) =>
+        Array.from(
+          { length: UPGRADE_TRACK_STEPS },
+          (_, step) => [trackBaseId + step, { current: step + 1, max: UPGRADE_TRACK_STEPS }] as const
+        )
+    )
   )
 );
 
