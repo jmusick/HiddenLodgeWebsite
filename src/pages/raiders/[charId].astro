@@ -484,6 +484,27 @@ const raiderIoUrl = raider.realmSlug
 const profileFetchedAtLabel = formatProfileFetchedAt(raider.lastCheckedAt);
 const profileFetchedAtTitle = formatProfileFetchedAtTitle(raider.lastCheckedAt);
 const profileFetchedAtIso = raider.lastCheckedAt ? new Date(raider.lastCheckedAt * 1000).toISOString() : null;
+const FALLBACK_ICON = 'https://wow.zamimg.com/images/wow/icons/large/inv_misc_questionmark.jpg';
+
+// Icons carry no visible item name, so the slot has to come from the tooltip.
+const GEAR_SLOT_LABELS: Record<string, string> = {
+  HEAD: 'Head',
+  NECK: 'Neck',
+  SHOULDER: 'Shoulder',
+  BACK: 'Back',
+  CHEST: 'Chest',
+  WRIST: 'Wrist',
+  HANDS: 'Hands',
+  WAIST: 'Waist',
+  LEGS: 'Legs',
+  FEET: 'Feet',
+  FINGER_1: 'Finger 1',
+  FINGER_2: 'Finger 2',
+  TRINKET_1: 'Trinket 1',
+  TRINKET_2: 'Trinket 2',
+  MAIN_HAND: 'Main Hand',
+  OFF_HAND: 'Off Hand',
+};
 const leftGearSlots = ['HEAD', 'NECK', 'SHOULDER', 'BACK', 'CHEST', 'WRIST'];
 const rightGearSlots = ['HANDS', 'WAIST', 'LEGS', 'FEET', 'FINGER_1', 'FINGER_2', 'TRINKET_1', 'TRINKET_2'];
 const weaponSlots = ['MAIN_HAND', 'OFF_HAND'];
@@ -509,6 +530,24 @@ function gemAffixState(item: (typeof gear)[number] | undefined): { missing: bool
     return { missing: false, tooltip: joined, label: `Gem details: ${item.gems.join(', ')}` };
   }
   return { missing: true, tooltip: 'Missing gems', label: 'Missing gems' };
+}
+
+/** Everything the removed name/ilvl text used to say, folded into one hover string. */
+function gearTitle(
+  slotKey: string,
+  item: (typeof gear)[number] | undefined,
+  enchantState: ReturnType<typeof enchantAffixState>,
+  gemState: ReturnType<typeof gemAffixState>
+): string {
+  const slotLabel = GEAR_SLOT_LABELS[slotKey] ?? slotKey;
+  if (!item?.itemName) return `${slotLabel}: empty`;
+
+  return [
+    `${slotLabel}: ${item.itemName}`,
+    `iLvl ${item.itemLevel ?? '—'}`,
+    ...(item.canEnchant ? [enchantState.missing ? 'Missing enchant' : `Enchant: ${enchantState.tooltip}`] : []),
+    ...(item.canGem ? [gemState.missing ? 'Missing gems' : `Gems: ${gemState.tooltip}`] : []),
+  ].join(' · ');
 }
 ---
 
@@ -557,66 +596,67 @@ function gemAffixState(item: (typeof gear)[number] | undefined): { missing: bool
               {leftGearSlots.map((slotKey) => {
                 const item = gearBySlot.get(slotKey);
                 const wowhead = item ? wowheadItemUrl(item) : null;
+                const iconUrl = item?.iconUrl ?? FALLBACK_ICON;
                 const enchantState = enchantAffixState(item);
                 const gemState = gemAffixState(item);
+                const itemTitle = gearTitle(slotKey, item, enchantState, gemState);
 
                 return (
                   <article class="armory-gear-row">
                     {item?.itemName ? (
-                      <>
-                        <div class="armory-item-top">
-                          {wowhead ? (
-                            <a href={wowhead} target="_blank" rel="noopener noreferrer" class="armory-item" style={`color: ${item.qualityColor}`}>
-                              {item.itemName}
-                            </a>
-                          ) : (
-                            <p class="armory-item" style={`color: ${item.qualityColor}`}>{item.itemName}</p>
-                          )}
-                        </div>
-                        <div class="armory-item-bottom">
-                          <p class="armory-meta">iLvl {item.itemLevel ?? '—'}</p>
-                          {(item.canEnchant || item.canGem) && (
-                            <div class="armory-affixes" aria-label="Item enhancements">
-                              {item.canEnchant && (
-                                <span
-                                  class:list={[
-                                    'armory-affix',
-                                    'armory-affix-enchant',
-                                    { 'armory-affix-missing': enchantState.missing },
-                                  ]}
-                                  data-tooltip={enchantState.tooltip}
-                                  aria-label={enchantState.label}
-                                >
-                                  <Icon name="lucide:wand-sparkles" class="armory-affix-icon" aria-hidden="true" />
-                                </span>
-                              )}
-                              {item.canGem && (
-                                <span
-                                  class:list={[
-                                    'armory-affix',
-                                    'armory-affix-gem',
-                                    { 'armory-affix-missing': gemState.missing },
-                                  ]}
-                                  data-tooltip={gemState.tooltip}
-                                  aria-label={gemState.label}
-                                >
-                                  <Icon name="lucide:gem" class="armory-affix-icon" aria-hidden="true" />
-                                </span>
-                              )}
-                            </div>
-                          )}
-                        </div>
-                      </>
+                      <a
+                        href={wowhead ?? undefined}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        class="armory-icon-link"
+                        style={`--quality-color: ${item.qualityColor}`}
+                        title={itemTitle}
+                        aria-label={itemTitle}
+                      >
+                        <img
+                          src={iconUrl}
+                          alt=""
+                          class="armory-icon"
+                          loading="lazy"
+                          decoding="async"
+                          onerror={`this.src='${FALLBACK_ICON}'`}
+                        />
+                        <span class="armory-icon-ilvl">{item.itemLevel ?? '—'}</span>
+                      </a>
                     ) : (
-                      <>
-                        <div class="armory-item-top">
-                          <p class="armory-empty">—</p>
-                        </div>
-                        <div class="armory-item-bottom">
-                          <p class="armory-meta">iLvl —</p>
-                        </div>
-                      </>
+                      <span class="armory-icon-empty" title={itemTitle} aria-label={itemTitle}></span>
                     )}
+                    <div
+                      class="armory-affixes"
+                      aria-label={item?.canEnchant || item?.canGem ? 'Item enhancements' : undefined}
+                    >
+                      {item?.canEnchant && (
+                        <span
+                          class:list={[
+                            'armory-affix',
+                            'armory-affix-enchant',
+                            { 'armory-affix-missing': enchantState.missing },
+                          ]}
+                          data-tooltip={enchantState.tooltip}
+                          aria-label={enchantState.label}
+                        >
+                          <Icon name="lucide:wand-sparkles" class="armory-affix-icon" aria-hidden="true" />
+                        </span>
+                      )}
+                      {item?.canGem && (
+                        <span
+                          class:list={[
+                            'armory-affix',
+                            'armory-affix-gem',
+                            { 'armory-affix-missing': gemState.missing },
+                          ]}
+                          data-tooltip={gemState.tooltip}
+                          aria-label={gemState.label}
+                        >
+                          <Icon name="lucide:gem" class="armory-affix-icon" aria-hidden="true" />
+                        </span>
+                      )}
+                    </div>
                   </article>
                 );
               })}
@@ -631,66 +671,67 @@ function gemAffixState(item: (typeof gear)[number] | undefined): { missing: bool
                 {weaponSlots.map((slotKey) => {
                   const item = gearBySlot.get(slotKey);
                   const wowhead = item ? wowheadItemUrl(item) : null;
+                  const iconUrl = item?.iconUrl ?? FALLBACK_ICON;
                   const enchantState = enchantAffixState(item);
                   const gemState = gemAffixState(item);
+                  const itemTitle = gearTitle(slotKey, item, enchantState, gemState);
 
                   return (
                     <article class="armory-weapon-row">
                       {item?.itemName ? (
-                        <>
-                          <div class="armory-item-top">
-                            {wowhead ? (
-                              <a href={wowhead} target="_blank" rel="noopener noreferrer" class="armory-item" style={`color: ${item.qualityColor}`}>
-                                {item.itemName}
-                              </a>
-                            ) : (
-                              <p class="armory-item" style={`color: ${item.qualityColor}`}>{item.itemName}</p>
-                            )}
-                          </div>
-                          <div class="armory-item-bottom">
-                            <p class="armory-meta">iLvl {item.itemLevel ?? '—'}</p>
-                            {(item.canEnchant || item.canGem) && (
-                              <div class="armory-affixes" aria-label="Item enhancements">
-                                {item.canEnchant && (
-                                  <span
-                                    class:list={[
-                                      'armory-affix',
-                                      'armory-affix-enchant',
-                                      { 'armory-affix-missing': enchantState.missing },
-                                    ]}
-                                    data-tooltip={enchantState.tooltip}
-                                    aria-label={enchantState.label}
-                                  >
-                                    <Icon name="lucide:wand-sparkles" class="armory-affix-icon" aria-hidden="true" />
-                                  </span>
-                                )}
-                                {item.canGem && (
-                                  <span
-                                    class:list={[
-                                      'armory-affix',
-                                      'armory-affix-gem',
-                                      { 'armory-affix-missing': gemState.missing },
-                                    ]}
-                                    data-tooltip={gemState.tooltip}
-                                    aria-label={gemState.label}
-                                  >
-                                    <Icon name="lucide:gem" class="armory-affix-icon" aria-hidden="true" />
-                                  </span>
-                                )}
-                              </div>
-                            )}
-                          </div>
-                        </>
+                        <a
+                          href={wowhead ?? undefined}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          class="armory-icon-link"
+                          style={`--quality-color: ${item.qualityColor}`}
+                          title={itemTitle}
+                          aria-label={itemTitle}
+                        >
+                          <img
+                            src={iconUrl}
+                            alt=""
+                            class="armory-icon"
+                            loading="lazy"
+                            decoding="async"
+                            onerror={`this.src='${FALLBACK_ICON}'`}
+                          />
+                          <span class="armory-icon-ilvl">{item.itemLevel ?? '—'}</span>
+                        </a>
                       ) : (
-                        <>
-                          <div class="armory-item-top">
-                            <p class="armory-empty">—</p>
-                          </div>
-                          <div class="armory-item-bottom">
-                            <p class="armory-meta">iLvl —</p>
-                          </div>
-                        </>
+                        <span class="armory-icon-empty" title={itemTitle} aria-label={itemTitle}></span>
                       )}
+                      <div
+                        class="armory-affixes"
+                        aria-label={item?.canEnchant || item?.canGem ? 'Item enhancements' : undefined}
+                      >
+                        {item?.canEnchant && (
+                          <span
+                            class:list={[
+                              'armory-affix',
+                              'armory-affix-enchant',
+                              { 'armory-affix-missing': enchantState.missing },
+                            ]}
+                            data-tooltip={enchantState.tooltip}
+                            aria-label={enchantState.label}
+                          >
+                            <Icon name="lucide:wand-sparkles" class="armory-affix-icon" aria-hidden="true" />
+                          </span>
+                        )}
+                        {item?.canGem && (
+                          <span
+                            class:list={[
+                              'armory-affix',
+                              'armory-affix-gem',
+                              { 'armory-affix-missing': gemState.missing },
+                            ]}
+                            data-tooltip={gemState.tooltip}
+                            aria-label={gemState.label}
+                          >
+                            <Icon name="lucide:gem" class="armory-affix-icon" aria-hidden="true" />
+                          </span>
+                        )}
+                      </div>
                     </article>
                   );
                 })}
@@ -701,66 +742,67 @@ function gemAffixState(item: (typeof gear)[number] | undefined): { missing: bool
               {rightGearSlots.map((slotKey) => {
                 const item = gearBySlot.get(slotKey);
                 const wowhead = item ? wowheadItemUrl(item) : null;
+                const iconUrl = item?.iconUrl ?? FALLBACK_ICON;
                 const enchantState = enchantAffixState(item);
                 const gemState = gemAffixState(item);
+                const itemTitle = gearTitle(slotKey, item, enchantState, gemState);
 
                 return (
                   <article class="armory-gear-row">
                     {item?.itemName ? (
-                      <>
-                        <div class="armory-item-top">
-                          {wowhead ? (
-                            <a href={wowhead} target="_blank" rel="noopener noreferrer" class="armory-item" style={`color: ${item.qualityColor}`}>
-                              {item.itemName}
-                            </a>
-                          ) : (
-                            <p class="armory-item" style={`color: ${item.qualityColor}`}>{item.itemName}</p>
-                          )}
-                        </div>
-                        <div class="armory-item-bottom">
-                          <p class="armory-meta">iLvl {item.itemLevel ?? '—'}</p>
-                          {(item.canEnchant || item.canGem) && (
-                            <div class="armory-affixes" aria-label="Item enhancements">
-                              {item.canEnchant && (
-                                <span
-                                  class:list={[
-                                    'armory-affix',
-                                    'armory-affix-enchant',
-                                    { 'armory-affix-missing': enchantState.missing },
-                                  ]}
-                                  data-tooltip={enchantState.tooltip}
-                                  aria-label={enchantState.label}
-                                >
-                                  <Icon name="lucide:wand-sparkles" class="armory-affix-icon" aria-hidden="true" />
-                                </span>
-                              )}
-                              {item.canGem && (
-                                <span
-                                  class:list={[
-                                    'armory-affix',
-                                    'armory-affix-gem',
-                                    { 'armory-affix-missing': gemState.missing },
-                                  ]}
-                                  data-tooltip={gemState.tooltip}
-                                  aria-label={gemState.label}
-                                >
-                                  <Icon name="lucide:gem" class="armory-affix-icon" aria-hidden="true" />
-                                </span>
-                              )}
-                            </div>
-                          )}
-                        </div>
-                      </>
+                      <a
+                        href={wowhead ?? undefined}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        class="armory-icon-link"
+                        style={`--quality-color: ${item.qualityColor}`}
+                        title={itemTitle}
+                        aria-label={itemTitle}
+                      >
+                        <img
+                          src={iconUrl}
+                          alt=""
+                          class="armory-icon"
+                          loading="lazy"
+                          decoding="async"
+                          onerror={`this.src='${FALLBACK_ICON}'`}
+                        />
+                        <span class="armory-icon-ilvl">{item.itemLevel ?? '—'}</span>
+                      </a>
                     ) : (
-                      <>
-                        <div class="armory-item-top">
-                          <p class="armory-empty">—</p>
-                        </div>
-                        <div class="armory-item-bottom">
-                          <p class="armory-meta">iLvl —</p>
-                        </div>
-                      </>
+                      <span class="armory-icon-empty" title={itemTitle} aria-label={itemTitle}></span>
                     )}
+                    <div
+                      class="armory-affixes"
+                      aria-label={item?.canEnchant || item?.canGem ? 'Item enhancements' : undefined}
+                    >
+                      {item?.canEnchant && (
+                        <span
+                          class:list={[
+                            'armory-affix',
+                            'armory-affix-enchant',
+                            { 'armory-affix-missing': enchantState.missing },
+                          ]}
+                          data-tooltip={enchantState.tooltip}
+                          aria-label={enchantState.label}
+                        >
+                          <Icon name="lucide:wand-sparkles" class="armory-affix-icon" aria-hidden="true" />
+                        </span>
+                      )}
+                      {item?.canGem && (
+                        <span
+                          class:list={[
+                            'armory-affix',
+                            'armory-affix-gem',
+                            { 'armory-affix-missing': gemState.missing },
+                          ]}
+                          data-tooltip={gemState.tooltip}
+                          aria-label={gemState.label}
+                        >
+                          <Icon name="lucide:gem" class="armory-affix-icon" aria-hidden="true" />
+                        </span>
+                      )}
+                    </div>
                   </article>
                 );
               })}
@@ -1440,6 +1482,18 @@ function gemAffixState(item: (typeof gear)[number] | undefined): { missing: bool
   </section>
 </Layout>
 
+<!-- Gear icons link to Wowhead; this is what turns those links into item tooltips
+     (same setup as /raiders/gear-summary). The native title attribute on each icon
+     stays as the fallback for when this script is blocked. -->
+<script is:inline>
+  window.whTooltips = {
+    colorLinks: true,
+    iconizeLinks: false,
+    renameLinks: false,
+  };
+</script>
+<script is:inline src="https://wow.zamimg.com/js/tooltips.js"></script>
+
 <script>
   document.addEventListener('click', (event) => {
     const target = event.target as HTMLElement;
@@ -1671,7 +1725,8 @@ function gemAffixState(item: (typeof gear)[number] | undefined): { missing: bool
 
   .armory-wrap {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) minmax(15rem, 22rem) minmax(0, 1fr);
+    /* Wide enough for an icon plus its affix rail, and no wider. */
+    grid-template-columns: minmax(0, 5rem) minmax(0, 1fr) minmax(0, 5rem);
     gap: 0.55rem;
     align-items: start;
   }
@@ -1691,51 +1746,68 @@ function gemAffixState(item: (typeof gear)[number] | undefined): { missing: bool
     border: 1px solid rgba(109, 172, 229, 0.2);
     border-radius: 0.45rem;
     background: rgba(8, 18, 29, 0.62);
-    padding: 0.4rem 0.5rem;
-  }
-
-  .armory-item-top {
-    display: block;
-    min-width: 0;
-    position: relative;
-  }
-
-  .armory-item-bottom {
+    padding: 0.35rem;
     display: flex;
     align-items: center;
-    gap: 0.34rem;
-    margin-top: 0.14rem;
-    min-width: 0;
+    justify-content: center;
+    gap: 0.35rem;
   }
 
-  .armory-item {
-    margin: 0;
+  .armory-icon-link {
+    position: relative;
+    flex-shrink: 0;
     display: block;
-    font-size: 0.86rem;
-    line-height: 1.23;
+    line-height: 0;
     text-decoration: none;
-    font-weight: 600;
-    white-space: normal;
-    overflow-wrap: anywhere;
   }
 
-  .armory-item:hover {
-    text-decoration: underline;
+  .armory-icon,
+  .armory-icon-empty {
+    width: 2.4rem;
+    height: 2.4rem;
+    border-radius: 0.3rem;
+    /* Quality color reads as the item's rarity border, like the in-game armory. */
+    border: 2px solid var(--quality-color, rgba(214, 176, 106, 0.3));
+    background: rgba(214, 176, 106, 0.08);
+    display: block;
+    object-fit: cover;
   }
 
-  .armory-meta {
-    margin: 0;
-    color: #9cb2c0;
-    font-size: 0.74rem;
-    white-space: nowrap;
+  .armory-icon-empty {
+    flex-shrink: 0;
+    border-color: rgba(109, 172, 229, 0.18);
+    background: rgba(8, 18, 29, 0.5);
+  }
+
+  .armory-icon-link:hover .armory-icon {
+    filter: brightness(1.15);
+  }
+
+  /* Same corner badge the gear summary grid uses, so the two views read alike. */
+  .armory-icon-ilvl {
+    position: absolute;
+    right: -3px;
+    bottom: -4px;
+    padding: 0 0.2rem;
+    border-radius: 0.25rem;
+    background: rgba(4, 10, 16, 0.92);
+    color: #f1d9a9;
+    font-size: 0.62rem;
+    font-weight: 700;
+    line-height: 1.25;
   }
 
   .armory-affixes {
     margin-top: 0;
-    display: inline-flex;
+    display: flex;
+    flex-direction: column;
     align-items: center;
-    gap: 0.3rem;
-    margin-left: auto;
+    justify-content: center;
+    gap: 0.2rem;
+    /* Reserved even when empty: an item with no enchant or gem must not shift
+       its icon out of line with the rest of the column. */
+    width: 1rem;
+    flex-shrink: 0;
   }
 
   .armory-affix {
@@ -1808,16 +1880,6 @@ function gemAffixState(item: (typeof gear)[number] | undefined): { missing: bool
     border-top: 0.3rem solid rgba(214, 176, 106, 0.45);
     z-index: 21;
     pointer-events: none;
-  }
-
-  .armory-empty {
-    margin: 0;
-    color: #607685;
-    font-size: 0.86rem;
-    line-height: 1.23;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
   }
 
   .armory-weapons {

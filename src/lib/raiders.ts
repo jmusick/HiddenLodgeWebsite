@@ -2110,7 +2110,15 @@ export async function getRaiderMediaUrl(charId: number, dbInput?: D1Database): P
   return fullBody ?? portrait;
 }
 
-export async function getRaiderGear(charId: number, dbInput?: D1Database): Promise<RaiderGearItem[]> {
+/**
+ * Live equipment for one character, each item carrying its icon url.
+ *
+ * Unlike the roster-wide gear summary (which reads icons cache-only, see
+ * readCachedItemIcons), a single character is at most ~16 items, so resolving
+ * cache misses through fetchItemIconUrls here is cheap and warms the shared
+ * cache for everyone else.
+ */
+export async function getRaiderGear(charId: number, dbInput?: D1Database): Promise<RaiderGearSummaryItem[]> {
   const db = getDatabase(dbInput);
   const row = await db
     .prepare(
@@ -2126,7 +2134,25 @@ export async function getRaiderGear(charId: number, dbInput?: D1Database): Promi
 
   const url = buildCharacterUrl(row.realm_slug, row.name, '/equipment');
   const equipment = await fetchBlizzardJsonWithRetry<BlizzardEquipmentResponse>(url, accessToken);
-  return mapEquippedItemsToGearItems(equipment?.equipped_items ?? []);
+  const items = mapEquippedItemsToGearItems(equipment?.equipped_items ?? []);
+
+  let icons = new Map<number, string>();
+  try {
+    icons = await fetchItemIconUrls(
+      db,
+      items.map((item) => item.itemId).filter((id): id is number => typeof id === 'number'),
+      env.BLIZZARD_CLIENT_ID,
+      env.BLIZZARD_CLIENT_SECRET
+    );
+  } catch (error) {
+    // Icons are decoration — a lookup failure shouldn't blank the gear list.
+    console.error('Raider gear icon lookup failed', error);
+  }
+
+  return items.map((item) => ({
+    ...item,
+    iconUrl: item.itemId ? icons.get(item.itemId) ?? null : null,
+  }));
 }
 
 export interface GearBackfillResult {
