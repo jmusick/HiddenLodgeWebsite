@@ -5,7 +5,7 @@ import Layout from '../../layouts/Layout.astro';
 import { Icon } from 'astro-icon/components';
 import { env } from 'cloudflare:workers';
 import { classColor } from '../../lib/wow';
-import { getRaiderByCharId, getRaiderGear, getRaiderMedia, getPreparednessHistory, getProgressionHistory, getVaultHistory } from '../../lib/raiders';
+import { getRaiderByCharId, getRaiderGear, wowheadItemUrl, getRaiderMedia, getPreparednessHistory, getProgressionHistory, getVaultHistory } from '../../lib/raiders';
 import { getLatestSingleTargetForRaiders } from '../../lib/sim-api';
 import { attendanceScoringStartUtc, attendanceStatusLabel, getAttendanceSummaryMap } from '../../lib/attendance';
 import { RAID_PROGRESS_TARGET_GROUPS } from '../../data/raidProgressTargets';
@@ -556,7 +556,7 @@ function gemAffixState(item: (typeof gear)[number] | undefined): { missing: bool
             <div class="armory-gear-col" aria-label="Left equipment column">
               {leftGearSlots.map((slotKey) => {
                 const item = gearBySlot.get(slotKey);
-                const wowhead = item?.itemId ? `https://www.wowhead.com/item=${item.itemId}` : null;
+                const wowhead = item ? wowheadItemUrl(item) : null;
                 const enchantState = enchantAffixState(item);
                 const gemState = gemAffixState(item);
 
@@ -630,7 +630,7 @@ function gemAffixState(item: (typeof gear)[number] | undefined): { missing: bool
               <div class="armory-weapons" aria-label="Weapon slots">
                 {weaponSlots.map((slotKey) => {
                   const item = gearBySlot.get(slotKey);
-                  const wowhead = item?.itemId ? `https://www.wowhead.com/item=${item.itemId}` : null;
+                  const wowhead = item ? wowheadItemUrl(item) : null;
                   const enchantState = enchantAffixState(item);
                   const gemState = gemAffixState(item);
 
@@ -700,7 +700,7 @@ function gemAffixState(item: (typeof gear)[number] | undefined): { missing: bool
             <div class="armory-gear-col" aria-label="Right equipment column">
               {rightGearSlots.map((slotKey) => {
                 const item = gearBySlot.get(slotKey);
-                const wowhead = item?.itemId ? `https://www.wowhead.com/item=${item.itemId}` : null;
+                const wowhead = item ? wowheadItemUrl(item) : null;
                 const enchantState = enchantAffixState(item);
                 const gemState = gemAffixState(item);
 

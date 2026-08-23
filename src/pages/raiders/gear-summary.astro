@@ -5,7 +5,7 @@ import Layout from '../../layouts/Layout.astro';
 import { Icon } from 'astro-icon/components';
 import { classColor } from '../../lib/wow';
 import { classRaidData } from '../../lib/raid-teams';
-import { getAllRaidersGear, type RaiderGearSummaryItem } from '../../lib/raiders';
+import { getAllRaidersGear, wowheadItemUrl, type RaiderGearSummaryItem } from '../../lib/raiders';
 import { getRaidLogActivity, RECENT_LOG_WINDOW_DAYS } from '../../lib/raid-log-activity';
 
 const FALLBACK_ICON = 'https://wow.zamimg.com/images/wow/icons/large/inv_misc_questionmark.jpg';
@@ -158,7 +158,7 @@ const rows = raiders.map((r) => {
     return {
       slotKey,
       item,
-      wowhead: item?.itemId ? `https://www.wowhead.com/item=${item.itemId}` : null,
+      wowhead: item ? wowheadItemUrl(item) : null,
       iconUrl: item?.iconUrl ?? FALLBACK_ICON,
       title: titleParts.join(' · '),
     };

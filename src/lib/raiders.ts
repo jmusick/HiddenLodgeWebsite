@@ -404,6 +404,8 @@ export interface RaiderGearItem {
   canEnchant: boolean;
   canGem: boolean;
   isTierSet: boolean;
+  /** Blizzard bonus ids; needed for an accurate Wowhead tooltip. */
+  bonusIds: number[];
 }
 
 const GEAR_SLOT_ORDER: string[] = [
@@ -562,6 +564,7 @@ function mapEquippedItemsToGearItems(items: BlizzardEquippedItem[]): RaiderGearI
         canEnchant: false,
         canGem: false,
         isTierSet: false,
+        bonusIds: [],
       } satisfies RaiderGearItem;
     }
 
@@ -598,6 +601,7 @@ function mapEquippedItemsToGearItems(items: BlizzardEquippedItem[]): RaiderGearI
       // Same rule countTierPieces() uses: only the five tier slots count, so
       // non-tier item sets (paired rings and the like) aren't badged as tier.
       isTierSet: TIER_SET_SLOTS.has(slotKey) && Boolean(item.item_set || item.set),
+      bonusIds: (item.bonus_list ?? []).filter((id) => Number.isFinite(id)),
     } satisfies RaiderGearItem;
   });
 }
@@ -1330,8 +1334,9 @@ async function upsertRaiderGearCache(
         `INSERT INTO raider_gear_cache (
            blizzard_char_id, slot_key, item_id, item_name, item_level,
            quality, quality_color, enchantments_json, gems_json,
-           sockets_filled, sockets_total, can_enchant, can_gem, is_tier_set, synced_at
-         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           sockets_filled, sockets_total, can_enchant, can_gem, is_tier_set,
+           bonus_list_json, synced_at
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT (blizzard_char_id, slot_key) DO UPDATE SET
            item_id = excluded.item_id,
            item_name = excluded.item_name,
@@ -1345,6 +1350,7 @@ async function upsertRaiderGearCache(
            can_enchant = excluded.can_enchant,
            can_gem = excluded.can_gem,
            is_tier_set = excluded.is_tier_set,
+           bonus_list_json = excluded.bonus_list_json,
            synced_at = excluded.synced_at`
       )
       .bind(
@@ -1362,6 +1368,7 @@ async function upsertRaiderGearCache(
         item.canEnchant ? 1 : 0,
         item.canGem ? 1 : 0,
         item.isTierSet ? 1 : 0,
+        JSON.stringify(item.bonusIds),
         syncedAt
       )
   );
@@ -2273,6 +2280,24 @@ export async function backfillRaiderGear(
   };
 }
 
+/**
+ * Wowhead link for an equipped item, carrying the bonus ids and item level.
+ *
+ * Without them Wowhead resolves the base item to its *default* rendition — the
+ * top of the upgrade track — so a Hero 3/6 drop rendered as "Myth 6/6" at the
+ * item's max ilvl. Bonus ids are colon-separated and must stay unencoded.
+ */
+export function wowheadItemUrl(item: Pick<RaiderGearItem, 'itemId' | 'itemLevel' | 'bonusIds'>): string | null {
+  if (!item.itemId) return null;
+
+  const params: string[] = [];
+  const bonusIds = (item.bonusIds ?? []).filter((id) => Number.isFinite(id) && id > 0);
+  if (bonusIds.length > 0) params.push(`bonus=${bonusIds.join(':')}`);
+  if (item.itemLevel && item.itemLevel > 0) params.push(`ilvl=${item.itemLevel}`);
+
+  return `https://www.wowhead.com/item=${item.itemId}${params.length > 0 ? `?${params.join('&')}` : ''}`;
+}
+
 export type RaiderGearSummaryItem = RaiderGearItem & { iconUrl: string | null };
 
 export interface RaiderGearSummaryRow {
@@ -2394,6 +2419,7 @@ export async function getAllRaidersGear(dbInput?: D1Database): Promise<RaiderGea
       can_enchant: number;
       can_gem: number;
       is_tier_set: number | null;
+      bonus_list_json: string | null;
       synced_at: number;
     }>();
 
@@ -2423,6 +2449,7 @@ export async function getAllRaidersGear(dbInput?: D1Database): Promise<RaiderGea
       canEnchant: row.can_enchant === 1,
       canGem: row.can_gem === 1,
       isTierSet: row.is_tier_set === 1,
+      bonusIds: JSON.parse(row.bonus_list_json || '[]'),
       iconUrl: row.item_id ? iconsByItemId.get(row.item_id) ?? null : null,
     });
     gearByChar.set(row.blizzard_char_id, slotMap);
