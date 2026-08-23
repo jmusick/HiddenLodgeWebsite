@@ -257,7 +257,6 @@ const rows = raiders.map((r) => {
         <thead>
           <tr>
             <th><button class="sort-btn" type="button" data-sort-key="name">Name</button></th>
-            <th><button class="sort-btn" type="button" data-sort-key="class">Class</button></th>
             {GEAR_SLOT_ORDER.map((slotKey) => (
               <th class="slot-col">
                 <button
@@ -281,7 +280,6 @@ const rows = raiders.map((r) => {
                   <span class="alt-tag" title={`Alt of ${row.mainCharacterName}`}>alt</span>
                 )}
               </td>
-              <td>{row.className}</td>
               {row.cells.map(({ item, wowhead, iconUrl, title }) => (
                 <td class="gear-cell">
                   {item?.itemName ? (
@@ -387,9 +385,7 @@ const rows = raiders.map((r) => {
 
     visibleRows.sort((rowA, rowB) => {
       let order = 0;
-      if (sortKey === 'class') {
-        order = compareText((rowA as HTMLElement).dataset.class ?? '', (rowB as HTMLElement).dataset.class ?? '');
-      } else if (sortKey.startsWith('slot-')) {
+      if (sortKey.startsWith('slot-')) {
         const slotAttr = `data-slot-${sortKey.slice(5).toLowerCase()}`;
         const valueA = Number(rowA.getAttribute(slotAttr) ?? -1);
         const valueB = Number(rowB.getAttribute(slotAttr) ?? -1);
@@ -711,11 +707,24 @@ const rows = raiders.map((r) => {
   .gear-table th,
   .gear-table td {
     border-bottom: 1px solid rgba(214, 176, 106, 0.18);
-    padding: 0.4rem 0.35rem;
+    padding: 0.55rem 0.5rem;
     text-align: left;
     color: #d8e2e8;
     font-size: 0.85rem;
     white-space: nowrap;
+  }
+
+  /* Dropping the class column freed enough width to pull the name and the
+     last slot off the panel edges. */
+  .gear-table th:first-child,
+  .gear-table td:first-child {
+    padding-left: 1.1rem;
+    padding-right: 1rem;
+  }
+
+  .gear-table th:last-child,
+  .gear-table td:last-child {
+    padding-right: 1.1rem;
   }
 
   .gear-table thead th {
@@ -723,6 +732,8 @@ const rows = raiders.map((r) => {
     position: sticky;
     top: 0;
     z-index: 1;
+    padding-top: 0.7rem;
+    padding-bottom: 0.7rem;
   }
 
   .gear-table tbody tr:hover {
@@ -771,7 +782,7 @@ const rows = raiders.map((r) => {
   }
 
   .gear-cell {
-    width: 3.4rem;
+    width: 3.75rem;
     text-align: center;
   }
 

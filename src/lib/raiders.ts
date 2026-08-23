@@ -61,6 +61,22 @@ const ALWAYS_ENCHANTABLE_SLOTS = new Set([
 // and must not be counted as tier pieces.
 const TIER_SET_SLOTS = new Set(['HEAD', 'SHOULDER', 'CHEST', 'HANDS', 'LEGS']);
 
+// Only the *current* season's tier counts — an equipped Season 1 (12.0) piece
+// gives no set bonus now, so badging it as tier is misleading.
+// Blizzard hands out each season's 13 class sets as one contiguous item-id
+// block, 9 ids per class in class order, so the season reduces to a range:
+//   Midnight Season 1 (12.0): 249950-250066
+//   Midnight Season 2 (12.1): 271454-271570
+// Bump this to the next block when Season 3 lands.
+const CURRENT_TIER_SET_ITEM_ID_MIN = 271454;
+const CURRENT_TIER_SET_ITEM_ID_MAX = 271570;
+
+function isCurrentSeasonTierItem(slotKey: string, itemId: number | null | undefined): boolean {
+  if (!TIER_SET_SLOTS.has(slotKey)) return false;
+  if (typeof itemId !== 'number' || !Number.isFinite(itemId)) return false;
+  return itemId >= CURRENT_TIER_SET_ITEM_ID_MIN && itemId <= CURRENT_TIER_SET_ITEM_ID_MAX;
+}
+
 // Season 16 Great Vault ilvl reward by keystone level.
 // Levels > 10 are capped to 10; levels < 2 are not valid keystone levels
 // from Raider.IO (which only returns actual keystone runs).
@@ -374,8 +390,6 @@ interface BlizzardEquippedItem {
   }>;
   stats?: BlizzardItemStat[];
   bonus_list?: number[];
-  item_set?: unknown;
-  set?: unknown;
 }
 
 interface BlizzardItemStat {
@@ -600,9 +614,10 @@ function mapEquippedItemsToGearItems(items: BlizzardEquippedItem[]): RaiderGearI
       socketsTotal,
       canEnchant: isEnchantableItem(slotKey, item),
       canGem: socketsTotal > 0,
-      // Same rule countTierPieces() uses: only the five tier slots count, so
-      // non-tier item sets (paired rings and the like) aren't badged as tier.
-      isTierSet: TIER_SET_SLOTS.has(slotKey) && Boolean(item.item_set || item.set),
+      // Same rule countTierPieces() uses: a tier slot holding one of this
+      // season's class-set items. Non-tier item sets (paired rings and the
+      // like) and last season's tier aren't badged.
+      isTierSet: isCurrentSeasonTierItem(slotKey, item.item?.id),
       bonusIds: (item.bonus_list ?? []).filter((id) => Number.isFinite(id)),
     } satisfies RaiderGearItem;
   });
@@ -801,10 +816,10 @@ function extractDelvesLifetimeTotal(stats: BlizzardAchievementStatisticsResponse
 }
 
 function countTierPieces(items: BlizzardEquippedItem[]): number {
-  return items.reduce((count, item) => {
-    const slotType = item.slot?.type ?? '';
-    return TIER_SET_SLOTS.has(slotType) && (item.item_set || item.set) ? count + 1 : count;
-  }, 0);
+  return items.reduce(
+    (count, item) => (isCurrentSeasonTierItem(item.slot?.type ?? '', item.item?.id) ? count + 1 : count),
+    0
+  );
 }
 
 function countSockets(items: BlizzardEquippedItem[]): { socketed: number; total: number } {
