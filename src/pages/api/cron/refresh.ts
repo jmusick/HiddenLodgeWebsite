@@ -1,7 +1,7 @@
 import type { APIRoute } from 'astro';
 import { env } from 'cloudflare:workers';
 import { getRosterRefreshOptions, refreshRosterCache } from '../../../lib/roster-cache';
-import { refreshRaidersCache } from '../../../lib/raiders';
+import { refreshRaidersCache, warmGearIcons } from '../../../lib/raiders';
 import { refreshAttendanceCache } from '../../../lib/attendance';
 import { refreshProfessionsCache } from '../../../lib/professions-cache';
 import { warmTrinketTierCacheChunk } from '../../../lib/trinkets';
@@ -28,6 +28,9 @@ export const GET: APIRoute = async ({ request }) => {
   const logReportBatchSize = url.searchParams.get('logReportBatchSize')
     ? Number.parseInt(url.searchParams.get('logReportBatchSize')!, 10)
     : undefined;
+  const iconBatchSize = url.searchParams.get('iconBatchSize')
+    ? Number.parseInt(url.searchParams.get('iconBatchSize')!, 10)
+    : undefined;
 
   // Per-refresh timings: this endpoint runs against a 30s external timeout and
   // has little headroom, so record how long each leg takes to make the slow one
@@ -51,7 +54,15 @@ export const GET: APIRoute = async ({ request }) => {
   const runTools = FEATURE_FLAGS.tools;
 
   const startedAt = Date.now();
-  const [rosterResult, raidersResult, attendanceResult, professionsResult, trinketsResult, logActivityResult] = await Promise.allSettled([
+  const [
+    rosterResult,
+    raidersResult,
+    attendanceResult,
+    professionsResult,
+    trinketsResult,
+    logActivityResult,
+    gearIconsResult,
+  ] = await Promise.allSettled([
     timed('roster', refreshRosterCache(undefined, rosterOptions)),
     skipRaiders ? Promise.resolve(null) : timed('raiders', refreshRaidersCache()),
     runAttendance ? timed('attendance', refreshAttendanceCache()) : Promise.resolve(null),
@@ -61,6 +72,11 @@ export const GET: APIRoute = async ({ request }) => {
     // log lately" sync that the raiders/gear pages filter on, not the full
     // scheduled-raid attendance pipeline.
     timed('logActivity', refreshRaidLogActivity(undefined, { maxReports: logReportBatchSize })),
+    // Newly equipped items land in raider_gear_cache on the 12h details
+    // refresh; without this leg their icons were only ever resolved by the
+    // manual /api/cron/backfill-gear endpoint, so fresh drops rendered the
+    // question-mark fallback indefinitely.
+    timed('gearIcons', warmGearIcons({ limit: iconBatchSize })),
   ]);
   timings.total = Date.now() - startedAt;
   console.log('Cron refresh timings (ms)', timings);
@@ -90,6 +106,10 @@ export const GET: APIRoute = async ({ request }) => {
     console.error('Cron raid log activity refresh failed', logActivityResult.reason);
     failures.push('logActivity');
   }
+  if (gearIconsResult.status === 'rejected') {
+    console.error('Cron gear icon warm failed', gearIconsResult.reason);
+    failures.push('gearIcons');
+  }
 
   const attendanceSummary = runAttendance
     ? await env.DB
@@ -112,6 +132,7 @@ export const GET: APIRoute = async ({ request }) => {
     professions: professionsResult.status === 'fulfilled' ? professionsResult.value : null,
     trinkets: trinketsResult.status === 'fulfilled' ? trinketsResult.value : null,
     logActivity: logActivityResult.status === 'fulfilled' ? logActivityResult.value : null,
+    gearIcons: gearIconsResult.status === 'fulfilled' ? gearIconsResult.value : null,
     attendance: {
       totalReports: Number(attendanceSummary?.total_reports ?? 0),
       reportsWithKills: Number(attendanceSummary?.reports_with_kills ?? 0),
@@ -128,5 +149,6 @@ export const GET: APIRoute = async ({ request }) => {
     requestedProfessionBatchSize: professionBatchSize,
     requestedTrinketBatchSize: trinketBatchSize,
     requestedLogReportBatchSize: logReportBatchSize,
+    requestedIconBatchSize: iconBatchSize,
   });
 };

@@ -28,6 +28,8 @@ const PREPAREDNESS_HISTORY_WINDOW_SECONDS = 14 * 24 * 60 * 60; // 14 days (2 wee
 const PROGRESSION_HISTORY_WINDOW_SECONDS = 28 * 24 * 60 * 60; // 28 days (4 weeks)
 const VAULT_HISTORY_WINDOW_SECONDS = 28 * 24 * 60 * 60; // 28 days (4 weeks)
 const DELVES_TOTAL_STAT_ID = 40734;
+/** Items per refresh-cron icon warm; see warmGearIcons(). */
+const GEAR_ICON_WARM_BATCH_SIZE = 20;
 
 const UPGRADE_TRACK_IDS = {
   mythic: [12801, 12802, 12803, 12804, 12805, 12806],
@@ -2124,9 +2126,8 @@ export interface GearBackfillResult {
 /**
  * Resolves icons for cached gear items that have no item_icon_cache row yet.
  *
- * The refresh cron deliberately does not do this (the media API calls pushed it
- * past its 30s timeout), so this is where gear written by the cron gets its
- * icons. Bounded per call so it can be looped without running long.
+ * Bounded per call so it can be looped without running long. Exposed to the
+ * refresh cron via warmGearIcons() — see that wrapper for why.
  */
 async function warmMissingGearIcons(db: D1Database, limit: number): Promise<{ warmed: number; remaining: number }> {
   const missingRows = await db
@@ -2161,6 +2162,34 @@ async function warmMissingGearIcons(db: D1Database, limit: number): Promise<{ wa
     .first<{ remaining: number }>();
 
   return { warmed, remaining: Number(remainingRow?.remaining ?? 0) };
+}
+
+/**
+ * Bounded icon warm for the refresh cron.
+ *
+ * Icon warming used to live only inside backfillRaiderGear(), reachable just
+ * from the manual /api/cron/backfill-gear endpoint. But the 12h details
+ * refresh rewrites raider_gear_cache with newly acquired items and never
+ * resolved their icons, so every fresh drop rendered the question-mark
+ * fallback until someone hit that endpoint by hand.
+ *
+ * It is kept small and explicitly bounded because an *unbounded* warm is what
+ * pushed the refresh past its 30s timeout originally: each id costs one
+ * Blizzard media call, and they are issued in parallel, so a batch of this
+ * size settles in well under a second.
+ */
+export async function warmGearIcons(
+  options?: { limit?: number; dbInput?: D1Database }
+): Promise<{ warmed: number; remaining: number }> {
+  const db = getDatabase(options?.dbInput);
+  const limit = Math.min(50, Math.max(1, options?.limit ?? GEAR_ICON_WARM_BATCH_SIZE));
+
+  const hasGearTable = await db
+    .prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='raider_gear_cache' LIMIT 1")
+    .first<{ '1': number }>();
+  if (!hasGearTable) return { warmed: 0, remaining: 0 };
+
+  return warmMissingGearIcons(db, limit);
 }
 
 /**
