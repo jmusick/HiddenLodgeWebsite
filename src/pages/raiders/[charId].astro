@@ -35,7 +35,9 @@ if (FEATURE_FLAGS.sim) {
   await getLatestSingleTargetForRaiders((env as any).DB, [id], { maxAgeSeconds: 14 * 24 * 60 * 60 });
 }
 
-const attendanceSummaryMap = FEATURE_FLAGS.attendance
+// Annotated so the disabled-feature branch is not an untyped Map, which would make
+// attendanceBreakdown `any[]` and its rows implicitly any in the markup below.
+const attendanceSummaryMap: Awaited<ReturnType<typeof getAttendanceSummaryMap>> = FEATURE_FLAGS.attendance
   ? await getAttendanceSummaryMap((env as any).DB, { includeBreakdownFor: [id] })
   : new Map();
 const attendanceSummary = attendanceSummaryMap.get(id) ?? null;

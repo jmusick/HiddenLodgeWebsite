@@ -261,6 +261,12 @@ interface RaiderSourceRow {
   team_names: string | null;
 }
 
+/**
+ * Mirrors the CHECK constraint on raider_metrics_cache.auth_state
+ * (migrations/0013_raiders_cache.sql) — keep the two in sync.
+ */
+export type RaiderAuthState = 'ready' | 'missing' | 'expired' | 'unavailable';
+
 interface CachedRaiderRow {
   blizzard_char_id: number;
   name: string;
@@ -1058,6 +1064,13 @@ async function enrichRaider(
 ): Promise<{ record: RaiderRecord; gear: RaiderGearItem[] | null }> {
   const baseRecord: RaiderRecord = {
     blizzardCharId: row.blizzard_char_id,
+    // enrichRaider works from a RaiderSourceRow, which carries no user/main linkage,
+    // and only its metric fields are read back by the caller. These default to "this
+    // character is its own main"; main/alt linkage is resolved by the list query.
+    userId: null,
+    isMain: true,
+    mainCharId: row.blizzard_char_id,
+    mainCharacterName: row.name,
     name: row.name,
     realm: row.realm,
     realmSlug: row.realm_slug,
@@ -1332,6 +1345,9 @@ async function listCachedRaiders(db: D1Database): Promise<RaiderRecord[]> {
     mythicPlusWeeklyRuns: row.mythic_plus_weekly_runs,
     mythicPlusPrevWeeklyRuns: row.mythic_plus_prev_weekly_runs,
     mythicPlusSeasonRuns: row.mythic_plus_season_runs,
+    // Individual runs live in the keystones table, not raider_metrics_cache, so the
+    // cached list has none — the same empty default the pre-detail record starts with.
+    mythicPlusAllRuns: [],
     mythicPlusVaultIlvl1: row.mythic_plus_vault_ilvl_1,
     mythicPlusVaultIlvl2: row.mythic_plus_vault_ilvl_2,
     mythicPlusVaultIlvl3: row.mythic_plus_vault_ilvl_3,
@@ -2664,6 +2680,13 @@ export async function getRaiderByCharId(charId: number, dbInput?: D1Database): P
 
   return {
     blizzardCharId: row.blizzard_char_id,
+    // This query reads raider_metrics_cache alone — it has no join to characters, so
+    // the identity columns are absent and fall back to "this character is its own main".
+    // The `??` chains start returning real values if the join is ever added.
+    userId: row.user_id ?? null,
+    isMain: row.is_main === 1 || row.main_char_id === row.blizzard_char_id,
+    mainCharId: row.main_char_id ?? row.blizzard_char_id,
+    mainCharacterName: toNonEmptyString(row.main_character_name, row.name),
     name: toNonEmptyString(row.name, `Unknown-${row.blizzard_char_id}`),
     realm: toNonEmptyString(row.realm, 'Unknown Realm'),
     realmSlug: toNonEmptyString(row.realm_slug, 'unknown-realm'),
@@ -2689,6 +2712,9 @@ export async function getRaiderByCharId(charId: number, dbInput?: D1Database): P
     mythicPlusWeeklyRuns: row.mythic_plus_weekly_runs,
     mythicPlusPrevWeeklyRuns: row.mythic_plus_prev_weekly_runs,
     mythicPlusSeasonRuns: row.mythic_plus_season_runs,
+    // Individual runs live in the keystones table, not raider_metrics_cache, so the
+    // cached list has none — the same empty default the pre-detail record starts with.
+    mythicPlusAllRuns: [],
     mythicPlusVaultIlvl1: row.mythic_plus_vault_ilvl_1,
     mythicPlusVaultIlvl2: row.mythic_plus_vault_ilvl_2,
     mythicPlusVaultIlvl3: row.mythic_plus_vault_ilvl_3,

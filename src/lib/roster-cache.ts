@@ -596,7 +596,15 @@ export async function refreshRosterCache(
     await db.batch(summaryStatements);
   }
 
-  await pruneMissingMembers(db, now);
+  // Only prune once we know the fetch actually returned a roster. Blizzard can answer
+  // 200 with an empty `members` array; pruning on that would delete every cached row,
+  // and roster_members_cache is what isGuildAdmin/isGuildMember read — an empty table
+  // locks every admin out of /admin, including the page used to re-run this refresh.
+  if (rosterMembers.length > 0) {
+    await pruneMissingMembers(db, now);
+  } else {
+    console.warn('Roster refresh: Blizzard returned an empty roster; skipping prune to avoid wiping the cache.');
+  }
 
   const detailCandidatesResult = await db
     .prepare(

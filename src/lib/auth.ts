@@ -92,10 +92,24 @@ export async function deleteSession(db: D1Database, sessionId: string): Promise<
 	await db.prepare('DELETE FROM sessions WHERE id = ?').bind(sessionId).run();
 }
 
-export function makeSessionCookie(sessionId: string): string {
-	return `${SESSION_COOKIE}=${sessionId}; HttpOnly; Path=/; Max-Age=${SESSION_TTL_SECONDS}; SameSite=Lax`;
+/**
+ * `; Secure` when the request came in over HTTPS, empty otherwise.
+ *
+ * Prod is HTTPS-only so cookies are always marked Secure there; `npm run dev` serves
+ * plain http://localhost, where a Secure cookie would be dropped and login would break.
+ */
+export function secureCookieAttr(requestUrl: string): string {
+	try {
+		return new URL(requestUrl).protocol === 'https:' ? '; Secure' : '';
+	} catch {
+		return '; Secure';
+	}
 }
 
-export function clearSessionCookie(): string {
-	return `${SESSION_COOKIE}=; HttpOnly; Path=/; Max-Age=0; SameSite=Lax`;
+export function makeSessionCookie(sessionId: string, requestUrl: string): string {
+	return `${SESSION_COOKIE}=${sessionId}; HttpOnly; Path=/; Max-Age=${SESSION_TTL_SECONDS}; SameSite=Lax${secureCookieAttr(requestUrl)}`;
+}
+
+export function clearSessionCookie(requestUrl: string): string {
+	return `${SESSION_COOKIE}=; HttpOnly; Path=/; Max-Age=0; SameSite=Lax${secureCookieAttr(requestUrl)}`;
 }

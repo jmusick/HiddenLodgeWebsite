@@ -52,6 +52,27 @@ const responsiveMainMenuItems = [...publicNavItems, ...guildNavItems, ...toolsNa
 
 const siteVersion = packageJson.version;
 const canonicalUrl = new URL(Astro.url.pathname, 'https://hidden-lodge.com').href;
+
+// Admin/member-only surfaces must not be indexed. They already redirect or 403 for
+// anonymous crawlers, but the URLs themselves shouldn't be advertised. Kept in sync
+// with the Disallow list in public/robots.txt.
+const NOINDEX_PREFIXES = [
+	'/admin',
+	'/api',
+	'/auth',
+	'/profile',
+	'/raiders',
+	'/signup',
+	'/feedback',
+	'/trinkets',
+	'/professions',
+	'/loot-history',
+	'/upgrades',
+];
+const currentPath = Astro.url.pathname;
+const isIndexable = !NOINDEX_PREFIXES.some(
+	(prefix) => currentPath === prefix || currentPath.startsWith(`${prefix}/`)
+);
 ---
 
 <!doctype html>
@@ -71,19 +92,19 @@ const canonicalUrl = new URL(Astro.url.pathname, 'https://hidden-lodge.com').hre
 		<link rel="sitemap" href="/sitemap.xml" />
 		<meta name="generator" content={Astro.generator} />
 		<meta name="description" content={description} />
-		<meta name="robots" content="index, follow" />
+		<meta name="robots" content={isIndexable ? 'index, follow' : 'noindex, nofollow'} />
 		<!-- Open Graph -->
 		<meta property="og:type" content="website" />
 		<meta property="og:site_name" content="The Hidden Lodge" />
 		<meta property="og:title" content={title} />
 		<meta property="og:description" content={description} />
 		<meta property="og:url" content={canonicalUrl} />
-		<meta property="og:image" content="https://hidden-lodge.com/images/guild-banner.png" />
+		<meta property="og:image" content="https://hidden-lodge.com/images/guild-banner.jpg" />
 		<!-- Twitter Card -->
 		<meta name="twitter:card" content="summary_large_image" />
 		<meta name="twitter:title" content={title} />
 		<meta name="twitter:description" content={description} />
-		<meta name="twitter:image" content="https://hidden-lodge.com/images/guild-banner.png" />
+		<meta name="twitter:image" content="https://hidden-lodge.com/images/guild-banner.jpg" />
 		<title>{title}</title>
 		<!-- Google tag (gtag.js) -->
 		<script async is:inline src="https://www.googletagmanager.com/gtag/js?id=G-CZH1RY5ETP"></script>

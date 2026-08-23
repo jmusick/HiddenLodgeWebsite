@@ -392,7 +392,9 @@ export async function getExcessiveDeathReviewSummary(
         fourthDeathCount,
       });
 
-      return {
+      // Annotated rather than `satisfies` so the literal `null`/`false` seeds widen to
+      // the interface's types — the loop below fills both fields in afterwards.
+      const entry: ExcessiveDeathEntry = {
         blizzardCharId: toPositiveInt(row.blizzard_char_id),
         name: row.name,
         realm: row.realm,
@@ -408,7 +410,8 @@ export async function getExcessiveDeathReviewSummary(
         totalDeathRate: fightsPresent > 0 ? totalDeaths / fightsPresent : 0,
         percentAboveAverage: null,
         isSignificantlyAboveAverage: false,
-      } satisfies ExcessiveDeathEntry;
+      };
+      return entry;
     })
     .filter((row) => row.blizzardCharId > 0 && row.fightsPresent > 0);
 
@@ -424,8 +427,9 @@ export async function getExcessiveDeathReviewSummary(
     }
 
     if (averageWeightedScore > 0) {
-      row.percentAboveAverage = ((row.weightedScore - averageWeightedScore) / averageWeightedScore) * 100;
-      row.isSignificantlyAboveAverage = row.percentAboveAverage > EXCESSIVE_DEATH_SIGNIFICANT_THRESHOLD * 100;
+      const percentAboveAverage = ((row.weightedScore - averageWeightedScore) / averageWeightedScore) * 100;
+      row.percentAboveAverage = percentAboveAverage;
+      row.isSignificantlyAboveAverage = percentAboveAverage > EXCESSIVE_DEATH_SIGNIFICANT_THRESHOLD * 100;
     } else {
       row.percentAboveAverage = row.weightedScore > 0 ? 100 : 0;
       row.isSignificantlyAboveAverage = row.weightedScore > 0;

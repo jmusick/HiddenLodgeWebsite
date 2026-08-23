@@ -45,6 +45,20 @@ interface CharRow {
 	avg_30d_enchantable_slots: number | null;
 }
 
+/**
+ * Vault slots for one week. These do not come from the CharRow query — they are
+ * assembled per character from getVaultHistory() at the call site below.
+ */
+interface VaultSlotRow {
+	raid_slot_1_ilvl: number | null;
+	raid_slot_2_ilvl: number | null;
+	raid_slot_3_ilvl: number | null;
+	dungeon_slot_1_ilvl: number | null;
+	dungeon_slot_2_ilvl: number | null;
+	dungeon_slot_3_ilvl: number | null;
+	world_slots_filled: number;
+}
+
 // ---- Preparedness tier calculation ----
 
 function preparednessTier(char: CharRow): string {
@@ -90,7 +104,7 @@ function dungeonDifficultyWeight(itemLevel: number | null): number {
 	return 0.7;
 }
 
-function greatVaultScore(char: CharRow): number | null {
+function greatVaultScore(char: VaultSlotRow): number | null {
 	const raidSlots = [char.raid_slot_1_ilvl, char.raid_slot_2_ilvl, char.raid_slot_3_ilvl] as const;
 	const dungeonSlots = [char.dungeon_slot_1_ilvl, char.dungeon_slot_2_ilvl, char.dungeon_slot_3_ilvl] as const;
 	const worldSlotsFilled = Math.max(0, Math.min(3, char.world_slots_filled ?? 0));

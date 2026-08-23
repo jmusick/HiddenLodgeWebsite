@@ -1318,13 +1318,14 @@ async function loadTrinketTierPageDataInternal(options?: {
       await sleep(WCL_MISSING_SPEC_RETRY_DELAY_MS);
 
       try {
-        const encounterIds = selectedEncounter
-          ? [selectedEncounter.id]
-          : allRaidZones.flatMap((z) => z.encounters.slice(0, MAX_AGGREGATE_ENCOUNTERS_PER_ZONE).map((e) => e.id));
-        // For retry, sample the first encounter from each zone to cover all raids
-        const retryEncounterIds = useAggregateMode
-          ? allRaidZones.map((z) => z.encounters[0]).filter((e): e is { id: number; name: string } => e !== undefined).map((e) => e.id)
-          : encounterIds;
+        // useAggregateMode is `selectedEncounter === null`, so inside this block
+        // selectedEncounter is always null and the retry always samples the first
+        // encounter from each zone to cover all raids. (The per-encounter branches
+        // this used to carry were unreachable here.)
+        const retryEncounterIds = allRaidZones
+          .map((z) => z.encounters[0])
+          .filter((e): e is { id: number; name: string } => e !== undefined)
+          .map((e) => e.id);
 
         const rankingGroups: Awaited<ReturnType<typeof fetchTopRankingsForSpec>>[] = [];
         for (const encounterId of retryEncounterIds) {

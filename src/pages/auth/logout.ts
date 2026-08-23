@@ -15,7 +15,7 @@ export async function GET(context: APIContext): Promise<Response> {
 		status: 302,
 		headers: {
 			Location: '/',
-			'Set-Cookie': clearSessionCookie(),
+			'Set-Cookie': clearSessionCookie(context.request.url),
 		},
 	});
 }

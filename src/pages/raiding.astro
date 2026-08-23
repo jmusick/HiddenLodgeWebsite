@@ -1139,7 +1139,7 @@ window.addEventListener('message', function(event) {
   if (event.data.type === 'blizzard-session' && event.data.sessionId) {
     var expiresDate = new Date();
     expiresDate.setTime(expiresDate.getTime() + (7 * 24 * 60 * 60 * 1000)); // 7 days
-    document.cookie = 'hl_session=' + encodeURIComponent(event.data.sessionId) + '; path=/; expires=' + expiresDate.toUTCString();
+    document.cookie = 'hl_session=' + encodeURIComponent(event.data.sessionId) + '; path=/; expires=' + expiresDate.toUTCString() + '; SameSite=Lax' + (location.protocol === 'https:' ? '; Secure' : '');
     setTimeout(function() { window.location.reload(); }, 100);
     return;
   }
@@ -1149,7 +1149,7 @@ window.addEventListener('message', function(event) {
     if (event.data.sessionId) {
       var expiresDate = new Date();
       expiresDate.setTime(expiresDate.getTime() + (7 * 24 * 60 * 60 * 1000));
-      document.cookie = 'hl_session=' + encodeURIComponent(event.data.sessionId) + '; path=/; expires=' + expiresDate.toUTCString();
+      document.cookie = 'hl_session=' + encodeURIComponent(event.data.sessionId) + '; path=/; expires=' + expiresDate.toUTCString() + '; SameSite=Lax' + (location.protocol === 'https:' ? '; Secure' : '');
     }
     applyBlizzardData(event.data);
   }

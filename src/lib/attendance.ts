@@ -1681,7 +1681,9 @@ export async function getAttendanceSummaryMap(
     let ownerJoinStartUtc: number | null = null;
     for (const blizzardCharId of ownerCharIds) {
       const joinStartUtc = rosterJoinByCharId.get(blizzardCharId);
-      if (!Number.isInteger(joinStartUtc) || (joinStartUtc ?? 0) <= 0) continue;
+      // Explicit undefined check: Number.isInteger has no type predicate, so it alone
+      // leaves joinStartUtc as `number | undefined` for the comparison below.
+      if (joinStartUtc === undefined || !Number.isInteger(joinStartUtc) || joinStartUtc <= 0) continue;
       if (ownerJoinStartUtc === null || joinStartUtc < ownerJoinStartUtc) {
         ownerJoinStartUtc = joinStartUtc;
       }

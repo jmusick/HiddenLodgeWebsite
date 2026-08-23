@@ -1,0 +1,95 @@
+---
+import Layout from '../layouts/Layout.astro';
+
+// Reached directly and via Astro.rewrite('/404') from routes that resolve nothing
+// (e.g. an unknown article slug), so the status is set here rather than at each caller.
+Astro.response.status = 404;
+---
+
+<Layout
+	title="Page Not Found | The Hidden Lodge"
+	description="That page doesn't exist. Head back to The Hidden Lodge."
+>
+	<div class="notfound-wrap">
+		<div class="notfound-card">
+			<p class="notfound-label">Error 404</p>
+			<h1>This Path Leads Nowhere</h1>
+			<p class="notfound-body">
+				The page you're looking for doesn't exist, or it moved somewhere we forgot to
+				write down. Either way, there's nothing here.
+			</p>
+			<div class="notfound-links">
+				<a href="/">Home</a>
+				<a href="/roster">Roster</a>
+				<a href="/raiding">Raiding</a>
+				<a href="/articles">Articles</a>
+			</div>
+		</div>
+	</div>
+</Layout>
+
+<style>
+	.notfound-wrap {
+		display: flex;
+		justify-content: center;
+		align-items: center;
+		min-height: 50vh;
+	}
+
+	.notfound-card {
+		max-width: 38rem;
+		width: 100%;
+		text-align: center;
+		padding: 3rem 2rem;
+		border: 1px solid rgba(214, 176, 106, 0.28);
+		border-radius: 0.75rem;
+		background: rgba(13, 23, 34, 0.6);
+		backdrop-filter: blur(6px);
+	}
+
+	.notfound-label {
+		margin: 0 0 0.75rem;
+		font-size: 0.8rem;
+		text-transform: uppercase;
+		letter-spacing: 0.12em;
+		color: var(--gold);
+		opacity: 0.8;
+	}
+
+	h1 {
+		margin: 0 0 1.5rem;
+		font-size: 2.2rem;
+		color: var(--gold-bright);
+		text-shadow: 0 0 24px rgba(214, 176, 106, 0.22);
+	}
+
+	.notfound-body {
+		margin: 0 0 1rem;
+		color: var(--muted);
+		font-size: 1.05rem;
+		line-height: 1.6;
+	}
+
+	.notfound-links {
+		display: flex;
+		justify-content: center;
+		gap: 0.75rem;
+		flex-wrap: wrap;
+		margin-top: 2rem;
+	}
+
+	.notfound-links a {
+		padding: 0.5rem 1.1rem;
+		border: 1px solid rgba(214, 176, 106, 0.4);
+		border-radius: 0.45rem;
+		color: var(--gold);
+		font-weight: 600;
+		font-size: 0.95rem;
+		transition: background 160ms ease, color 160ms ease;
+	}
+
+	.notfound-links a:hover {
+		background: rgba(214, 176, 106, 0.1);
+		color: var(--gold-bright);
+	}
+</style>

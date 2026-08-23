@@ -8,7 +8,9 @@ const articles = await getCollection('articles');
 const article = articles.find((a) => a.id === slug);
 
 if (!article) {
-	return Astro.redirect('/articles');
+	// Rewrite rather than redirect so an unknown slug answers 404 instead of a soft-404
+	// (a 302 to /articles reads as a live page to crawlers).
+	return Astro.rewrite('/404');
 }
 
 const { Content } = await render(article);

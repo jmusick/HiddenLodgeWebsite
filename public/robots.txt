@@ -1,4 +1,19 @@
 User-agent: *
 Allow: /
 
+# Admin and member-only surfaces. These already redirect or 403 for anonymous
+# visitors; this keeps the URLs out of search results too. Kept in sync with
+# NOINDEX_PREFIXES in src/layouts/Layout.astro.
+Disallow: /admin
+Disallow: /api/
+Disallow: /auth/
+Disallow: /profile
+Disallow: /raiders
+Disallow: /signup
+Disallow: /feedback
+Disallow: /trinkets
+Disallow: /professions
+Disallow: /loot-history
+Disallow: /upgrades
+
 Sitemap: https://hidden-lodge.com/sitemap.xml

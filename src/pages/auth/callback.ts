@@ -2,7 +2,7 @@ export const prerender = false;
 
 import type { APIContext } from 'astro';
 import { exchangeCode, getUserInfo, getWowCharacters } from '../../lib/blizzard';
-import { createSession, makeSessionCookie } from '../../lib/auth';
+import { createSession, makeSessionCookie, secureCookieAttr } from '../../lib/auth';
 import { env } from 'cloudflare:workers';
 import { getBlizzardAuthConfig, getBlizzardRedirectUri } from '../../lib/runtime-env';
 
@@ -95,8 +95,8 @@ export async function GET(context: APIContext): Promise<Response> {
 
 		// Create session for both popup and regular flows
 		const sessionId = await createSession(env.DB, user.id);
-		const sessionCookie = makeSessionCookie(sessionId);
-		const clearState = 'hl_oauth_state=; HttpOnly; Path=/; Max-Age=0; SameSite=Lax';
+		const sessionCookie = makeSessionCookie(sessionId, context.request.url);
+		const clearState = `hl_oauth_state=; HttpOnly; Path=/; Max-Age=0; SameSite=Lax${secureCookieAttr(context.request.url)}`;
 
 		if (isPopup) {
 			// Popup flow: return HTML that postMessages session ID and battletag to parent
@@ -127,7 +127,7 @@ if(window.opener && window.opener !== window) {
 		const resHeaders = new Headers({ Location: '/profile' });
 		resHeaders.append('Set-Cookie', sessionCookie);
 		// Clear the state cookie
-		resHeaders.append('Set-Cookie', 'hl_oauth_state=; HttpOnly; Path=/; Max-Age=0; SameSite=Lax');
+		resHeaders.append('Set-Cookie', clearState);
 
 		return new Response(null, { status: 302, headers: resHeaders });
 	} catch (err) {
