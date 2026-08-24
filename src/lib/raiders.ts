@@ -27,6 +27,7 @@ const DETAIL_TIME_BUDGET_MS = 18_000;
 const PREPAREDNESS_HISTORY_WINDOW_SECONDS = 14 * 24 * 60 * 60; // 14 days (2 weeks)
 const PROGRESSION_HISTORY_WINDOW_SECONDS = 28 * 24 * 60 * 60; // 28 days (4 weeks)
 const VAULT_HISTORY_WINDOW_SECONDS = 28 * 24 * 60 * 60; // 28 days (4 weeks)
+const GEAR_HISTORY_WINDOW_SECONDS = 60 * 24 * 60 * 60; // 60 days
 const DELVES_TOTAL_STAT_ID = 40734;
 /** Items per refresh-cron icon warm; see warmGearIcons(). */
 const GEAR_ICON_WARM_BATCH_SIZE = 20;
@@ -1432,6 +1433,65 @@ async function upsertRaiderGearCache(
   }
 }
 
+/**
+ * Upserts one history row per distinct item ever seen in each of the raider's
+ * slots. Keyed on (char, slot, item) rather than a timestamped snapshot: a
+ * re-observed item just bumps last_seen_at, while genuinely swapping gear adds
+ * a new row -- so "different item equipped" is what grows the history, not
+ * every 12h refresh re-recording the same piece. Crest upgrades (which change
+ * bonus ids/ilvl but not item id) update the existing row in place rather than
+ * creating a new one, matching "a different item" rather than "a different
+ * upgrade rank of the same item".
+ */
+async function recordGearSlotHistory(
+  db: D1Database,
+  blizzardCharId: number,
+  gear: RaiderGearItem[],
+  now: number
+): Promise<void> {
+  const statements = gear
+    .filter((item) => item.itemId)
+    .map((item) =>
+      db
+        .prepare(
+          `INSERT INTO raider_gear_slot_history (
+             blizzard_char_id, slot_key, item_id, item_name, item_level,
+             quality, quality_color, bonus_list_json, first_seen_at, last_seen_at
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           ON CONFLICT (blizzard_char_id, slot_key, item_id) DO UPDATE SET
+             item_name = excluded.item_name,
+             item_level = excluded.item_level,
+             quality = excluded.quality,
+             quality_color = excluded.quality_color,
+             bonus_list_json = excluded.bonus_list_json,
+             last_seen_at = excluded.last_seen_at`
+        )
+        .bind(
+          blizzardCharId,
+          item.slotKey,
+          item.itemId,
+          item.itemName,
+          item.itemLevel,
+          item.quality,
+          item.qualityColor,
+          JSON.stringify(item.bonusIds),
+          now,
+          now
+        )
+    );
+
+  if (statements.length > 0) {
+    await db.batch(statements);
+  }
+}
+
+async function pruneGearSlotHistory(db: D1Database, cutoff: number): Promise<void> {
+  await db
+    .prepare(`DELETE FROM raider_gear_slot_history WHERE last_seen_at < ?`)
+    .bind(cutoff)
+    .run();
+}
+
 async function recordPreparednessHistory(db: D1Database, raider: RaiderRecord, now: number): Promise<void> {
   if (raider.socketedGems === null || raider.totalSockets === null ||
       raider.enchantedSlots === null || raider.enchantableSlots === null) {
@@ -2068,6 +2128,7 @@ export async function refreshRaidersCache(
       // by /api/cron/backfill-gear instead, which runs on its own schedule.
       try {
         await upsertRaiderGearCache(db, source.blizzard_char_id, gearItems, now);
+        await recordGearSlotHistory(db, source.blizzard_char_id, gearItems, now);
       } catch (error) {
         console.error('Raider gear cache write failed', { charId: source.blizzard_char_id, error });
       }
@@ -2095,6 +2156,10 @@ export async function refreshRaidersCache(
   // Prune progression history older than 8 weeks
   const progCutoff = now - PROGRESSION_HISTORY_WINDOW_SECONDS;
   await pruneProgressionHistory(db, progCutoff);
+
+  // Prune gear slot history older than 60 days
+  const gearHistoryCutoff = now - GEAR_HISTORY_WINDOW_SECONDS;
+  await pruneGearSlotHistory(db, gearHistoryCutoff);
 
   if (detailSkippedForTime > 0) {
     console.warn(
@@ -2189,6 +2254,7 @@ export async function getRaiderGear(charId: number, dbInput?: D1Database): Promi
   return items.map((item) => ({
     ...item,
     iconUrl: item.itemId ? icons.get(item.itemId) ?? null : null,
+    hasHistory: false,
   }));
 }
 
@@ -2353,6 +2419,7 @@ export async function backfillRaiderGear(
     }
     try {
       await upsertRaiderGearCache(db, row.blizzard_char_id, gear, now);
+      await recordGearSlotHistory(db, row.blizzard_char_id, gear, now);
       processed += 1;
       try {
         const icons = await fetchItemIconUrls(
@@ -2405,7 +2472,7 @@ export function wowheadItemUrl(item: Pick<RaiderGearItem, 'itemId' | 'itemLevel'
   return `https://www.wowhead.com/item=${item.itemId}${params.length > 0 ? `?${params.join('&')}` : ''}`;
 }
 
-export type RaiderGearSummaryItem = RaiderGearItem & { iconUrl: string | null };
+export type RaiderGearSummaryItem = RaiderGearItem & { iconUrl: string | null; hasHistory: boolean };
 
 export interface RaiderGearSummaryRow {
   blizzardCharId: number;
@@ -2536,6 +2603,28 @@ export async function getAllRaidersGear(dbInput?: D1Database): Promise<RaiderGea
     cachedRows.map((row) => row.item_id ?? 0)
   );
 
+  // Slots with more than one distinct item on record get an expand affordance
+  // in the UI; everything else skips the query entirely. Computed once for the
+  // whole roster rather than per-cell to keep this page's single-query-per-
+  // roster budget intact.
+  const hasHistoryTable = await db
+    .prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='raider_gear_slot_history' LIMIT 1")
+    .first<{ '1': number }>();
+  const historySlotsWithMultipleItems = new Set<string>();
+  if (hasHistoryTable) {
+    const historyCounts = await db
+      .prepare(
+        `SELECT blizzard_char_id, slot_key
+         FROM raider_gear_slot_history
+         GROUP BY blizzard_char_id, slot_key
+         HAVING COUNT(*) > 1`
+      )
+      .all<{ blizzard_char_id: number; slot_key: string }>();
+    for (const row of historyCounts.results ?? []) {
+      historySlotsWithMultipleItems.add(`${row.blizzard_char_id}:${row.slot_key}`);
+    }
+  }
+
   const gearByChar = new Map<number, Map<string, RaiderGearSummaryItem>>();
   const syncedAtByChar = new Map<number, number>();
   for (const row of cachedRows) {
@@ -2558,6 +2647,7 @@ export async function getAllRaidersGear(dbInput?: D1Database): Promise<RaiderGea
       isTierSet: row.is_tier_set === 1,
       bonusIds: JSON.parse(row.bonus_list_json || '[]'),
       iconUrl: row.item_id ? iconsByItemId.get(row.item_id) ?? null : null,
+      hasHistory: historySlotsWithMultipleItems.has(`${row.blizzard_char_id}:${row.slot_key}`),
     });
     gearByChar.set(row.blizzard_char_id, slotMap);
     const prevSync = syncedAtByChar.get(row.blizzard_char_id) ?? 0;
@@ -2574,6 +2664,84 @@ export async function getAllRaidersGear(dbInput?: D1Database): Promise<RaiderGea
     mainCharacterName: r.main_character_name ?? r.name,
     gearBySlot: gearByChar.get(r.blizzard_char_id) ?? new Map(),
     gearSyncedAt: syncedAtByChar.get(r.blizzard_char_id) ?? null,
+  }));
+}
+
+export interface RaiderGearHistoryEntry {
+  itemId: number;
+  itemName: string | null;
+  itemLevel: number | null;
+  quality: string | null;
+  qualityColor: string;
+  bonusIds: number[];
+  iconUrl: string | null;
+  firstSeenAt: number;
+  lastSeenAt: number;
+  isCurrent: boolean;
+}
+
+/**
+ * Every distinct item on record for one raider's slot, most recently seen
+ * first. Used by the gear summary page's per-cell history expander -- fetched
+ * on demand rather than baked into the roster-wide page load.
+ */
+export async function getGearSlotHistory(
+  charId: number,
+  slotKey: string,
+  dbInput?: D1Database
+): Promise<RaiderGearHistoryEntry[]> {
+  const db = getDatabase(dbInput);
+
+  const hasHistoryTable = await db
+    .prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='raider_gear_slot_history' LIMIT 1")
+    .first<{ '1': number }>();
+  if (!hasHistoryTable) return [];
+
+  const [historyRows, currentRow] = await Promise.all([
+    db
+      .prepare(
+        `SELECT item_id, item_name, item_level, quality, quality_color, bonus_list_json, first_seen_at, last_seen_at
+         FROM raider_gear_slot_history
+         WHERE blizzard_char_id = ? AND slot_key = ?
+         ORDER BY last_seen_at DESC`
+      )
+      .bind(charId, slotKey)
+      .all<{
+        item_id: number;
+        item_name: string | null;
+        item_level: number | null;
+        quality: string | null;
+        quality_color: string;
+        bonus_list_json: string;
+        first_seen_at: number;
+        last_seen_at: number;
+      }>(),
+    db
+      .prepare(`SELECT item_id FROM raider_gear_cache WHERE blizzard_char_id = ? AND slot_key = ?`)
+      .bind(charId, slotKey)
+      .first<{ item_id: number | null }>(),
+  ]);
+
+  const rows = historyRows.results ?? [];
+  if (rows.length === 0) return [];
+
+  const iconsByItemId = await readCachedItemIcons(
+    db,
+    rows.map((row) => row.item_id)
+  );
+  const currentItemId = currentRow?.item_id ?? null;
+
+  return rows.map((row) => ({
+    itemId: row.item_id,
+    itemName: row.item_name,
+    itemLevel: row.item_level,
+    quality: row.quality,
+    qualityColor: row.quality_color,
+    bonusIds: JSON.parse(row.bonus_list_json || '[]'),
+    iconUrl: iconsByItemId.get(row.item_id) ?? null,
+    firstSeenAt: row.first_seen_at,
+    lastSeenAt: row.last_seen_at,
+    isCurrent: row.item_id === currentItemId,
   }));
 }
 

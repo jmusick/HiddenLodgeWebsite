@@ -161,6 +161,7 @@ const rows = raiders.map((r) => {
       wowhead: item ? wowheadItemUrl(item) : null,
       iconUrl: item?.iconUrl ?? FALLBACK_ICON,
       title: titleParts.join(' · '),
+      hasHistory: item?.hasHistory ?? false,
     };
   });
 
@@ -280,36 +281,50 @@ const rows = raiders.map((r) => {
                   <span class="alt-tag" title={`Alt of ${row.mainCharacterName}`}>alt</span>
                 )}
               </td>
-              {row.cells.map(({ item, wowhead, iconUrl, title }) => (
+              {row.cells.map(({ item, wowhead, iconUrl, title, hasHistory, slotKey }) => (
                 <td class="gear-cell">
-                  {item?.itemName ? (
-                    <a
-                      href={wowhead ?? '#'}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      class="gear-icon-link"
-                      style={`--quality-color: ${item.qualityColor}`}
-                      title={title}
-                      aria-label={title}
-                    >
-                      <img
-                        src={iconUrl}
-                        alt={item.itemName}
-                        class="gear-icon"
-                        loading="lazy"
-                        decoding="async"
-                        onerror={`this.src='${FALLBACK_ICON}'`}
-                      />
-                      <span class="gear-icon-ilvl">{item.itemLevel ?? '—'}</span>
-                      {item.isTierSet && (
-                        <span class="tier-badge" title="Tier set piece" aria-label="Tier set piece">
-                          <Icon name="lucide:shield" aria-hidden="true" />
-                        </span>
-                      )}
-                    </a>
-                  ) : (
-                    <span class="gear-empty">—</span>
-                  )}
+                  <span class="gear-cell-inner">
+                    {item?.itemName ? (
+                      <a
+                        href={wowhead ?? '#'}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        class="gear-icon-link"
+                        style={`--quality-color: ${item.qualityColor}`}
+                        title={title}
+                        aria-label={title}
+                      >
+                        <img
+                          src={iconUrl}
+                          alt={item.itemName}
+                          class="gear-icon"
+                          loading="lazy"
+                          decoding="async"
+                          onerror={`this.src='${FALLBACK_ICON}'`}
+                        />
+                        <span class="gear-icon-ilvl">{item.itemLevel ?? '—'}</span>
+                        {item.isTierSet && (
+                          <span class="tier-badge" title="Tier set piece" aria-label="Tier set piece">
+                            <Icon name="lucide:shield" aria-hidden="true" />
+                          </span>
+                        )}
+                      </a>
+                    ) : (
+                      <span class="gear-empty">—</span>
+                    )}
+                    {hasHistory && (
+                      <button
+                        type="button"
+                        class="gear-history-toggle"
+                        data-char-id={row.blizzardCharId}
+                        data-slot-key={slotKey}
+                        data-slot-label={GEAR_SLOT_LABELS[slotKey]}
+                        data-raider-name={row.name}
+                        title={`Show past ${GEAR_SLOT_LABELS[slotKey]} items`}
+                        aria-label={`Show past ${GEAR_SLOT_LABELS[slotKey]} items for ${row.name}`}
+                      >▾</button>
+                    )}
+                  </span>
                 </td>
               ))}
             </tr>
@@ -318,6 +333,16 @@ const rows = raiders.map((r) => {
       </table>
     </div>
   </section>
+
+  <div id="gear-history-popover" class="gear-history-popover" hidden>
+    <div class="gear-history-header">
+      <span id="gear-history-title">Gear history</span>
+      <button type="button" id="gear-history-close" aria-label="Close">
+        <Icon name="lucide:x" aria-hidden="true" />
+      </button>
+    </div>
+    <div id="gear-history-body" class="gear-history-body"></div>
+  </div>
 </Layout>
 
 <script is:inline>
@@ -472,6 +497,100 @@ const rows = raiders.map((r) => {
   });
 
   applyFiltersAndSort();
+
+  interface GearHistoryEntry {
+    itemId: number;
+    itemName: string | null;
+    itemLevel: number | null;
+    qualityColor: string;
+    iconUrl: string | null;
+    firstSeenAt: number;
+    lastSeenAt: number;
+    isCurrent: boolean;
+  }
+
+  const popover = document.querySelector<HTMLDivElement>('#gear-history-popover');
+  const popoverTitle = document.querySelector<HTMLSpanElement>('#gear-history-title');
+  const popoverBody = document.querySelector<HTMLDivElement>('#gear-history-body');
+  const popoverClose = document.querySelector<HTMLButtonElement>('#gear-history-close');
+  const historyCache = new Map<string, GearHistoryEntry[]>();
+
+  function formatDate(epochSeconds: number): string {
+    return new Date(epochSeconds * 1000).toLocaleDateString();
+  }
+
+  function closePopover() {
+    if (popover) popover.hidden = true;
+  }
+
+  function renderHistory(entries: GearHistoryEntry[]) {
+    if (!popoverBody) return;
+    if (entries.length === 0) {
+      popoverBody.innerHTML = '<p class="gear-history-empty">No history recorded yet.</p>';
+      return;
+    }
+
+    popoverBody.innerHTML = entries
+      .map((entry) => {
+        const icon = entry.iconUrl ?? 'https://wow.zamimg.com/images/wow/icons/large/inv_misc_questionmark.jpg';
+        const seenRange = entry.firstSeenAt === entry.lastSeenAt
+          ? formatDate(entry.firstSeenAt)
+          : `${formatDate(entry.firstSeenAt)} – ${formatDate(entry.lastSeenAt)}`;
+        return `
+          <div class="gear-history-row${entry.isCurrent ? ' is-current' : ''}">
+            <img src="${icon}" alt="" class="gear-history-icon" style="--quality-color: ${entry.qualityColor}" loading="lazy" />
+            <div class="gear-history-info">
+              <span class="gear-history-name">${entry.itemName ?? 'Unknown item'}${entry.isCurrent ? ' <span class=\"gear-history-current-tag\">current</span>' : ''}</span>
+              <span class="gear-history-meta">iLvl ${entry.itemLevel ?? '—'} · Seen ${seenRange}</span>
+            </div>
+          </div>`;
+      })
+      .join('');
+  }
+
+  document.querySelectorAll<HTMLButtonElement>('.gear-history-toggle').forEach((button) => {
+    button.addEventListener('click', async (event) => {
+      event.stopPropagation();
+      const charId = button.dataset.charId;
+      const slotKey = button.dataset.slotKey;
+      const slotLabel = button.dataset.slotLabel ?? slotKey;
+      const raiderName = button.dataset.raiderName ?? '';
+      if (!charId || !slotKey || !popover || !popoverTitle || !popoverBody) return;
+
+      if (popoverTitle) popoverTitle.textContent = `${raiderName} — ${slotLabel} history`;
+      popover.hidden = false;
+      const rect = button.getBoundingClientRect();
+      popover.style.top = `${window.scrollY + rect.bottom + 6}px`;
+      popover.style.left = `${Math.max(8, window.scrollX + rect.left - 140)}px`;
+
+      const cacheKey = `${charId}:${slotKey}`;
+      const cached = historyCache.get(cacheKey);
+      if (cached) {
+        renderHistory(cached);
+        return;
+      }
+
+      popoverBody.innerHTML = '<p class="gear-history-empty">Loading…</p>';
+      try {
+        const response = await fetch(`/api/raiders/${charId}/gear-history?slot=${encodeURIComponent(slotKey)}`);
+        const payload = await response.json() as { data?: GearHistoryEntry[] };
+        const entries = payload.data ?? [];
+        historyCache.set(cacheKey, entries);
+        renderHistory(entries);
+      } catch {
+        popoverBody.innerHTML = '<p class="gear-history-empty">Failed to load history.</p>';
+      }
+    });
+  });
+
+  popoverClose?.addEventListener('click', closePopover);
+  document.addEventListener('click', (event) => {
+    if (!popover || popover.hidden) return;
+    if (event.target instanceof Node && !popover.contains(event.target)) closePopover();
+  });
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape') closePopover();
+  });
 </script>
 
 <style>
@@ -786,11 +905,40 @@ const rows = raiders.map((r) => {
     text-align: center;
   }
 
+  .gear-cell-inner {
+    position: relative;
+    display: inline-block;
+    line-height: 0;
+  }
+
   .gear-icon-link {
     position: relative;
     display: inline-block;
     line-height: 0;
     text-decoration: none;
+  }
+
+  .gear-history-toggle {
+    position: absolute;
+    top: -4px;
+    left: -4px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 14px;
+    height: 14px;
+    padding: 0;
+    border-radius: 50%;
+    border: 1px solid rgba(214, 176, 106, 0.55);
+    background: #1a1207;
+    color: #f0c96f;
+    font-size: 0.55rem;
+    line-height: 1;
+    cursor: pointer;
+  }
+
+  .gear-history-toggle:hover {
+    background: #2a1e0f;
   }
 
   .gear-icon {
@@ -829,5 +977,113 @@ const rows = raiders.map((r) => {
     .controls {
       grid-template-columns: 1fr;
     }
+  }
+
+  .gear-history-popover {
+    position: absolute;
+    z-index: 20;
+    width: 280px;
+    max-height: 320px;
+    overflow-y: auto;
+    border: 1px solid rgba(214, 176, 106, 0.42);
+    border-radius: 0.6rem;
+    background: rgba(9, 17, 27, 0.98);
+    box-shadow: 0 16px 32px rgba(0, 0, 0, 0.4);
+  }
+
+  .gear-history-header {
+    position: sticky;
+    top: 0;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+    padding: 0.55rem 0.7rem;
+    border-bottom: 1px solid rgba(214, 176, 106, 0.24);
+    background: rgba(15, 28, 43, 0.95);
+    color: #e4c27a;
+    font-size: 0.82rem;
+    font-weight: 700;
+    white-space: normal;
+  }
+
+  .gear-history-header button {
+    display: inline-flex;
+    border: 0;
+    background: transparent;
+    color: #b0c4d0;
+    cursor: pointer;
+    padding: 0.1rem;
+  }
+
+  .gear-history-header button svg {
+    width: 0.85rem;
+    height: 0.85rem;
+  }
+
+  .gear-history-body {
+    padding: 0.5rem;
+    display: grid;
+    gap: 0.4rem;
+  }
+
+  .gear-history-empty {
+    margin: 0;
+    padding: 0.4rem;
+    color: #9fb2bf;
+    font-size: 0.82rem;
+    white-space: normal;
+  }
+
+  .gear-history-row {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.3rem;
+    border-radius: 0.4rem;
+  }
+
+  .gear-history-row.is-current {
+    background: rgba(214, 176, 106, 0.1);
+  }
+
+  .gear-history-icon {
+    width: 28px;
+    height: 28px;
+    border-radius: 4px;
+    border: 2px solid var(--quality-color, rgba(214, 176, 106, 0.3));
+    object-fit: cover;
+    flex-shrink: 0;
+  }
+
+  .gear-history-info {
+    display: flex;
+    flex-direction: column;
+    gap: 0.1rem;
+    min-width: 0;
+    white-space: normal;
+  }
+
+  .gear-history-name {
+    color: #d8e2e8;
+    font-size: 0.82rem;
+    font-weight: 600;
+  }
+
+  .gear-history-current-tag {
+    margin-left: 0.3rem;
+    padding: 0 0.3rem;
+    border-radius: 0.25rem;
+    border: 1px solid rgba(214, 176, 106, 0.42);
+    color: #e4c27a;
+    font-size: 0.6rem;
+    font-weight: 700;
+    letter-spacing: 0.03em;
+    text-transform: uppercase;
+  }
+
+  .gear-history-meta {
+    color: #9fb2bf;
+    font-size: 0.72rem;
   }
 </style>
