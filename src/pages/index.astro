@@ -68,6 +68,7 @@ function formatDate(date: Date | string) {
 	<section class="newsfeed">
 		<div class="feed-col">
 			<h2 class="feed-heading"><Icon name="lucide:newspaper" aria-hidden="true" /> Latest Articles</h2>
+			<p class="feed-credit">via <a href="https://orboro.net" target="_blank" rel="noopener noreferrer">Orboro.net</a></p>
 			{articles.length === 0 && <p class="feed-empty">No articles yet. Check back soon.</p>}
 			<div class="feed-list">
 				{articles.map((article) => (
@@ -287,7 +288,7 @@ function formatDate(date: Date | string) {
 		gap: 0.5rem;
 		font-size: 1.2rem;
 		color: var(--gold-bright);
-		margin: 0 0 1rem;
+		margin: 0 0 0.3rem;
 		padding-bottom: 0.6rem;
 		border-bottom: 1px solid var(--border);
 	}
@@ -295,6 +296,23 @@ function formatDate(date: Date | string) {
 	.feed-heading [data-icon] {
 		width: 1.1rem;
 		height: 1.1rem;
+	}
+
+	.feed-credit {
+		margin: 0 0 1rem;
+		font-size: 0.78rem;
+		color: var(--muted);
+	}
+
+	.feed-credit a {
+		color: var(--gold);
+		text-decoration: none;
+	}
+
+	.feed-credit a:hover {
+		color: var(--gold-bright);
+		text-decoration: underline;
+		text-underline-offset: 2px;
 	}
 
 	.feed-list {
