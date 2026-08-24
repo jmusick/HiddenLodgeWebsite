@@ -3,11 +3,14 @@ import Layout from '../layouts/Layout.astro';
 import SectionCard from '../components/SectionCard.astro';
 import { externalLinks } from '../data/externalLinks';
 import { Icon } from 'astro-icon/components';
-import { getCollection } from 'astro:content';
+import { fetchOrboroPostsByCategory } from '../lib/orboro-posts';
 
-const articles = (await getCollection('articles'))
-	.sort((a, b) => b.data.publishedAt.valueOf() - a.data.publishedAt.valueOf())
-	.slice(0, 3);
+let articles: Awaited<ReturnType<typeof fetchOrboroPostsByCategory>> = [];
+try {
+	articles = (await fetchOrboroPostsByCategory('world-of-warcraft')).slice(0, 3);
+} catch {
+	// silently degrade — no articles shown
+}
 
 type YouTubeVideo = {
 	title: string;
@@ -68,12 +71,14 @@ function formatDate(date: Date | string) {
 			{articles.length === 0 && <p class="feed-empty">No articles yet. Check back soon.</p>}
 			<div class="feed-list">
 				{articles.map((article) => (
-					<a class="feed-card" href={`/articles/${article.id}`}>
-						<time class="feed-date" datetime={article.data.publishedAt.toISOString()}>
-							{formatDate(article.data.publishedAt)}
-						</time>
-						<h3>{article.data.title}</h3>
-						<p>{article.data.description}</p>
+					<a class="feed-card" href={article.url}>
+						{article.publishedAt && (
+							<time class="feed-date" datetime={article.publishedAt}>
+								{formatDate(article.publishedAt)}
+							</time>
+						)}
+						<h3>{article.title}</h3>
+						<p>{article.excerpt}</p>
 						<span class="feed-action" aria-hidden="true">Read more →</span>
 					</a>
 				))}

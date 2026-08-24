@@ -1,13 +1,20 @@
 ---
 import Layout from '../../layouts/Layout.astro';
-import { getCollection } from 'astro:content';
+import { fetchOrboroPostsByCategory, type OrboroPost } from '../../lib/orboro-posts';
 
-const articles = (await getCollection('articles')).sort(
-	(a, b) => b.data.publishedAt.valueOf() - a.data.publishedAt.valueOf()
-);
+const CATEGORY = 'world-of-warcraft';
 
-function formatDate(date: Date) {
-	return date.toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
+let articles: OrboroPost[] = [];
+let loadFailed = false;
+try {
+	articles = await fetchOrboroPostsByCategory(CATEGORY);
+} catch {
+	loadFailed = true;
+}
+
+function formatDate(date: string | null) {
+	if (!date) return '';
+	return new Date(date).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
 }
 ---
 
@@ -18,25 +25,21 @@ function formatDate(date: Date) {
 	</section>
 
 	<section class="articles-list">
-		{articles.length === 0 && (
+		{loadFailed && (
+			<p class="empty-state">Couldn't load articles right now. Try again in a few minutes.</p>
+		)}
+		{!loadFailed && articles.length === 0 && (
 			<p class="empty-state">No articles yet. Check back soon.</p>
 		)}
 		{articles.map((article) => (
-			<a class="article-card" href={`/articles/${article.id}`}>
+			<a class="article-card" href={article.url}>
 				<div class="article-meta">
-					<time datetime={article.data.publishedAt.toISOString()}>
-						{formatDate(article.data.publishedAt)}
+					<time datetime={article.publishedAt ?? undefined}>
+						{formatDate(article.publishedAt)}
 					</time>
-					{article.data.tags.length > 0 && (
-						<ul class="tag-list" aria-label="Tags">
-							{article.data.tags.map((tag) => (
-								<li class="tag">{tag}</li>
-							))}
-						</ul>
-					)}
 				</div>
-				<h2>{article.data.title}</h2>
-				<p class="article-description">{article.data.description}</p>
+				<h2>{article.title}</h2>
+				<p class="article-description">{article.excerpt}</p>
 				<span class="read-more" aria-hidden="true">Read article →</span>
 			</a>
 		))}
@@ -101,26 +104,6 @@ function formatDate(date: Date) {
 		font-size: 0.85rem;
 		color: var(--muted);
 		letter-spacing: 0.03em;
-	}
-
-	.tag-list {
-		display: flex;
-		flex-wrap: wrap;
-		gap: 0.4rem;
-		list-style: none;
-		margin: 0;
-		padding: 0;
-	}
-
-	.tag {
-		background: rgba(140, 167, 187, 0.15);
-		border: 1px solid rgba(140, 167, 187, 0.3);
-		color: var(--steel);
-		font-size: 0.75rem;
-		padding: 0.1em 0.55em;
-		border-radius: 3px;
-		letter-spacing: 0.04em;
-		text-transform: uppercase;
 	}
 
 	.article-card h2 {
