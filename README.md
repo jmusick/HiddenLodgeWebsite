@@ -41,9 +41,10 @@ Separately, `/raiders`, `/signup`, `/trinkets`, `/professions`, `/loot-history`,
 - Leadership page with officer bios, portrait lightbox, and dad jokes
 - Raiding page with schedule, expectations, addons, and recruitment info (recruitment currently points to the guild's Raider.IO profile; the application form is disabled — see Feature Flags)
 - Lore archive with story picker, reader, and artwork lightbox
-- Useful Links page (curated, admin-managed, searchable)
+- Useful Links page (`/links`) — sourced live from the Tagstash public API (bookmarks tagged `wow`), not admin-managed in this repo; see [Notes](#notes)
+- Articles page (`/articles`) — WoW writeups sourced live from a public Orboro.net API (posts tagged World of Warcraft), linking out to the full post there; small credit links to Orboro.net appear on this page and the homepage
 - Live roster page with Blizzard data, caching, search, filters, and collection stats
-- Raiders analytics table of all level-90 guild characters (iLvl, M+, crests, preparedness, upgrades, raid progress) — Season 2 countdown banner shown until tracking data starts
+- Raiders analytics table of all level-90 guild characters (iLvl, M+, crests, preparedness, upgrades, raid progress) — Season 2 countdown banner shown until tracking data starts, plus a gear-summary view (`/raiders/gear-summary`)
 - Raider detail profile with character render, equipment layout, and raid progress matrix
 - Authenticated profile with Battle.net login, character sync, main selection, and timezone preferences
 - *Disabled during guild hiatus (code/data preserved, see Feature Flags):* guild-member raid signup calendar, Trinkets/Professions/Loot History/Upgrades tools, guild feedback form, application form, interactive Sim Tools panel and Attendance history on raider profiles
@@ -51,7 +52,6 @@ Separately, `/raiders`, `/signup`, `/trinkets`, `/professions`, `/loot-history`,
 ### Admin Features
 
 - Mains & Alts module for member authentication, nickname management, and searchable member list (by nickname, main, or any character name); officer notes per member with author and timestamp, stored by character so notes on un-authenticated roster members automatically merge once they log in
-- Links Management for useful links curation
 - Settings module with raid-progress configuration (including the Season 2 raid tier) and cache health
 - Export module for addon-friendly JSON generation
 - **Raiding Content editor** for managing the schedule, raid expectations, and required addons displayed on the public Raiding page
@@ -96,10 +96,13 @@ http://localhost:4321
 | `/leadership` | No | Leadership bios, portraits, and portrait lightbox |
 | `/raiding` | No | Raid schedule, expectations, addons, recruitment (Raider.IO link), and recent Warcraft Logs reports. Application form disabled — see Feature Flags |
 | `/lore` | No | Lore archive with story picker, story reader, and artwork lightbox |
-| `/links` | No | Curated useful links grouped by configurable categories |
+| `/links` | No | Useful links tagged `wow` on the Tagstash public API, with category filter chips |
+| `/articles` | No | WoW articles pulled live from Orboro.net's public posts API; cards link out to the full post on orboro.net |
+| `/articles/:slug` | No | 301-redirects to the matching post on orboro.net (rewrites to `/404` if the slug isn't found in the current feed) |
 | `/roster` | No | Cached guild roster with filters, sorting, pagination, and collection stats |
 | `/hiatus` | No | Guild-hiatus notice page; several routes redirect here (see Feature Flags) |
 | `/raiders` | Yes + Guild Member | Raider analytics table for all level-90 guild characters |
+| `/raiders/gear-summary` | Yes + Guild Member | Cross-raider equipped-gear summary table (guarded by `middleware.ts`, not an in-page check) |
 | `/raiders/:charId` | Yes + Guild Member | Raider detail page with media, stats, and raid progress matrix |
 | `/trinkets` | Yes + Guild Member | **Disabled** (redirects to `/hiatus`) — trinket tier comparison tool |
 | `/professions` | Yes | **Disabled** (redirects to `/hiatus`) — profession recipe browser |
@@ -121,7 +124,6 @@ http://localhost:4321
 | `/admin/performance-review` | Yes + Admin | **Disabled** — officer review tables for excessive deaths and other performance metrics |
 | `/admin/settings` | Yes + Admin | Raid-progress target settings (including Season 2 tier) and cache health controls |
 | `/admin/cache` | Yes + Admin | Backward-compatible redirect to `/admin/settings` |
-| `/admin/links` | Yes + Admin | Public links category/link management |
 | `/admin/raiding` | Yes + Admin | Edit schedule, raid expectations, and addon list |
 | `/admin/applications` | Yes + Admin | **Disabled** — review, triage, and manage guild applications |
 | `/admin/feedback` | Yes + Admin | **Disabled** — review submitted guild feedback |
@@ -141,6 +143,7 @@ http://localhost:4321
 | Endpoint | Method | Description |
 |---|---|---|
 | `/api/set-main` | POST | Sets the authenticated user's main character |
+| `/api/profile/update-nickname` | POST | Sets or clears the authenticated user's own nickname (distinct from `/api/admin/update-nickname`) |
 | `/api/profile/update-timezone` | POST | Sets the authenticated user's preferred timezone |
 | `/api/profile/update-role` | POST | **Disabled** — sets the authenticated user's preferred raid role |
 | `/api/signup/create` | POST | **Disabled** — creates or updates a member signup for a raid |
@@ -155,8 +158,17 @@ http://localhost:4321
 | Endpoint | Method | Description |
 |---|---|---|
 | `/api/admin/update-nickname` | POST | Set or clear a guild member display nickname |
+| `/api/admin/set-main` | POST | Admin sets any user's main character (distinct from the member-facing `/api/set-main`) |
 | `/api/admin/cache/refresh` | POST | Trigger roster and raiders cache refresh from admin |
 | `/api/admin/settings/raid-progress-target` | POST | Update the tracked raid-progress tier bundle |
+| `/api/admin/raider-notes/create` | POST | Create a raider note for a character |
+| `/api/admin/raider-notes/update` | POST | Update the text of an existing raider note |
+| `/api/admin/raider-notes/delete` | POST | Delete a raider note; restricted to `isAdmin` plus a single hardcoded battle tag |
+| `/api/admin/loot-history/exclude` | POST | Mark a loot history entry excluded with a required admin note |
+| `/api/admin/attendance/log-candidates` | GET | **Disabled** — candidate Warcraft Logs reports for matching to an attendance occurrence |
+| `/api/admin/attendance/log-matching` | POST, GET | **Disabled** — link/rematch a WCL report to an attendance occurrence |
+| `/api/admin/attendance/refresh` | POST | **Disabled** — trigger a full attendance cache refresh |
+| `/api/admin/attendance/toggle-bench` | POST, GET | **Disabled** — toggle a member's bench status for a raid occurrence |
 | `/api/admin/settings/purge-sim-data` | POST | **Disabled** — permanently delete all stored sim runs/recommendations |
 | `/api/admin/raid-signups/create-primary` | POST | **Disabled** — create a recurring primary raid schedule |
 | `/api/admin/raid-signups/delete-primary` | POST | **Disabled** — delete a recurring primary raid schedule |
@@ -169,12 +181,6 @@ http://localhost:4321
 | `/api/admin/roster-teams/add-member` | POST | **Disabled** — add a level 90 member to a team with assigned role |
 | `/api/admin/roster-teams/remove-member` | POST | **Disabled** — remove a member from a team |
 | `/api/admin/roster-teams/update-member-role` | POST | **Disabled** — update assigned role for an existing team member |
-| `/api/admin/links/create-category` | POST | Create a public link category |
-| `/api/admin/links/update-category` | POST | Update category title, icon, or sort order |
-| `/api/admin/links/delete-category` | POST | Delete a link category and its links |
-| `/api/admin/links/create-link` | POST | Create a link inside a category |
-| `/api/admin/links/update-link` | POST | Update link name, URL, or sort order |
-| `/api/admin/links/delete-link` | POST | Delete a link |
 | `/api/admin/raiding/update-content` | POST | Update a raiding page content panel (schedule, expectations, or recruitment) |
 | `/api/admin/raiding/create-addon` | POST | Add a required addon |
 | `/api/admin/raiding/update-addon` | POST | Update addon name, URL, or sort order |
@@ -215,18 +221,14 @@ Authentication behavior:
 | Endpoint | Method | Description |
 |---|---|---|
 | `/api/sim/latest?team_id=<id>&difficulty=<value>` | GET | Returns latest successful run and normalized winners for UI rendering |
-| `/api/sim/latest` | POST | Purges stored sim history for the authenticated raider (ownership or admin required) |
+| `/api/sim/latest` | POST | Purges stored sim history for the authenticated raider (ownership or admin required), returning the refreshed latest data |
+| `/api/sim/purge` | POST | Older/simpler purge endpoint with the same ownership check; kept alongside `POST /api/sim/latest`, which additionally returns refreshed data |
+| `/api/raiders/[charId]/raidbots-reports` | GET, POST, DELETE | CRUD for a raider's linked Raidbots droptimizer report entries |
+| `/api/raiders/[charId]/raidbots-table` | GET | Rendered droptimizer/upgrade table data for a raider |
 
 Intended usage: internal website/admin UI reads. These endpoints require an authenticated guild member (or admin) session.
 
-### Sim UI Action API
-
-| Endpoint | Method | Description |
-|---|---|---|
-| `/api/sim/launch` | POST | Manual launch endpoint (disabled; returns an error directing users to automated passive droptimizer scheduling) |
-| `/api/sim/launch/status?job_id=<id>&char_id=<id>` | GET | Polls LodgeSim app job status and returns merged latest uploaded recommendations for the raider |
-
-These endpoints require an authenticated guild-member (or admin) session.
+Note: the interactive "launch a sim from the site" flow (and its `WOWSIM_APP_*` config) has been removed from the UI — passive droptimizer scheduling runs automatically instead. No `/api/sim/launch*` endpoints exist in the current codebase.
 
 ### API Payload Schema
 
@@ -257,8 +259,10 @@ curl -sS \
 
 | Endpoint | Method | Description |
 |---|---|---|
-| `/api/cron/refresh` | GET | Refreshes roster, raiders, attendance, professions, and warms trinket cache in small class batches; requires `X-Cron-Secret` (formerly `/api/cron/refresh-roster`, which still works as an alias) |
+| `/api/cron/refresh` | GET | Refreshes roster, raiders, attendance, professions, and warms trinket cache in small class batches; requires `X-Cron-Secret` (formerly `/api/cron/refresh-roster`, which still works as an alias). Accepts `?skipRaiders=1` to pair with `/api/cron/refresh-raiders` below |
+| `/api/cron/refresh-raiders` | GET | Raiders-only refresh split out of `/api/cron/refresh` so it gets the full request timeout; requires `X-Cron-Secret` |
 | `/api/cron/refresh-attendance` | GET | Refreshes Warcraft Logs attendance report cache and participant scoring data; requires `X-Cron-Secret` |
+| `/api/cron/backfill-gear` | GET | One-shot gear backfill for raiders missing cached gear, safe to call repeatedly; requires `X-Cron-Secret`; `?limit=` (default 25, max 100) |
 
 `/api/cron/refresh` optional query params:
 
@@ -267,7 +271,25 @@ curl -sS \
 - `professionBatchSize`: override professions sync batch size for this run.
 - `trinketBatchSize`: number of classes to pre-warm in trinkets cache for this run (defaults to `1`, rotates classes between runs).
 
-You can also set `TRINKET_CACHE_WARM_BATCH_SIZE` in runtime env for the default trinket warm class count per cron run.
+You can also set `TRINKET_CACHE_WARM_BATCH_SIZE`, `ROSTER_DETAIL_BATCH_SIZE`, or `ROSTER_BACKFILL_BATCH_SIZE` in runtime env as defaults for the query params above.
+
+### Desktop App API
+
+Machine endpoints for the `HiddenLodgeDesktop` companion app (separate repo). Require `X-Desktop-Key` matching `DESKTOP_API_KEY`, not session auth.
+
+| Endpoint | Method | Description |
+|---|---|---|
+| `/api/desktop/raid-signups-today` | GET | Today's raid signup/attendance status per roster member |
+| `/api/desktop/alt-notes` | GET | Per-character preferred-note data (nickname, falling back to main character) |
+| `/api/desktop/droptimizer-upgrades` | GET | Droptimizer upgrade entries formatted for the desktop app |
+| `/api/desktop/loot-history` | POST | Ingests loot-history entries from the desktop app (dedupes Midnight S1 raids) |
+| `/api/desktop/preparedness` | GET | Gem/enchant preparedness and vault data |
+
+### Debug API
+
+| Endpoint | Method | Description |
+|---|---|---|
+| `/api/debug/trinkets-cache-version` | GET | Admin-only. Returns the trinket cache key prefix, schema version, and paging constants for debugging |
 
 ### Local Dev Cron Refresher
 
@@ -337,13 +359,19 @@ These handlers remain in the codebase as retired stubs and currently return HTTP
 | `raider_preparedness_history` | Rolling history of gem/enchant socket coverage per raider (backs the 30-day averages on `raider_metrics_cache`) |
 | `raider_vault_history` | Weekly Great Vault snapshots per raider per reset week |
 | `raider_keystones` | Every observed Mythic+ keystone completion per character; backs weekly/season run counts and vault key levels |
+| `raider_gear_cache` | Cached equipped-gear snapshots backing `/raiders/gear-summary` and the desktop droptimizer-upgrades endpoint |
+| `raid_log_reports_seen` / `raider_log_activity` | Warcraft Logs report cursor and recent-raider activity synced independently of the (disabled) attendance pipeline — see `AGENTS.md` |
+| `loot_history` | Guild loot history entries synced from the desktop app, with admin exclude/note support *(feature disabled — see Feature Flags)* |
+| `raider_notes` | Officer notes per raider character, shown on `/admin/mains` |
+| `sim_item_scores` | Per-item sim scoring data |
+| `sim_raidbots_reports` / `sim_raidbots_item_scores` | Linked Raidbots droptimizer reports and their item scores, backing `/api/raiders/[charId]/raidbots-*` |
+| `profession_recipe_owners_cache` / `profession_character_sync_cache` | Cached profession recipe/character sync data *(feature disabled)* |
+| `item_icon_cache` | Cached Wowhead item icon lookups |
 | `primary_raid_schedules` | Recurring primary raid schedule definitions *(feature disabled — see Feature Flags)* |
 | `ad_hoc_raids` | One-off officer-created raids *(feature disabled)* |
 | `raid_signups` | Member signups mapped to primary occurrences and ad-hoc raids *(feature disabled)* |
 | `raid_teams` | Saved raid team definitions with mode and ordering *(feature disabled)* |
 | `raid_team_members` | Team membership assignments and role ownership *(feature disabled)* |
-| `link_categories` | Public Useful Links page categories |
-| `links` | Public Useful Links entries |
 | `site_settings` | Small key-value settings store (e.g., tracked raid-progress target) |
 | `raiding_content` | Key-value store for admin-editable raiding page sections (schedule, expectations, recruitment) |
 | `raiding_addons` | Ordered list of required addons displayed on the Raiding page |
@@ -354,6 +382,8 @@ These handlers remain in the codebase as retired stubs and currently return HTTP
 | `guild_feedback` | Anonymous/named guild feedback submissions *(feature disabled)* |
 | `sim_runs` / `sim_raider_summaries` / `sim_item_winners` | Stored sim (droptimizer/single-target) run results *(interactive Sim Tools UI disabled; data left in place)* |
 | `raid_attendance_reports` and related attendance tables (from `migrations/0045`–`0048`, `0064`) | Cached Warcraft Logs attendance/kill-presence data and scoring *(feature disabled)* |
+
+`links` and `link_categories` were dropped by `migrations/0072_drop_links_tables.sql` — `/links` now reads from Tagstash instead (see [Notes](#notes)). Articles similarly have no local table; `/articles` reads from a public Orboro.net API.
 
 ### Roster Cache Behavior
 
@@ -437,11 +467,12 @@ For existing production databases, apply only newly introduced migrations instea
 | `WCL_CLIENT_SECRET` | No | Warcraft Logs OAuth client secret (enables Recent Logs uploader and publish time metadata) |
 | `CRON_SECRET` | Yes | Shared secret for roster refresh requests |
 | `SIM_RUNNER_KEY` | Yes (for sim APIs) | Shared secret used by `/api/sim/*` machine endpoints via `X-Sim-Runner-Key` |
-| `WOWSIM_APP_BASE_URL` | Yes (for Sim Tools launch) | Base URL for the LodgeSim app used by raider profile Sim Tools |
-| `WOWSIM_APP_API_KEY` | No | Optional key sent to LodgeSim app in `X-LodgeSim-Key` |
-| `WOWSIM_APP_TRIGGER_PATH` | No | LodgeSim launch path template; defaults to `/api/jobs/start` |
-| `WOWSIM_APP_STATUS_PATH` | No | LodgeSim status path template; defaults to `/api/jobs/{job_id}` |
+| `DESKTOP_API_KEY` | Yes (for desktop API) | Shared secret used by `/api/desktop/*` endpoints via `X-Desktop-Key` |
 | `SESSION_SECRET` | Yes | Session signing and validation secret |
+| `RAIDER_IO_ACCESS_KEY` | No | Optional Raider.IO API access key |
+| `ROSTER_DETAIL_BATCH_SIZE` | No | Default roster detail sync batch size (overridable per-run via `detailBatchSize` on `/api/cron/refresh`) |
+| `ROSTER_BACKFILL_BATCH_SIZE` | No | Default roster backfill batch size (overridable per-run via `backfillBatchSize` on `/api/cron/refresh`) |
+| `TRINKET_CACHE_WARM_BATCH_SIZE` | No | Default trinket cache warm class count per cron run (overridable via `trinketBatchSize` on `/api/cron/refresh`) |
 
 ## Deployment
 
@@ -508,7 +539,9 @@ When a tag matching `v*` is pushed:
 - `/admin/*` routes are protected by middleware and require an officer-level guild rank or higher.
 - `/api/cron/refresh` should be called by an external scheduler such as Cloudflare Cron Triggers (or a third-party pinger); there is no `[triggers] crons` entry in `wrangler.toml`. The build also bakes a `scheduled()` handler into the Worker (`scripts/patch-wrangler-config.mjs`) that calls this endpoint internally.
 - External guild links (Raider.IO, Warcraft Logs, WoWProgress, YouTube) are defined in `src/data/externalLinks.ts` and render as favicon icon links in the main nav.
-- Useful Links content is stored in D1 and managed from `/admin/links`.
+- `/links` is sourced live from the Tagstash public API (bookmarks tagged `wow` under profile `JD`, `src/lib/bookmarks.ts`), cached 10 minutes at the edge. There is no admin CRUD or D1 table for it in this repo — links are curated in Tagstash itself.
+- `/articles` and the homepage's "Latest Articles" feed are sourced live from a public Orboro.net API (`src/lib/orboro-posts.ts`, posts tagged World of Warcraft), cached 10 minutes at the edge, with a small credit link back to orboro.net on both pages. `/articles/:slug` 301-redirects to the matching post on orboro.net rather than rendering content locally.
 - Lore content is currently authored directly in `src/pages/lore.astro`.
 - Google Analytics (`gtag.js`) is loaded site-wide from `src/layouts/Layout.astro`; disclosed in the Privacy Policy (`/privacy`).
+- `src/pages/auth/blizzard-callback.astro` appears to be an unused/orphaned duplicate of `src/pages/auth/callback.ts` (the actual OAuth flow uses `/auth/callback`) — worth confirming and removing rather than documenting as a live route.
 - `PROTECTED_TABLES` in `scripts/d1-migration-helpers.mjs` (`users`, `characters`, `raider_notes`, `raid_signups`, `loot_history`, `applications`, `application_notes`) is the only set that gets an automatic pre-migration backup. Anything else — take a manual `wrangler d1 export` before running a destructive migration against production.
