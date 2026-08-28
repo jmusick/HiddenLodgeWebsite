@@ -10,10 +10,10 @@ const leaders = [
     bio: 'Collector of an impressive assortment of ratty alts and proud owner of the food palate of a five-year-old. If it looks suspiciously healthy, Mike probably isn\'t eating it.'
   },
   {
-    name: 'Keakz',
+    name: 'Sam',
     title: 'Raid Leader',
-    portrait: '/images/leadership/keakz.webp',
-    bio: 'Calls mechanics with the calm precision of a flight controller, then out-DPSes your excuses on UH DK.'
+    portrait: '/images/leadership/sam.webp',
+    bio: 'Calls mechanics with the calm precision of a flight controller, then out-DPSes your excuses with a storm in each hand.'
   },
   {
     name: 'Nic',
@@ -28,9 +28,9 @@ const leaders = [
     bio: 'The prodigal son returns bearing spreadsheets, diagrams, and exactly one sentence that instantly fixes the wipe count.'
   },
   {
-    name: 'Xing',
+    name: 'Justin',
     title: 'Guild Consultant',
-    portrait: '/images/leadership/xing.webp',
+    portrait: '/images/leadership/justin.webp',
     bio: 'Part advisor, part mythic dad energy. Dispenses wisdom, snacks, and occasional truths that hit harder than raid-wide damage.'
   }
 ];
@@ -83,10 +83,60 @@ const getInitials = (name: string) =>
           <h2>{leader.name}</h2>
           <p>{leader.bio}</p>
           {
-            leader.name === 'Xing' && (
-              <p class="dad-joke" data-xing-joke>
-                Loading...
+            leader.name === 'Mike' && (
+              <p class="character-link">
+                <a
+                  href="https://worldofwarcraft.blizzard.com/en-us/worldsoul/us/armory/character/illidan/badbloodx"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  View current-season character: Badbloodx
+                </a>
               </p>
+            )
+          }
+          {
+            leader.name === 'Sam' && (
+              <p class="character-link">
+                <a
+                  href="https://worldofwarcraft.blizzard.com/en-us/worldsoul/us/armory/character/tichondrius/keakz"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  View current-season character: Keakz
+                </a>
+              </p>
+            )
+          }
+          {
+            leader.name === 'Sunsourse' && (
+              <p class="character-link">
+                <a
+                  href="https://worldofwarcraft.blizzard.com/en-us/worldsoul/us/armory/character/illidan/steelsourse"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  View current-season character: Steelsourse
+                </a>
+              </p>
+            )
+          }
+          {
+            leader.name === 'Justin' && (
+              <>
+                <p class="character-link">
+                  <a
+                    href="https://worldofwarcraft.blizzard.com/en-us/worldsoul/us/armory/character/malganis/merlinmonroe"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                  >
+                    View current-season character: Merlinmonroe
+                  </a>
+                </p>
+                <p class="dad-joke" data-justin-joke>
+                  Loading...
+                </p>
+              </>
             )
           }
         </article>
@@ -98,11 +148,11 @@ const getInitials = (name: string) =>
     const lightbox = document.getElementById('lightbox');
     const lightboxImg = document.getElementById('lightbox-img');
     const closeBtn = document.getElementById('lightbox-close');
-    const xingJoke = document.querySelector('[data-xing-joke]');
+    const justinJoke = document.querySelector('[data-justin-joke]');
 
-    if (xingJoke && Array.isArray(dadJokes) && dadJokes.length > 0) {
+    if (justinJoke && Array.isArray(dadJokes) && dadJokes.length > 0) {
       const randomIndex = Math.floor(Math.random() * dadJokes.length);
-      xingJoke.textContent = dadJokes[randomIndex];
+      justinJoke.textContent = dadJokes[randomIndex];
     }
 
     function openLightbox(src, name) {
@@ -283,6 +333,20 @@ const getInitials = (name: string) =>
     background: rgba(214, 176, 106, 0.08);
     color: #f0d39d;
     font-size: 0.96rem;
+  }
+
+  .character-link {
+    margin-top: 0.45rem;
+  }
+
+  .character-link a {
+    color: #e4c27a;
+    font-weight: 650;
+    text-underline-offset: 0.18em;
+  }
+
+  .character-link a:hover {
+    color: #f0d39d;
   }
 
   .portrait + .kicker {
