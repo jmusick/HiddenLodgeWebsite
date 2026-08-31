@@ -508,6 +508,7 @@ const mplusWinnerData = {
             <th><button class="sort-btn" type="button" data-sort-key="name">Name</button></th>
             <th><button class="sort-btn" type="button" data-sort-key="class">Class</button></th>
             <th><button class="sort-btn" type="button" data-sort-key="equippedItemLevel">iLvl</button></th>
+            <th><button class="sort-btn" type="button" data-sort-key="tierPiecesEquipped" data-tooltip="Current-season tier set pieces equipped (0–5), counted from the character's equipped gear." aria-label="Tier set pieces equipped, from 0 to 5.">Tier <Icon name="lucide:info" class="col-help-icon" aria-hidden="true" /></button></th>
             <th><button class="sort-btn" type="button" data-sort-key="mythicScore">M+ Score</button></th>
             <th>
               <div class="metric-header">
@@ -634,6 +635,7 @@ const mplusWinnerData = {
                         </span>
                       </div>
                     </td>
+                    <td>{character.tierPiecesEquipped != null ? `${character.tierPiecesEquipped}/5` : '—'}</td>
                     <td>{character.mythicScore ? character.mythicScore.toLocaleString(undefined, { maximumFractionDigits: 0 }) : '—'}</td>
                     <td class="mplus-cell">
                       <span
@@ -854,7 +856,7 @@ const mplusWinnerData = {
       return matchesSearch && matchesClass && matchesActivity;
     });
 
-    const numericKeys = new Set(['equippedItemLevel', 'raidProgressKills', 'mythicScore', 'crestSort', 'preparednessScore']);
+    const numericKeys = new Set(['equippedItemLevel', 'raidProgressKills', 'mythicScore', 'crestSort', 'preparednessScore', 'tierPiecesEquipped']);
 
     visibleGroups.sort((rowA, rowB) => {
       if (sortKey === 'mplusMetric') {
