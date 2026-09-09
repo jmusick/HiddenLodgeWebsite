@@ -16,14 +16,20 @@ const PROFILE_NAMESPACE = 'profile-us';
 const LOCALE = 'en_US';
 const REQUEST_CONCURRENCY = 3;
 const DETAILS_TTL_SECONDS = 12 * 60 * 60;
-const DETAIL_BATCH_SIZE = 6;
+const DETAIL_BATCH_SIZE = 4;
 /**
- * Wall-clock budget for enriching raider details. The refresh cron is invoked by
- * an external scheduler with a 30s timeout, and this is by far its slowest leg,
- * so once the budget is spent the remaining candidates are skipped and picked up
- * next tick instead of pushing the whole request past the timeout.
+ * Wall-clock budget for the whole of refreshRaidersCache(). The refresh cron is
+ * invoked by an external scheduler with a 30s timeout, so once the budget is
+ * spent the remaining candidates are skipped and picked up next tick instead of
+ * pushing the request past that timeout.
+ *
+ * This deliberately covers BOTH phases -- the parallel enrichment fan-out and
+ * the serial per-raider persist loop that follows it. Budgeting only the
+ * enrichment phase (as this used to) left the persist loop unbounded on top of
+ * a fully-spent budget, which is what made this endpoint time out on nearly
+ * every tick.
  */
-const DETAIL_TIME_BUDGET_MS = 18_000;
+const REFRESH_TIME_BUDGET_MS = 20_000;
 const PREPAREDNESS_HISTORY_WINDOW_SECONDS = 14 * 24 * 60 * 60; // 14 days (2 weeks)
 const PROGRESSION_HISTORY_WINDOW_SECONDS = 28 * 24 * 60 * 60; // 28 days (4 weeks)
 const VAULT_HISTORY_WINDOW_SECONDS = 28 * 24 * 60 * 60; // 28 days (4 weeks)
@@ -1885,6 +1891,9 @@ export async function refreshRaidersCache(
   options?: { batchSize?: number; skipDetails?: boolean }
 ): Promise<RaidersCacheStatus> {
   const db = getDatabase(dbInput);
+  // One deadline for the entire refresh, taken before any work starts. Both the
+  // enrichment fan-out and the persist loop below check it.
+  const deadline = Date.now() + REFRESH_TIME_BUDGET_MS;
   const now = nowInSeconds();
   const weeklyResetTs = getUsWeeklyResetTimestamp();
   const configuredRaidProgressTarget = await getRaidProgressTarget(db);
@@ -1923,7 +1932,6 @@ export async function refreshRaidersCache(
         weeklyResetTs,
         effectiveRaidProgressTierId
       );
-  const detailDeadline = Date.now() + DETAIL_TIME_BUDGET_MS;
   let detailSkippedForTime = 0;
 
   const detailResults = await mapWithConcurrency(
@@ -1932,21 +1940,30 @@ export async function refreshRaidersCache(
     async (row) => {
       // Skip rather than start new work once the budget is gone; whatever is
       // skipped stays stalest-first and is picked up on the next tick.
-      if (Date.now() >= detailDeadline) {
+      if (Date.now() >= deadline) {
         detailSkippedForTime += 1;
         return {
           row,
           detailed: null as RaiderRecord | null,
           gear: null as RaiderGearItem[] | null,
+          statsWeeklyTotal: null as number | null,
         };
       }
 
       try {
-        const { record, gear } = await enrichRaider(row, now, effectiveRaidProgressTierId);
+        // The Raider.IO weekly-total top-up is fetched here rather than in the
+        // persist loop below: it is two sequential HTTP calls per raider, and
+        // running it serially after enrichment is what pushed this endpoint
+        // past the cron's timeout. Here it rides along with the fan-out.
+        const [{ record, gear }, statsWeeklyTotal] = await Promise.all([
+          enrichRaider(row, now, effectiveRaidProgressTierId),
+          fetchStatisticsWeeklyTotal(row.realm_slug, row.name).catch(() => null),
+        ]);
         return {
           row,
           detailed: record,
           gear,
+          statsWeeklyTotal,
         };
       } catch (error) {
         console.error('Raider detail enrichment failed', {
@@ -1959,6 +1976,7 @@ export async function refreshRaidersCache(
           row,
           detailed: null as RaiderRecord | null,
           gear: null as RaiderGearItem[] | null,
+          statsWeeklyTotal: null as number | null,
         };
       }
     }
@@ -1999,6 +2017,15 @@ export async function refreshRaidersCache(
     const source = detailCandidates[i];
     const detailed = detailResults[i]?.detailed ?? null;
     if (!detailed) continue;
+
+    // Stop persisting once the budget is gone. Anything left keeps its old
+    // details_synced_at, so listDetailCandidates' stalest-first ordering puts
+    // it at the front of the queue on the next tick.
+    if (Date.now() >= deadline) {
+      detailSkippedForTime += detailCandidates.length - i;
+      break;
+    }
+
     const gearItems = detailResults[i]?.gear ?? null;
 
     // Accumulate keystones from this refresh into the persistent keystones table,
@@ -2012,7 +2039,8 @@ export async function refreshRaidersCache(
 
     // Bootstrap/top-up from the RIO stats endpoint (same source as the stats page).
     // If profile-derived lists undercount, add synthetic placeholders up to statsTotal.
-    const statsTotal = await fetchStatisticsWeeklyTotal(source.realm_slug, source.name).catch(() => null);
+    // Fetched during the parallel enrichment phase above, not here.
+    const statsTotal = detailResults[i]?.statsWeeklyTotal ?? null;
     if (statsTotal !== null && statsTotal > keystoneCounts.weekly) {
       const missing = statsTotal - keystoneCounts.weekly;
       const syntheticRuns: KeystoneRun[] = Array.from({ length: missing }, (_, idx) => ({
@@ -2163,7 +2191,7 @@ export async function refreshRaidersCache(
 
   if (detailSkippedForTime > 0) {
     console.warn(
-      `Raider detail refresh hit its ${DETAIL_TIME_BUDGET_MS}ms budget; ` +
+      `Raider detail refresh hit its ${REFRESH_TIME_BUDGET_MS}ms budget; ` +
         `skipped ${detailSkippedForTime} of ${detailCandidates.length} candidates (retried next tick).`
     );
   }

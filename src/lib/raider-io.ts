@@ -94,11 +94,18 @@ function buildStatisticsRunsUrl(realm: string, name: string, characterId: number
   return url.toString();
 }
 
+/**
+ * Ceiling for a Raider.IO subrequest. These run inside the raider refresh
+ * cron's wall-clock budget, so a hung upstream must not stall the whole tick.
+ */
+const REQUEST_TIMEOUT_MS = 8_000;
+
 async function fetchCharacterIdForStatistics(realm: string, name: string): Promise<number | null> {
   const response = await fetch(buildCharacterDetailsUrl(realm, name), {
     headers: {
       Accept: 'application/json',
     },
+    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
   });
 
   if (!response.ok) return null;
@@ -112,6 +119,7 @@ async function fetchStatisticsWeekTotal(realm: string, name: string, characterId
     headers: {
       Accept: 'application/json',
     },
+    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
   });
 
   if (!response.ok) return null;
@@ -258,6 +266,7 @@ export async function getCharacterMythicPlusRunCounts(realmSlug: string, name: s
     headers: {
       Accept: 'application/json',
     },
+    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
   });
 
   if (!response.ok) {
