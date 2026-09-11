@@ -199,7 +199,7 @@ async function syncReportMechanics(
     reportData?: {
       report?: {
         fights?: WclFightRow[];
-        masterData?: { actors?: Array<{ id?: number; name?: string; server?: string }> };
+        masterData?: { actors?: Array<{ id?: number; name?: string; server?: string; gameID?: number }> };
       } | null;
     };
   }>(
@@ -209,7 +209,7 @@ async function syncReportMechanics(
         reportData {
           report(code: $code) {
             fights { id startTime endTime encounterID difficulty kill }
-            masterData { actors(type: "Player") { id name server } }
+            masterData { actors(type: "Player") { id name server gameID } }
           }
         }
       }

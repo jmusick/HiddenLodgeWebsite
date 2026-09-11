@@ -52,6 +52,7 @@ interface WclActorRow {
   id: number;
   name?: string;
   server?: string;
+  gameID?: number;
 }
 
 // Historical site_settings key name; shared by every WCL consumer.
@@ -259,11 +260,18 @@ export async function loadWclCharacterLookup(db: D1Database): Promise<WclCharact
   };
 }
 
-/** Matches a WCL player actor (name + server) to a roster/character blizzard_char_id. */
+/**
+ * Matches a WCL player actor to a roster/character blizzard_char_id. WCL's
+ * `gameID` is the Blizzard character id, so it wins whenever it's a character
+ * we know; name + server is only the fallback. Name matching alone is ambiguous
+ * when a deleted character's name was reused (same name + realm, two ids).
+ */
 export function matchWclActorCharId(
-  actor: { name?: string | null; server?: string | null },
+  actor: { name?: string | null; server?: string | null; gameID?: number | null },
   ownership: WclCharacterLookup
 ): number | null {
+  const gameId = Number(actor.gameID ?? 0);
+  if (Number.isInteger(gameId) && gameId > 0 && ownership.ownerKeyByCharId.has(gameId)) return gameId;
   const name = normalizeName(actor.name);
   if (!name) return null;
   return ownership.charLookup.get(`${name}::${normalizeRealmSlug(actor.server)}`) ?? ownership.nameOnlyLookup.get(name) ?? null;
@@ -379,6 +387,7 @@ export async function fetchReportFightStats(
                 id
                 name
                 server
+                gameID
               }
             }
           }
@@ -425,7 +434,7 @@ export async function fetchReportFightStats(
     const realmSlug = normalizeRealmSlug(actor.server);
     if (!actorId || !name) continue;
 
-    const charId = ownership.charLookup.get(`${name}::${realmSlug}`) ?? ownership.nameOnlyLookup.get(name);
+    const charId = matchWclActorCharId(actor, ownership);
     if (!charId) {
       const nameOnlyResult = ownership.nameOnlyLookup.get(name);
       const reason = nameOnlyResult === null ? 'duplicate name, realm slug mismatch' : 'not found in character lookup';
