@@ -76,7 +76,7 @@ export function getUsWeeklyResetTimestamp(): number {
 }
 
 /** Convert an America/New_York wall-clock date/time to a Unix timestamp (seconds), DST-aware. */
-function easternWallClockToUtcSeconds(year: number, month1to12: number, day: number, hour: number, minute = 0): number {
+export function easternWallClockToUtcSeconds(year: number, month1to12: number, day: number, hour: number, minute = 0): number {
   const seedUtc = new Date(Date.UTC(year, month1to12 - 1, day, hour, minute, 0));
   const offsetMinutes = easternUtcOffsetMinutes(seedUtc);
   return Math.floor((seedUtc.getTime() - offsetMinutes * 60_000) / 1000);

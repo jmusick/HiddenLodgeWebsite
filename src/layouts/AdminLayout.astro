@@ -15,10 +15,9 @@ const adminModules = [
 	{ href: '/admin/mains', label: 'Mains & Alts', icon: 'lucide:users' },
 	...(FEATURE_FLAGS.rosterTeams ? [{ href: '/admin/roster-teams', label: 'Roster Teams', icon: 'lucide:users-round' }] : []),
 	...(FEATURE_FLAGS.raidSignups ? [{ href: '/admin/raid-signups', label: 'Raid Signups', icon: 'lucide:calendar-plus' }] : []),
-	...(FEATURE_FLAGS.attendance ? [{ href: '/admin/log-matching', label: 'Log Matching', icon: 'lucide:scan-search' }] : []),
+	...(FEATURE_FLAGS.deathAnalysis ? [{ href: '/admin/log-matching', label: 'Log Matching', icon: 'lucide:scan-search' }] : []),
 	...(FEATURE_FLAGS.applications ? [{ href: '/admin/applications', label: 'Applications', icon: 'lucide:clipboard-list' }] : []),
 	...(FEATURE_FLAGS.feedback ? [{ href: '/admin/feedback', label: 'Feedback', icon: 'lucide:message-square-warning' }] : []),
-	...(FEATURE_FLAGS.attendance ? [{ href: '/admin/performance-review', label: 'Performance', icon: 'lucide:chart-no-axes-column-increasing' }] : []),
 	{ href: '/admin/raiding', label: 'Raiding Content', icon: 'lucide:swords' },
 	{ href: '/admin/settings', label: 'Settings', icon: 'lucide:settings' },
 ];

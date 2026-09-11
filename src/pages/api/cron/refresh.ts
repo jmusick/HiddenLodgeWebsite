@@ -6,6 +6,7 @@ import { refreshAttendanceCache } from '../../../lib/attendance';
 import { refreshProfessionsCache } from '../../../lib/professions-cache';
 import { warmTrinketTierCacheChunk } from '../../../lib/trinkets';
 import { refreshRaidLogActivity } from '../../../lib/raid-log-activity';
+import { refreshDeathAnalysis } from '../../../lib/death-analysis';
 import { FEATURE_FLAGS } from '../../../lib/feature-flags';
 
 export const GET: APIRoute = async ({ request }) => {
@@ -27,6 +28,9 @@ export const GET: APIRoute = async ({ request }) => {
     : undefined;
   const logReportBatchSize = url.searchParams.get('logReportBatchSize')
     ? Number.parseInt(url.searchParams.get('logReportBatchSize')!, 10)
+    : undefined;
+  const deathReportBatchSize = url.searchParams.get('deathReportBatchSize')
+    ? Number.parseInt(url.searchParams.get('deathReportBatchSize')!, 10)
     : undefined;
   const iconBatchSize = url.searchParams.get('iconBatchSize')
     ? Number.parseInt(url.searchParams.get('iconBatchSize')!, 10)
@@ -52,6 +56,7 @@ export const GET: APIRoute = async ({ request }) => {
   // other change, same as everywhere else these flags are honoured.
   const runAttendance = FEATURE_FLAGS.attendance;
   const runTools = FEATURE_FLAGS.tools;
+  const runDeathAnalysis = FEATURE_FLAGS.deathAnalysis;
 
   const startedAt = Date.now();
   const [
@@ -62,6 +67,7 @@ export const GET: APIRoute = async ({ request }) => {
     trinketsResult,
     logActivityResult,
     gearIconsResult,
+    deathAnalysisResult,
   ] = await Promise.allSettled([
     timed('roster', refreshRosterCache(undefined, rosterOptions)),
     skipRaiders ? Promise.resolve(null) : timed('raiders', refreshRaidersCache()),
@@ -77,6 +83,9 @@ export const GET: APIRoute = async ({ request }) => {
     // manual /api/cron/backfill-gear endpoint, so fresh drops rendered the
     // question-mark fallback indefinitely.
     timed('gearIcons', warmGearIcons({ limit: iconBatchSize })),
+    runDeathAnalysis
+      ? timed('deathAnalysis', refreshDeathAnalysis(undefined, { maxReports: deathReportBatchSize }))
+      : Promise.resolve(null),
   ]);
   timings.total = Date.now() - startedAt;
   console.log('Cron refresh timings (ms)', timings);
@@ -106,6 +115,10 @@ export const GET: APIRoute = async ({ request }) => {
     console.error('Cron raid log activity refresh failed', logActivityResult.reason);
     failures.push('logActivity');
   }
+  if (deathAnalysisResult.status === 'rejected') {
+    console.error('Cron death analysis refresh failed', deathAnalysisResult.reason);
+    failures.push('deathAnalysis');
+  }
   if (gearIconsResult.status === 'rejected') {
     console.error('Cron gear icon warm failed', gearIconsResult.reason);
     failures.push('gearIcons');
@@ -133,6 +146,7 @@ export const GET: APIRoute = async ({ request }) => {
     trinkets: trinketsResult.status === 'fulfilled' ? trinketsResult.value : null,
     logActivity: logActivityResult.status === 'fulfilled' ? logActivityResult.value : null,
     gearIcons: gearIconsResult.status === 'fulfilled' ? gearIconsResult.value : null,
+    deathAnalysis: deathAnalysisResult.status === 'fulfilled' ? deathAnalysisResult.value : null,
     attendance: {
       totalReports: Number(attendanceSummary?.total_reports ?? 0),
       reportsWithKills: Number(attendanceSummary?.reports_with_kills ?? 0),
@@ -144,11 +158,13 @@ export const GET: APIRoute = async ({ request }) => {
       attendance: !runAttendance,
       professions: !runTools,
       trinkets: !runTools,
+      deathAnalysis: !runDeathAnalysis,
     },
     requestedRosterOptions: rosterOptions,
     requestedProfessionBatchSize: professionBatchSize,
     requestedTrinketBatchSize: trinketBatchSize,
     requestedLogReportBatchSize: logReportBatchSize,
     requestedIconBatchSize: iconBatchSize,
+    requestedDeathReportBatchSize: deathReportBatchSize,
   });
 };

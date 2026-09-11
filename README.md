@@ -19,17 +19,25 @@ The site combines public guild information, Blizzard-authenticated member profil
 
 ## Feature Flags (Guild Hiatus)
 
-The guild is between raid seasons. Several features are disabled in place — code, data, and DB schema are preserved but pages/routes/nav entries are gated off — via a single flag map at `src/lib/feature-flags.ts` (`FEATURE_FLAGS`). See `AGENTS.md` for the exact gating pattern if you're re-enabling one. Currently `false`:
+Features can be disabled in place — code, data, and DB schema are preserved but pages/routes/nav entries are gated off — via a single flag map at `src/lib/feature-flags.ts` (`FEATURE_FLAGS`). See `AGENTS.md` for the exact gating pattern if you're re-enabling one.
+
+Currently `false`:
 
 - `rosterTeams` — `/admin/roster-teams` and its API routes. `/raiders` no longer depends on this; it lists all level-90 guild characters directly instead (see below).
 - `raidSignups` — `/signup`, `/admin/raid-signups`, and the "Preferred Role" profile setting.
-- `attendance` — `/admin/log-matching`, `/admin/performance-review`, the attendance-refresh cron, and the Attendance/Sim DPS stat cards on raider profiles.
+- `attendance` — the signup/schedule-based attendance pipeline: attendance scoring and the Attendance/Sim DPS stat cards on raider profiles, the bench toggle, the old `/api/admin/attendance/*` routes, `/api/cron/refresh-attendance`, and the attendance leg of `/api/cron/refresh`. Retired for Season 2 (it depended on raid signups).
 - `applications` — the "How to Apply" section on `/raiding` and `/admin/applications`.
 - `feedback` — `/feedback` and `/admin/feedback`.
-- `tools` — `/trinkets`, `/professions`, `/loot-history`, `/upgrades`, and the "Tools" nav dropdown.
 - `sim` — the interactive Sim Tools panel on raider profiles and the admin "Purge All Sim Data" action.
 
-Separately, `/raiders`, `/signup`, `/trinkets`, `/professions`, `/loot-history`, and `/upgrades` are also redirected to `/hiatus` by `src/middleware.ts` (`HIATUS_PATHS`) — `/raiders` was removed from that set so it stays live, sourced from the level-90 roster.
+Currently `true`:
+
+- `deathAnalysis` — `/death-analysis` (raider-facing, in the Tools menu), `/admin/log-matching`, `/api/admin/death-analysis/*`, and the death-analysis leg of `/api/cron/refresh`. See [Death Analysis](#death-analysis).
+- `tools` — `/professions` (live, in the Tools menu) plus `/trinkets`, `/loot-history`, `/upgrades` (still redirected to `/hiatus` and not in the Tools menu).
+
+The "Tools" nav dropdown isn't gated as a whole; each entry checks its own flag. It currently holds Gear Summary (`/raiders/gear-summary`, guild members), Professions (logged-in users, `tools`), and Death Analysis (guild members, `deathAnalysis`).
+
+Separately, `/signup`, `/trinkets`, `/loot-history`, and `/upgrades` are also redirected to `/hiatus` by `src/middleware.ts` (`HIATUS_PATHS`). `/raiders` and `/professions` were removed from that set so they stay live.
 
 `/raiders` additionally won't record any new tracking data (gear/ilvl, M+ score, crests, keystones, Great Vault, history snapshots) until Season 2 actually starts — see `SEASON_2_START_TIMESTAMP` in `src/lib/wow-reset.ts`.
 
@@ -44,10 +52,12 @@ Separately, `/raiders`, `/signup`, `/trinkets`, `/professions`, `/loot-history`,
 - Useful Links page (`/links`) — sourced live from the Tagstash public API (bookmarks tagged `wow`), not admin-managed in this repo; see [Notes](#notes)
 - Articles page (`/articles`) — WoW writeups sourced live from a public Orboro.net API (posts tagged World of Warcraft), linking out to the full post there; small credit links to Orboro.net appear on this page and the homepage
 - Live roster page with Blizzard data, caching, search, filters, and collection stats
-- Raiders analytics table of all level-90 guild characters (iLvl, M+, crests, preparedness, upgrades, raid progress) — Season 2 countdown banner shown until tracking data starts, plus a gear-summary view (`/raiders/gear-summary`)
+- Raiders analytics table of all level-90 guild characters (iLvl, M+, crests, preparedness, upgrades, raid progress) — Season 2 countdown banner shown until tracking data starts, plus a gear-summary view (`/raiders/gear-summary`, linked from the Tools menu and the Roster page)
+- Professions recipe browser (`/professions`, Tools menu, logged-in users)
 - Raider detail profile with character render, equipment layout, and raid progress matrix
 - Authenticated profile with Battle.net login, character sync, main selection, and timezone preferences
-- *Disabled during guild hiatus (code/data preserved, see Feature Flags):* guild-member raid signup calendar, Trinkets/Professions/Loot History/Upgrades tools, guild feedback form, application form, interactive Sim Tools panel and Attendance history on raider profiles
+- Death Analysis (`/death-analysis`, Tools menu, guild members) — excessive-death rankings for Season 2 raid nights; see [Death Analysis](#death-analysis)
+- *Disabled during guild hiatus (code/data preserved, see Feature Flags):* guild-member raid signup calendar, Trinkets/Loot History/Upgrades tools, guild feedback form, application form, interactive Sim Tools panel and Attendance history on raider profiles
 
 ### Admin Features
 
@@ -55,7 +65,18 @@ Separately, `/raiders`, `/signup`, `/trinkets`, `/professions`, `/loot-history`,
 - Settings module with raid-progress configuration (including the Season 2 raid tier) and cache health
 - Export module for addon-friendly JSON generation
 - **Raiding Content editor** for managing the schedule, raid expectations, and required addons displayed on the public Raiding page
-- *Disabled during guild hiatus (code/data preserved, see Feature Flags):* Roster Teams module, Raid Signups module, Log Matching, Performance Review, Applications module, Feedback review, interactive sim tools, "Purge All Sim Data"
+- **Log Matching** (admins + officers) — pick which Warcraft Logs report counts for each raid night in Death Analysis, plus a "Sync Now" button (admins)
+- *Disabled during guild hiatus (code/data preserved, see Feature Flags):* Roster Teams module, Raid Signups module, Applications module, Feedback review, interactive sim tools, "Purge All Sim Data"
+
+### Death Analysis
+
+Season 2 excessive-death tracking, sourced straight from the guild's Warcraft Logs report list (guild 781707) — it does not depend on raid signups or schedules. Logic lives in `src/lib/death-analysis.ts`; shared WCL client code (token, GraphQL, rate-limit backoff, character matching, per-report fight/death stats) is in `src/lib/wcl.ts`.
+
+- **Scope**: reports whose zone is **The Venomous Abyss** and that overlap a **Thursday/Friday 9pm–midnight Eastern** window by at least 30 minutes (DST-aware). Only **Heroic and Mythic** boss pulls count. Rolling **last 90 days**; older rows are pruned on each sync.
+- **One report per night**: when several people log the same night, the report with the most qualifying pulls counts (tie → earliest start), unless an officer overrides it on `/admin/log-matching`.
+- **Scoring** (same formula as Season 1): weighted score = (4 × first deaths + 3 × second + 2 × third + 1 × fourth) / pulls attended; only the first 4 deaths per pull count; only raiders with 20+ pulls across 4+ reports (`DEATH_ANALYSIS_MIN_PULLS` / `DEATH_ANALYSIS_MIN_REPORTS`; Season 1 was 5 pulls, no report minimum) are ranked and averaged — everyone else is hidden from the table; more than 25% above the qualified average is highlighted.
+- **Sync**: the `deathAnalysis` leg of `/api/cron/refresh` processes up to 3 new reports per run (`?deathReportBatchSize=` to change); remaining reports carry over to the next run. Admins can also trigger it from Log Matching.
+- **Tables**: `death_analysis_reports`, `death_analysis_stats`, `death_analysis_night_overrides` (`migrations/0074_death_analysis.sql`).
 
 ## Quick Start
 
@@ -105,9 +126,10 @@ http://localhost:4321
 | `/raiders/gear-summary` | Yes + Guild Member | Cross-raider equipped-gear summary table (guarded by `middleware.ts`, not an in-page check) |
 | `/raiders/:charId` | Yes + Guild Member | Raider detail page with media, stats, and raid progress matrix |
 | `/trinkets` | Yes + Guild Member | **Disabled** (redirects to `/hiatus`) — trinket tier comparison tool |
-| `/professions` | Yes | **Disabled** (redirects to `/hiatus`) — profession recipe browser |
+| `/professions` | Yes | Profession recipe browser (Tools menu) |
 | `/loot-history` | Yes | **Disabled** (redirects to `/hiatus`) — guild loot history log |
 | `/upgrades` | Yes + Guild Member | **Disabled** (redirects to `/hiatus`) — gear upgrade comparison tool |
+| `/death-analysis` | Yes + Guild Member | Season 2 excessive-death rankings and the counted report per raid night (see [Death Analysis](#death-analysis)) |
 | `/feedback` | Yes + Guild Member | **Disabled** — anonymous guild feedback form |
 
 ### Authenticated / Admin Pages
@@ -120,8 +142,7 @@ http://localhost:4321
 | `/admin/raid-signups` | Yes + Admin | **Disabled** — manage primary schedules and ad-hoc raids |
 | `/admin/roster-teams` | Yes + Admin | **Disabled** — multi-team raid roster builder and analysis |
 | `/admin/mains` | Yes + Admin | Member overview, main/alt visibility, and nickname management |
-| `/admin/log-matching` | Yes + Admin/Officer | **Disabled** — match Warcraft Logs reports to raid occurrences |
-| `/admin/performance-review` | Yes + Admin | **Disabled** — officer review tables for excessive deaths and other performance metrics |
+| `/admin/log-matching` | Yes + Admin/Officer | Every Thu/Fri raid night in the last 90 days with its counted WCL report, other reports, and an override; admins get a "Sync Now" button |
 | `/admin/settings` | Yes + Admin | Raid-progress target settings (including Season 2 tier) and cache health controls |
 | `/admin/cache` | Yes + Admin | Backward-compatible redirect to `/admin/settings` |
 | `/admin/raiding` | Yes + Admin | Edit schedule, raid expectations, and addon list |
@@ -165,9 +186,10 @@ http://localhost:4321
 | `/api/admin/raider-notes/update` | POST | Update the text of an existing raider note |
 | `/api/admin/raider-notes/delete` | POST | Delete a raider note; restricted to `isAdmin` plus a single hardcoded battle tag |
 | `/api/admin/loot-history/exclude` | POST | Mark a loot history entry excluded with a required admin note |
-| `/api/admin/attendance/log-candidates` | GET | **Disabled** — candidate Warcraft Logs reports for matching to an attendance occurrence |
-| `/api/admin/attendance/log-matching` | POST, GET | **Disabled** — link/rematch a WCL report to an attendance occurrence |
-| `/api/admin/attendance/refresh` | POST | **Disabled** — trigger a full attendance cache refresh |
+| `/api/admin/death-analysis/refresh` | POST | Admin: run a death-analysis sync batch now; redirects to `/admin/log-matching` |
+| `/api/admin/death-analysis/log-override` | POST | Admin/officer: set or clear the counted report for a raid night (`night_key`, `report_code` or pasted `report_code_manual`); syncs the report first if needed |
+| `/api/admin/attendance/log-candidates` | GET | **Disabled** — candidate Warcraft Logs reports for an attendance occurrence (old pipeline) |
+| `/api/admin/attendance/log-matching` | POST, GET | **Disabled** — link/rematch a WCL report to an attendance occurrence (old pipeline) |
 | `/api/admin/attendance/toggle-bench` | POST, GET | **Disabled** — toggle a member's bench status for a raid occurrence |
 | `/api/admin/settings/purge-sim-data` | POST | **Disabled** — permanently delete all stored sim runs/recommendations |
 | `/api/admin/raid-signups/create-primary` | POST | **Disabled** — create a recurring primary raid schedule |
@@ -259,9 +281,9 @@ curl -sS \
 
 | Endpoint | Method | Description |
 |---|---|---|
-| `/api/cron/refresh` | GET | Refreshes roster, raiders, attendance, professions, and warms trinket cache in small class batches; requires `X-Cron-Secret` (formerly `/api/cron/refresh-roster`, which still works as an alias). Accepts `?skipRaiders=1` to pair with `/api/cron/refresh-raiders` below |
+| `/api/cron/refresh` | GET | Refreshes roster, raiders, raid-log activity, death analysis, professions, and warms trinket cache in small class batches; requires `X-Cron-Secret` (formerly `/api/cron/refresh-roster`, which still works as an alias). Accepts `?skipRaiders=1` to pair with `/api/cron/refresh-raiders` below |
 | `/api/cron/refresh-raiders` | GET | Raiders-only refresh split out of `/api/cron/refresh` so it gets the full request timeout; requires `X-Cron-Secret` |
-| `/api/cron/refresh-attendance` | GET | Refreshes Warcraft Logs attendance report cache and participant scoring data; requires `X-Cron-Secret` |
+| `/api/cron/refresh-attendance` | GET | **Disabled** — old signup-based attendance sync; requires `X-Cron-Secret` |
 | `/api/cron/backfill-gear` | GET | One-shot gear backfill for raiders missing cached gear, safe to call repeatedly; requires `X-Cron-Secret`; `?limit=` (default 25, max 100) |
 
 `/api/cron/refresh` optional query params:
@@ -270,6 +292,7 @@ curl -sS \
 - `backfillBatchSize`: override roster quest/death/critter backfill batch size for this run.
 - `professionBatchSize`: override professions sync batch size for this run.
 - `trinketBatchSize`: number of classes to pre-warm in trinkets cache for this run (defaults to `1`, rotates classes between runs).
+- `deathReportBatchSize`: max new Warcraft Logs reports the death-analysis sync processes this run (defaults to `3`).
 
 You can also set `TRINKET_CACHE_WARM_BATCH_SIZE`, `ROSTER_DETAIL_BATCH_SIZE`, or `ROSTER_BACKFILL_BATCH_SIZE` in runtime env as defaults for the query params above.
 
@@ -381,7 +404,8 @@ These handlers remain in the codebase as retired stubs and currently return HTTP
 | `application_notes` | Officer notes attached to each application *(feature disabled)* |
 | `guild_feedback` | Anonymous/named guild feedback submissions *(feature disabled)* |
 | `sim_runs` / `sim_raider_summaries` / `sim_item_winners` | Stored sim (droptimizer/single-target) run results *(interactive Sim Tools UI disabled; data left in place)* |
-| `raid_attendance_reports` and related attendance tables (from `migrations/0045`–`0048`, `0064`) | Cached Warcraft Logs attendance/kill-presence data and scoring *(feature disabled)* |
+| `raid_attendance_reports` and related attendance tables (from `migrations/0045`–`0048`, `0050`, `0064`) | Season 1 Warcraft Logs attendance/kill-presence/death data *(feature disabled; superseded by the `death_analysis_*` tables for Season 2)* |
+| `death_analysis_reports` / `death_analysis_stats` / `death_analysis_night_overrides` | Season 2 death analysis: in-window Venomous Abyss reports, per-character death stats per report, and officer-chosen report per night (last 90 days) |
 
 `links` and `link_categories` were dropped by `migrations/0072_drop_links_tables.sql` — `/links` now reads from Tagstash instead (see [Notes](#notes)). Articles similarly have no local table; `/articles` reads from a public Orboro.net API.
 

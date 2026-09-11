@@ -1,164 +1,85 @@
 ---
 export const prerender = false;
 
-import AdminLayout from '../../layouts/AdminLayout.astro';
+import Layout from '../layouts/Layout.astro';
 import { Icon } from 'astro-icon/components';
-import { getExcessiveDeathReviewSummary } from '../../lib/performance-review';
-import { classColor } from '../../lib/wow';
-import { FEATURE_FLAGS } from '../../lib/feature-flags';
+import {
+  DEATH_ANALYSIS_RAID_NAME,
+  DEATH_ANALYSIS_WINDOW_DAYS,
+  getDeathAnalysisSummary,
+  raidWindowForNight,
+} from '../lib/death-analysis';
+import { classColor } from '../lib/wow';
+import { FEATURE_FLAGS } from '../lib/feature-flags';
 
-if (!Astro.locals.isAdmin) {
+if (!FEATURE_FLAGS.tools || !FEATURE_FLAGS.deathAnalysis) {
   return Astro.redirect('/');
 }
 
-if (!FEATURE_FLAGS.attendance) {
-  return Astro.redirect('/admin');
+const isGuildMember = Astro.locals.isGuildMember;
+if (!isGuildMember) {
+  return Astro.redirect('/auth/login');
 }
 
-const review = await getExcessiveDeathReviewSummary();
-const startLabel = new Date(review.startUtc * 1000).toLocaleDateString(undefined, {
-  year: 'numeric',
-  month: 'short',
-  day: 'numeric',
-});
-const lastSyncedLabel = review.lastSyncedAt
-  ? new Date(review.lastSyncedAt * 1000).toLocaleString()
-  : 'Not synced yet';
-const syncCoveragePercent =
-  review.totalBossFights > 0 ? (review.syncedBossFights / review.totalBossFights) * 100 : 0;
-const WEEKDAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+const review = await getDeathAnalysisSummary();
+const dateFormatter = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', month: 'short', day: 'numeric', year: 'numeric' });
+const nightFormatter = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', weekday: 'short', month: 'short', day: 'numeric' });
+const startLabel = dateFormatter.format(new Date(review.cutoffUtc * 1000));
+const lastSyncedLabel = review.lastSyncedAt ? new Date(review.lastSyncedAt * 1000).toLocaleString('en-US', { timeZone: 'America/New_York' }) + ' ET' : 'Not synced yet';
+const includedNights = review.nights.filter((night) => night.canonical && night.canonical.bossPulls > 0);
+function nightLabel(nightKey: string): string {
+  const window = raidWindowForNight(nightKey);
+  return window ? nightFormatter.format(new Date(window.startUtc * 1000)) : nightKey;
+}
 const guildRankingsUrl = 'https://www.warcraftlogs.com/guild/rankings/781707/latest?difficulty=4&playerdisplay=median&recent=true';
-const statusParam = new URL(Astro.request.url).searchParams.get('status');
 ---
 
-<AdminLayout title="Performance Review | Admin | The Hidden Lodge">
-  <div class="performance-review-page">
-    {statusParam === 'sync-ok' && (
-      <div class="flash flash-ok" role="status">Attendance sync batch triggered. Rankings will update as reports are processed.</div>
-    )}
-    {statusParam === 'sync-error' && (
-      <div class="flash flash-error" role="alert">Attendance sync failed. Check server logs.</div>
-    )}
-
+<Layout title="Death Analysis | The Hidden Lodge">
+  <div class="death-analysis-page">
     <div class="page-header">
       <div>
-        <h1>Performance Review</h1>
+        <h1>Death Analysis</h1>
         <div class="scope-badges" aria-label="Current review scope">
-          <span class="scope-badge">Scope: Main Raids (Thu/Fri)</span>
-          <span class="scope-badge">Season: Midnight S1</span>
+          <span class="scope-badge">Season: Midnight S2</span>
+          <span class="scope-badge">Raid: {DEATH_ANALYSIS_RAID_NAME} (Heroic/Mythic)</span>
+          <span class="scope-badge">Thu/Fri 9pm–midnight ET</span>
+          <span class="scope-badge">Last {DEATH_ANALYSIS_WINDOW_DAYS} days</span>
         </div>
         <p class="page-desc">
-          Officer-facing review tools for raid performance signals. The first metric tracks excessive deaths from Thursday and Friday primary main raids by weighting early deaths in each logged boss pull from The Voidspire, The Dreamrift, and March on Quel'Danas.
+          Tracks excessive deaths on our Thursday and Friday raid nights by weighting early deaths in each Heroic or Mythic {DEATH_ANALYSIS_RAID_NAME} boss pull. When several people log the same night, only one report counts.
         </p>
       </div>
       <div class="header-actions">
         <a href={guildRankingsUrl} target="_blank" rel="noopener noreferrer" class="rankings-cta">
           View WCL Guild Rankings
         </a>
-        <form method="POST" action="/api/admin/attendance/refresh" class="sync-form">
-          <button type="submit" class="sync-btn">Sync Attendance</button>
-        </form>
       </div>
     </div>
 
-    <section class="overview-grid" aria-label="Performance review summary">
+    <section class="overview-grid" aria-label="Death analysis summary">
       <article class="overview-card">
         <span class="overview-label">Tracked Window</span>
         <strong>{startLabel} to today</strong>
-        <p>Uses cached Warcraft Logs attendance reports from primary Thursday/Friday main raids in the attendance scoring window.</p>
-      </article>
-      <article class="overview-card">
-        <span class="overview-label">Death Sync Coverage</span>
-        <strong>{review.syncedBossFights.toLocaleString()} / {review.totalBossFights.toLocaleString()} pulls</strong>
-        <p>{review.totalReports.toLocaleString()} reports found, {review.syncedReports.toLocaleString()} synced. Coverage {syncCoveragePercent.toFixed(1)}%.</p>
+        <p>{review.includedNights} raid night{review.includedNights === 1 ? '' : 's'} and {review.includedPulls.toLocaleString()} boss pulls counted.</p>
       </article>
       <article class="overview-card">
         <span class="overview-label">Qualified Raiders</span>
         <strong>{review.qualifiedPlayers.toLocaleString()}</strong>
-        <p>Minimum sample: {review.minimumPulls} boss pulls. Average weighted score: {review.averageWeightedScore !== null ? review.averageWeightedScore.toFixed(2) : '—'}.</p>
+        <p>Minimum sample: {review.minimumPulls} boss pulls across {review.minimumReports}+ reports. Average weighted score: {review.averageWeightedScore !== null ? review.averageWeightedScore.toFixed(2) : '—'}.</p>
       </article>
       <article class="overview-card">
-        <span class="overview-label">Last Death Sync</span>
+        <span class="overview-label">Last Sync</span>
         <strong>{lastSyncedLabel}</strong>
-        <p>If this lags behind attendance refreshes, the death review backfill is still catching up.</p>
+        <p>New logs are picked up automatically, usually within a few hours of upload.</p>
       </article>
     </section>
 
-    {review.syncedReports < review.totalReports && (
-      <div class="flash flash-warn" role="status">
-        Death metrics are still backfilling. Rankings below use only reports whose death events have been synced.
-      </div>
-    )}
-
-    <section class="admin-section">
-      <div class="section-heading-row">
-        <div>
-          <h2><Icon name="lucide:file-search" aria-hidden="true" />Included Logs</h2>
-          <p class="section-copy">
-            These are the primary Thu/Fri logs currently in scope for this report. Excessive-death calculations only include synced pulls from The Voidspire, The Dreamrift, and March on Quel'Danas.
-          </p>
-        </div>
-      </div>
-
-      {review.includedLogs.length === 0 ? (
-        <p class="empty-state">No in-scope logs found yet for the current review window.</p>
-      ) : (
-        <div class="table-wrap">
-          <table class="review-table sortable-table">
-            <thead>
-              <tr>
-                <th><button type="button" class="sort-btn" data-col-index="0" data-sort-type="number">Occurrence</button></th>
-                <th><button type="button" class="sort-btn" data-col-index="1" data-sort-type="text">Schedule</button></th>
-                <th><button type="button" class="sort-btn" data-col-index="2" data-sort-type="text">WCL Report</button></th>
-                <th><button type="button" class="sort-btn" data-col-index="3" data-sort-type="number">Boss Pulls</button></th>
-                <th><button type="button" class="sort-btn" data-col-index="4" data-sort-type="number">Kills</button></th>
-                <th><button type="button" class="sort-btn" data-col-index="5" data-sort-type="number">Wipe Pulls</button></th>
-                <th><button type="button" class="sort-btn" data-col-index="6" data-sort-type="number">Mapped Chars</button></th>
-                <th><button type="button" class="sort-btn" data-col-index="7" data-sort-type="number">Merged</button></th>
-                <th><button type="button" class="sort-btn" data-col-index="8" data-sort-type="number">Death Sync</button></th>
-              </tr>
-            </thead>
-            <tbody>
-              {review.includedLogs.map((log) => (
-                <tr>
-                  <td data-sort-value={String(log.occurrenceStartUtc)}>{new Date(log.occurrenceStartUtc * 1000).toLocaleString('en-US', { timeZone: 'America/New_York' })} ET</td>
-                  <td data-sort-value={`${log.scheduleName.toLowerCase()}-${log.weekdayUtc ?? -1}`}>
-                    {log.scheduleName}
-                    {log.weekdayUtc !== null && (
-                      <small class="cell-subtext">{WEEKDAY_LABELS[log.weekdayUtc] ?? `Day ${log.weekdayUtc}`}</small>
-                    )}
-                  </td>
-                  <td data-sort-value={(log.reportCode ?? '').toLowerCase()}>
-                    {log.reportUrl ? (
-                      <a href={log.reportUrl} target="_blank" rel="noopener noreferrer" class="report-link">{log.reportCode}</a>
-                    ) : (
-                      <span class="cell-subtext">No report code</span>
-                    )}
-                  </td>
-                  <td data-sort-value={String(log.totalBossFights)}>{log.totalBossFights.toLocaleString()}</td>
-                  <td data-sort-value={String(log.totalBossKills)}>{log.totalBossKills.toLocaleString()}</td>
-                  <td data-sort-value={String(log.totalWipePulls)}>{log.totalWipePulls.toLocaleString()}</td>
-                  <td data-sort-value={String(log.mappedCharacters)}>{log.mappedCharacters.toLocaleString()}</td>
-                  <td data-sort-value={String(log.mergedOccurrences)}>{log.mergedOccurrences.toLocaleString()}</td>
-                  <td data-sort-value={String(log.deathStatsSyncedAt ?? 0)}>
-                    <span class:list={['sync-pill', log.isIncludedInCalculations ? 'sync-pill-ok' : 'sync-pill-pending']}>
-                      {log.isIncludedInCalculations ? 'Synced' : 'Pending'}
-                    </span>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
-    </section>
-
-    <section class="admin-section formula-card">
+    <section class="content-section formula-card">
       <div class="section-heading-row">
         <div>
           <h2><Icon name="lucide:skull" aria-hidden="true" />Excessive Deaths</h2>
           <p class="section-copy">
-            This is the web version of the old script, but with a corrected denominator: score is weighted by actual boss pulls attended, not only pulls where someone died.
+            Score is weighted by actual boss pulls attended, not only pulls where someone died.
           </p>
         </div>
       </div>
@@ -173,7 +94,7 @@ const statusParam = new URL(Astro.request.url).searchParams.get('status');
         </div>
         <div>
           <span class="formula-label">Filter</span>
-          <p><strong>{review.minimumPulls}+</strong> pulls required before a raider counts toward the average.</p>
+          <p><strong>{review.minimumPulls}+</strong> pulls across <strong>{review.minimumReports}+</strong> reports required before a raider is ranked.</p>
         </div>
         <div>
           <span class="formula-label">Death cap rule</span>
@@ -182,71 +103,18 @@ const statusParam = new URL(Astro.request.url).searchParams.get('status');
       </div>
     </section>
 
-    <section class="admin-section">
-      <div class="section-heading-row">
-        <div>
-          <h2>Flagged Above Average</h2>
-          <p class="section-copy">
-            Raiders more than 25% above the current qualified-group average weighted score.
-          </p>
-        </div>
-      </div>
-
-      {review.flagged.length === 0 ? (
-        <p class="empty-state">No raiders are currently 25% above the qualified-group average.</p>
-      ) : (
-        <div class="table-wrap">
-          <table class="review-table sortable-table">
-            <thead>
-              <tr>
-                <th><button type="button" class="sort-btn" data-col-index="0" data-sort-type="text">Raider</button></th>
-                <th><button type="button" class="sort-btn" data-col-index="1" data-sort-type="number">Pulls</button></th>
-                <th><button type="button" class="sort-btn" data-col-index="2" data-sort-type="number">Deaths (capped)</button></th>
-                <th><button type="button" class="sort-btn" data-col-index="3" data-sort-type="number">1st</button></th>
-                <th><button type="button" class="sort-btn" data-col-index="4" data-sort-type="number">2nd</button></th>
-                <th><button type="button" class="sort-btn" data-col-index="5" data-sort-type="number">3rd</button></th>
-                <th><button type="button" class="sort-btn" data-col-index="6" data-sort-type="number">4th</button></th>
-                <th><button type="button" class="sort-btn" data-col-index="7" data-sort-type="number">Score</button></th>
-                <th><button type="button" class="sort-btn" data-col-index="8" data-sort-type="number">Above Avg</button></th>
-              </tr>
-            </thead>
-            <tbody>
-              {review.flagged.map((row) => (
-                <tr>
-                  <td data-sort-value={`${row.name.toLowerCase()} ${row.realm.toLowerCase()}`}>
-                    <div class="raider-cell">
-                      <strong style={`color: ${classColor(row.className)}`}>{row.name}</strong>
-                      <span>{row.realm}</span>
-                    </div>
-                  </td>
-                  <td data-sort-value={String(row.fightsPresent)}>{row.fightsPresent.toLocaleString()}</td>
-                  <td data-sort-value={String(row.totalDeaths)}>{row.totalDeaths.toLocaleString()}</td>
-                  <td data-sort-value={String(row.firstDeathCount)}>{row.firstDeathCount.toLocaleString()}</td>
-                  <td data-sort-value={String(row.secondDeathCount)}>{row.secondDeathCount.toLocaleString()}</td>
-                  <td data-sort-value={String(row.thirdDeathCount)}>{row.thirdDeathCount.toLocaleString()}</td>
-                  <td data-sort-value={String(row.fourthDeathCount)}>{row.fourthDeathCount.toLocaleString()}</td>
-                  <td data-sort-value={row.weightedScore.toFixed(4)}>{row.weightedScore.toFixed(2)}</td>
-                  <td data-sort-value={row.percentAboveAverage !== null ? row.percentAboveAverage.toFixed(4) : '-999999'}>{row.percentAboveAverage !== null ? `${row.percentAboveAverage.toFixed(1)}%` : '—'}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
-    </section>
-
-    <section class="admin-section">
+    <section class="content-section">
       <div class="section-heading-row">
         <div>
           <h2>All Raider Rankings</h2>
           <p class="section-copy">
-            Sorted by weighted excessive-death score, then first-death count. Includes any mapped character surfaced by synced WCL main-raid reports.
+            Raiders with {review.minimumPulls}+ boss pulls across {review.minimumReports}+ reports, sorted by weighted excessive-death score, then first-death count. Raiders more than 25% above the average are highlighted.
           </p>
         </div>
       </div>
 
       {review.rankings.length === 0 ? (
-        <p class="empty-state">No synced death-review data yet. Run the attendance refresh cron or wait for the next scheduled refresh.</p>
+        <p class="empty-state">No raiders have {review.minimumPulls}+ {DEATH_ANALYSIS_RAID_NAME} boss pulls across {review.minimumReports}+ reports yet. Check back after the next sync.</p>
       ) : (
         <div class="table-wrap">
           <table class="review-table review-table-full sortable-table">
@@ -294,8 +162,43 @@ const statusParam = new URL(Astro.request.url).searchParams.get('status');
         </div>
       )}
     </section>
+
+    {includedNights.length > 0 && (
+      <section class="content-section">
+        <div class="section-heading-row">
+          <div>
+            <h2><Icon name="lucide:file-search" aria-hidden="true" />Included Raid Nights</h2>
+            <p class="section-copy">The one report counted for each raid night.</p>
+          </div>
+        </div>
+        <div class="table-wrap">
+          <table class="review-table nights-table">
+            <thead>
+              <tr>
+                <th>Night</th>
+                <th>WCL Report</th>
+                <th>Pulls</th>
+                <th>Kills</th>
+              </tr>
+            </thead>
+            <tbody>
+              {includedNights.map((night) => (
+                <tr>
+                  <td>{nightLabel(night.nightKey)}</td>
+                  <td>
+                    <a href={`https://www.warcraftlogs.com/reports/${night.canonical!.code}`} target="_blank" rel="noopener noreferrer" class="report-link">{night.canonical!.code}</a>
+                  </td>
+                  <td>{night.canonical!.bossPulls}</td>
+                  <td>{night.canonical!.bossKills}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </section>
+    )}
   </div>
-</AdminLayout>
+</Layout>
 
 <script>
   // @ts-nocheck
@@ -370,7 +273,7 @@ const statusParam = new URL(Astro.request.url).searchParams.get('status');
 </script>
 
 <style>
-  .performance-review-page {
+  .death-analysis-page {
     display: flex;
     flex-direction: column;
     gap: 1.5rem;
@@ -452,7 +355,7 @@ const statusParam = new URL(Astro.request.url).searchParams.get('status');
   }
 
   .overview-card,
-  .admin-section {
+  .content-section {
     border: 1px solid rgba(214, 176, 106, 0.2);
     border-radius: 0.9rem;
     background: linear-gradient(180deg, rgba(19, 28, 40, 0.92), rgba(10, 17, 26, 0.96));
@@ -499,7 +402,7 @@ const statusParam = new URL(Astro.request.url).searchParams.get('status');
     color: var(--gold-bright);
   }
 
-  .admin-section {
+  .content-section {
     padding: 1.15rem 1.2rem;
   }
 
@@ -586,6 +489,20 @@ const statusParam = new URL(Astro.request.url).searchParams.get('status');
     opacity: 0.95;
   }
 
+  .nights-table {
+    min-width: 28rem;
+  }
+
+  .report-link {
+    color: var(--gold-bright);
+    font-weight: 700;
+  }
+
+  .report-link:hover,
+  .report-link:focus-visible {
+    text-decoration: underline;
+  }
+
   .review-table tbody tr.flagged {
     background: rgba(196, 30, 58, 0.08);
   }
@@ -608,85 +525,9 @@ const statusParam = new URL(Astro.request.url).searchParams.get('status');
     color: var(--gold-bright);
   }
 
-  .report-link {
-    color: var(--gold-bright);
-    font-weight: 700;
-  }
-
-  .report-link:hover,
-  .report-link:focus-visible {
-    text-decoration: underline;
-  }
-
-  .cell-subtext {
-    display: block;
-    color: var(--muted);
-    font-size: 0.8rem;
-    margin-top: 0.15rem;
-  }
-
-  .sync-pill {
-    display: inline-flex;
-    align-items: center;
-    border-radius: 999px;
-    padding: 0.2rem 0.55rem;
-    font-size: 0.76rem;
-    font-weight: 700;
-    letter-spacing: 0.03em;
-    border: 1px solid transparent;
-  }
-
-  .sync-pill-ok {
-    color: #7cf6bc;
-    background: rgba(48, 186, 123, 0.16);
-    border-color: rgba(48, 186, 123, 0.45);
-  }
-
-  .sync-pill-pending {
-    color: var(--gold-bright);
-    background: rgba(214, 176, 106, 0.12);
-    border-color: rgba(214, 176, 106, 0.32);
-  }
-
   .empty-state {
     margin: 0;
     color: var(--muted);
-  }
-
-  .sync-form {
-    flex-shrink: 0;
-    align-self: flex-start;
-  }
-
-  .sync-btn {
-    border: 1px solid rgba(214, 176, 106, 0.55);
-    border-radius: 0.45rem;
-    background: rgba(214, 176, 106, 0.12);
-    color: #f3e2be;
-    padding: 0.45rem 0.8rem;
-    font-size: 0.9rem;
-    font-weight: 600;
-    cursor: pointer;
-    transition: border-color 160ms ease, background 160ms ease;
-    white-space: nowrap;
-  }
-
-  .sync-btn:hover,
-  .sync-btn:focus-visible {
-    border-color: rgba(214, 176, 106, 0.8);
-    background: rgba(214, 176, 106, 0.2);
-  }
-
-  .flash-ok {
-    background: rgba(48, 186, 123, 0.1);
-    border-color: rgba(48, 186, 123, 0.35);
-    color: #7cf6bc;
-  }
-
-  .flash-error {
-    background: rgba(196, 30, 58, 0.1);
-    border-color: rgba(196, 30, 58, 0.35);
-    color: #f87171;
   }
 
   @media (max-width: 720px) {
@@ -701,7 +542,7 @@ const statusParam = new URL(Astro.request.url).searchParams.get('status');
       flex-wrap: wrap;
     }
 
-    .admin-section {
+    .content-section {
       padding: 1rem;
     }
 

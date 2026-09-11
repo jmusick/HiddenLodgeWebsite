@@ -5,8 +5,9 @@ export const FEATURE_FLAGS = {
   rosterTeams: false,
   raidSignups: false,
   attendance: false,
+  deathAnalysis: true,
   applications: false,
   feedback: false,
-  tools: false,
+  tools: true,
   sim: false,
 } as const;

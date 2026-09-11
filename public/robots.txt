@@ -15,5 +15,6 @@ Disallow: /trinkets
 Disallow: /professions
 Disallow: /loot-history
 Disallow: /upgrades
+Disallow: /death-analysis
 
 Sitemap: https://hidden-lodge.com/sitemap.xml

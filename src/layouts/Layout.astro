@@ -32,12 +32,11 @@ const guildNavItems = [
 	{ href: '/leadership', label: 'Leadership' },
 ];
 
-const toolsNavItems = FEATURE_FLAGS.tools ? [
-	...(isGuildMember ? [{ href: '/trinkets', label: 'Trinkets' }] : []),
-	...(user ? [{ href: '/professions', label: 'Professions' }] : []),
-	...(user ? [{ href: '/loot-history', label: 'Loot' }] : []),
-	...(isGuildMember ? [{ href: '/upgrades', label: 'Upgrades' }] : []),
-] : [];
+const toolsNavItems = [
+	...(isGuildMember ? [{ href: '/raiders/gear-summary', label: 'Gear Summary' }] : []),
+	...(user && FEATURE_FLAGS.tools ? [{ href: '/professions', label: 'Professions' }] : []),
+	...(isGuildMember && FEATURE_FLAGS.deathAnalysis ? [{ href: '/death-analysis', label: 'Death Analysis' }] : []),
+];
 
 const memberNavItems = [
 	...(isGuildMember ? [{ href: '/raiders', label: 'Raiders' }] : []),
@@ -68,6 +67,7 @@ const NOINDEX_PREFIXES = [
 	'/professions',
 	'/loot-history',
 	'/upgrades',
+	'/death-analysis',
 ];
 const currentPath = Astro.url.pathname;
 const isIndexable = !NOINDEX_PREFIXES.some(

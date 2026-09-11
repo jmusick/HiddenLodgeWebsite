@@ -3,414 +3,173 @@ export const prerender = false;
 
 import AdminLayout from '../../layouts/AdminLayout.astro';
 import { env } from 'cloudflare:workers';
-import { attendanceScoringStartUtc } from '../../lib/attendance';
-import { adjustedPrimaryDisplayStartUtc, dayKeyInTimeZone } from '../../lib/raid-signups';
+import {
+  DEATH_ANALYSIS_RAID_NAME,
+  DEATH_ANALYSIS_WINDOW_DAYS,
+  canManageLogMatching,
+  getDeathAnalysisNights,
+  raidWindowForNight,
+} from '../../lib/death-analysis';
 import { FEATURE_FLAGS } from '../../lib/feature-flags';
 
 if (!Astro.locals.user) {
   return Astro.redirect('/');
 }
 
-if (!FEATURE_FLAGS.attendance) {
+if (!FEATURE_FLAGS.deathAnalysis) {
   return Astro.redirect('/admin');
 }
 
-const officerRow = Astro.locals.isAdmin
-  ? { can_override: 1 }
-  : await env.DB.prepare(
-      `SELECT 1 AS can_override
-       FROM characters c
-       JOIN roster_members_cache rmc ON rmc.blizzard_char_id = c.blizzard_char_id
-       WHERE c.user_id = ?
-         AND rmc.rank IN (0, 1, 2, 3)
-       LIMIT 1`
-    )
-      .bind(Astro.locals.user.id)
-      .first<{ can_override: number }>();
-
-const canManageLogMatching = Boolean(officerRow?.can_override);
-if (!canManageLogMatching) {
+if (!(await canManageLogMatching(env.DB, Astro.locals.user, Astro.locals.isAdmin))) {
   return Astro.redirect('/');
 }
 
-interface LogMatchRow {
-  raid_ref_key: string;
-  primary_schedule_id: number;
-  schedule_name: string;
-  weekday_utc: number;
-  start_time_utc: string;
-  duration_minutes: number;
-  occurrence_start_utc: number;
-  signup_count: number;
-  matched_report_code: string | null;
-  total_boss_kills: number | null;
-  total_boss_wipes: number | null;
-  synced_at: number | null;
-  override_report_code: string | null;
-  override_updated_at: number | null;
-}
-
-const PRIMARY_SCHEDULE_TIME_ZONE = 'America/New_York';
-
-const raidNightFormatter = new Intl.DateTimeFormat('en-US', {
-  timeZone: PRIMARY_SCHEDULE_TIME_ZONE,
-  month: 'numeric',
-  day: 'numeric',
-  year: 'numeric',
-  hour: 'numeric',
-  minute: '2-digit',
-  hour12: true,
-});
-
-function pickCanonicalLogNightRow(existing: LogMatchRow, candidate: LogMatchRow): LogMatchRow {
-  const existingOverride = Boolean((existing.override_report_code ?? '').trim());
-  const candidateOverride = Boolean((candidate.override_report_code ?? '').trim());
-  if (existingOverride !== candidateOverride) {
-    return candidateOverride ? candidate : existing;
-  }
-
-  const existingHasCode = Boolean((existing.matched_report_code ?? '').trim());
-  const candidateHasCode = Boolean((candidate.matched_report_code ?? '').trim());
-  if (existingHasCode !== candidateHasCode) {
-    return candidateHasCode ? candidate : existing;
-  }
-
-  const existingBosses = Math.max(0, Number(existing.total_boss_kills ?? 0)) + Math.max(0, Number(existing.total_boss_wipes ?? 0));
-  const candidateBosses = Math.max(0, Number(candidate.total_boss_kills ?? 0)) + Math.max(0, Number(candidate.total_boss_wipes ?? 0));
-  if (existingBosses !== candidateBosses) {
-    return candidateBosses > existingBosses ? candidate : existing;
-  }
-
-  const existingSignups = Math.max(0, Number(existing.signup_count ?? 0));
-  const candidateSignups = Math.max(0, Number(candidate.signup_count ?? 0));
-  if (existingSignups !== candidateSignups) {
-    return candidateSignups > existingSignups ? candidate : existing;
-  }
-
-  if (existing.occurrence_start_utc !== candidate.occurrence_start_utc) {
-    return candidate.occurrence_start_utc > existing.occurrence_start_utc ? candidate : existing;
-  }
-
-  return existing;
-}
-
-const startUtc = attendanceScoringStartUtc();
-const nowUtc = Math.floor(Date.now() / 1000);
+const nights = await getDeathAnalysisNights(env.DB);
 const statusParam = new URL(Astro.request.url).searchParams.get('status');
 
-const overrideTableExistsRow = await env.DB
-  .prepare(
-    `SELECT 1 AS found
-     FROM sqlite_master
-     WHERE type = 'table'
-       AND name = 'raid_attendance_log_overrides'
-     LIMIT 1`
-  )
-  .first<{ found: number }>();
-const hasLogOverrideTable = Boolean(overrideTableExistsRow?.found);
+const nightFormatter = new Intl.DateTimeFormat('en-US', {
+  timeZone: 'America/New_York',
+  weekday: 'short',
+  month: 'short',
+  day: 'numeric',
+  year: 'numeric',
+});
+const timeFormatter = new Intl.DateTimeFormat('en-US', {
+  timeZone: 'America/New_York',
+  hour: 'numeric',
+  minute: '2-digit',
+});
 
-const rowsResult = await env.DB
-  .prepare(
-    `WITH primary_occurrences AS (
-       SELECT DISTINCT
-         'primary:' || CAST(rs.primary_schedule_id AS TEXT) AS raid_ref_key,
-         rs.primary_schedule_id,
-         rs.occurrence_start_utc
-       FROM raid_signups rs
-       JOIN primary_raid_schedules prs ON prs.id = rs.primary_schedule_id
-       WHERE rs.raid_kind = 'primary'
-         AND rs.occurrence_start_utc IS NOT NULL
-         AND rs.occurrence_start_utc >= ?
-         AND rs.occurrence_start_utc <= ?
-         AND prs.weekday_utc IN (5, 6)
-
-       UNION
-
-       SELECT DISTINCT
-         r.raid_ref_key,
-         r.primary_schedule_id,
-         r.occurrence_start_utc
-       FROM raid_attendance_reports r
-       JOIN primary_raid_schedules prs ON prs.id = r.primary_schedule_id
-       WHERE r.raid_kind = 'primary'
-         AND r.occurrence_start_utc >= ?
-         AND r.occurrence_start_utc <= ?
-         AND prs.weekday_utc IN (5, 6)
-     )
-     SELECT
-       po.raid_ref_key,
-       po.primary_schedule_id,
-       prs.name AS schedule_name,
-       prs.weekday_utc,
-       prs.start_time_utc,
-       COALESCE(prs.duration_minutes, 180) AS duration_minutes,
-       po.occurrence_start_utc,
-       (
-         SELECT COUNT(*)
-         FROM raid_signups rs2
-         WHERE rs2.raid_kind = 'primary'
-           AND rs2.primary_schedule_id = po.primary_schedule_id
-           AND rs2.occurrence_start_utc = po.occurrence_start_utc
-       ) AS signup_count,
-       r.report_code AS matched_report_code,
-       r.total_boss_kills,
-       r.total_boss_wipes,
-       r.synced_at,
-       ${hasLogOverrideTable ? 'o.report_code' : 'NULL'} AS override_report_code,
-       ${hasLogOverrideTable ? 'o.updated_at' : 'NULL'} AS override_updated_at
-     FROM primary_occurrences po
-     JOIN primary_raid_schedules prs ON prs.id = po.primary_schedule_id
-     LEFT JOIN raid_attendance_reports r
-       ON r.raid_ref_key = po.raid_ref_key
-      AND r.occurrence_start_utc = po.occurrence_start_utc
-     ${
-       hasLogOverrideTable
-         ? `LEFT JOIN raid_attendance_log_overrides o
-       ON o.raid_ref_key = po.raid_ref_key
-      AND o.occurrence_start_utc = po.occurrence_start_utc`
-         : ''
-     }
-     ORDER BY po.occurrence_start_utc DESC, po.primary_schedule_id ASC
-     LIMIT 220`
-  )
-  .bind(startUtc, nowUtc, startUtc, nowUtc)
-  .all<LogMatchRow>();
-
-const rawRows = rowsResult.results ?? [];
-const canonicalRowsByNight = new Map<string, LogMatchRow>();
-for (const row of rawRows) {
-  const nightKey = `${row.raid_ref_key}|${dayKeyInTimeZone(row.occurrence_start_utc, PRIMARY_SCHEDULE_TIME_ZONE)}`;
-  const existing = canonicalRowsByNight.get(nightKey);
-  if (!existing) {
-    canonicalRowsByNight.set(nightKey, row);
-    continue;
-  }
-  canonicalRowsByNight.set(nightKey, pickCanonicalLogNightRow(existing, row));
+function nightLabel(nightKey: string): string {
+  const window = raidWindowForNight(nightKey);
+  return window ? nightFormatter.format(new Date(window.startUtc * 1000)) : nightKey;
 }
 
-const rows = [...canonicalRowsByNight.values()].sort(
-  (a, b) => b.occurrence_start_utc - a.occurrence_start_utc || a.primary_schedule_id - b.primary_schedule_id
-);
-const WEEKDAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+function reportTimes(startUtc: number, endUtc: number): string {
+  return `${timeFormatter.format(new Date(startUtc * 1000))}–${timeFormatter.format(new Date(endUtc * 1000))} ET`;
+}
 ---
 
 <AdminLayout title="Log Matching | Admin | The Hidden Lodge">
   <div class="log-matching-page">
-    {statusParam === 'log-match-updated' && (
-      <div class="flash flash-ok" role="status">Log override saved and attendance data was re-matched for that raid night.</div>
+    {statusParam === 'override-saved' && (
+      <div class="flash flash-ok" role="status">Log override saved. Death Analysis now uses that report for the night.</div>
     )}
-    {statusParam === 'log-match-cleared' && (
-      <div class="flash flash-ok" role="status">Log override cleared and auto-matching was re-applied for that raid night.</div>
+    {statusParam === 'override-cleared' && (
+      <div class="flash flash-ok" role="status">Override cleared. The night is back to automatic matching.</div>
     )}
-    {statusParam === 'log-match-updated-sync-backoff' && (
-      <div class="flash flash-error" role="alert">Log override saved, but Warcraft Logs sync is temporarily rate-limited. Retry in a few minutes.</div>
+    {statusParam === 'sync-ok' && (
+      <div class="flash flash-ok" role="status">Sync finished. All in-window reports are processed.</div>
     )}
-    {statusParam === 'log-match-cleared-sync-backoff' && (
-      <div class="flash flash-error" role="alert">Log override cleared, but Warcraft Logs sync is temporarily rate-limited. Retry in a few minutes.</div>
+    {statusParam === 'sync-partial' && (
+      <div class="flash flash-ok" role="status">Sync processed a batch of reports. More are pending; they will finish on the next cron runs or another sync.</div>
     )}
-    {statusParam === 'log-match-updated-sync-pending' && (
-      <div class="flash flash-error" role="alert">Log override saved, but immediate re-sync failed. The selected report is stored and will be used on the next successful sync.</div>
+    {statusParam === 'sync-rate-limited' && (
+      <div class="flash flash-error" role="alert">Warcraft Logs rate limit hit. Sync paused; it will resume automatically.</div>
     )}
-    {statusParam === 'log-match-cleared-sync-pending' && (
-      <div class="flash flash-error" role="alert">Log override cleared, but immediate re-sync failed. Auto-matching will apply on the next successful sync.</div>
+    {statusParam === 'sync-error' && (
+      <div class="flash flash-error" role="alert">Sync failed. Check server logs.</div>
     )}
     {statusParam === 'error' && (
-      <div class="flash flash-error" role="alert">Could not update log matching. Check report code and server logs.</div>
-    )}
-    {!hasLogOverrideTable && (
-      <div class="flash flash-error" role="alert">
-        Log override table is missing in this database. Run migration 0064 to enable manual overrides.
-      </div>
+      <div class="flash flash-error" role="alert">Could not save the override. Check that the report is a {DEATH_ANALYSIS_RAID_NAME} log and see server logs.</div>
     )}
 
     <div class="page-header">
       <div>
         <h1>Log Matching</h1>
         <p class="page-desc">
-          Each main-raid night has one matched Warcraft Logs report. Use this page to override the auto match when multiple people upload logs for the same night.
+          Every Thursday and Friday raid night (9pm–midnight ET) from the last {DEATH_ANALYSIS_WINDOW_DAYS} days. When more than one person logged a night, Death Analysis counts only one report: the one with the most Heroic/Mythic {DEATH_ANALYSIS_RAID_NAME} pulls, unless you pick a different one here. Reports sync automatically on the cron.
         </p>
       </div>
+      {Astro.locals.isAdmin && (
+        <div class="header-actions">
+          <form method="POST" action="/api/admin/death-analysis/refresh" class="sync-form">
+            <button type="submit" class="sync-btn">Sync Now</button>
+          </form>
+        </div>
+      )}
     </div>
 
     <section class="admin-section">
-      <div class="section-heading-row">
-        <div>
-          <h2>Main Raid Nights (Thu/Fri)</h2>
-          <p class="section-copy">
-            Saving a row re-syncs attendance for that raid occurrence immediately. Performance Review and attendance scoring use the updated match.
-          </p>
-        </div>
+      <div class="table-wrap">
+        <table class="review-table">
+          <thead>
+            <tr>
+              <th>Raid Night</th>
+              <th>Counted Report</th>
+              <th>Other Reports</th>
+              <th>Override</th>
+            </tr>
+          </thead>
+          <tbody>
+            {nights.map((night) => {
+              const others = night.reports.filter((report) => report.code !== night.canonical?.code);
+              return (
+                <tr>
+                  <td>
+                    <div class="cell-stack">
+                      <strong>{nightLabel(night.nightKey)}</strong>
+                      <small>{night.reports.length} report{night.reports.length === 1 ? '' : 's'} found</small>
+                    </div>
+                  </td>
+                  <td>
+                    {night.canonical ? (
+                      <div class="cell-stack">
+                        <a href={`https://www.warcraftlogs.com/reports/${night.canonical.code}`} target="_blank" rel="noopener noreferrer">{night.canonical.code}</a>
+                        <small>{night.canonical.bossPulls} pulls · {night.canonical.bossKills} kills · {reportTimes(night.canonical.startUtc, night.canonical.endUtc)}</small>
+                        <small>{night.isOverride ? 'Manual override' : 'Auto-matched'}</small>
+                      </div>
+                    ) : night.overrideCode ? (
+                      <span class="cell-subtext">Override {night.overrideCode} not synced yet</span>
+                    ) : (
+                      <span class="cell-subtext">No qualifying report</span>
+                    )}
+                  </td>
+                  <td>
+                    {others.length === 0 ? (
+                      <span class="cell-subtext">—</span>
+                    ) : (
+                      <div class="cell-stack">
+                        {others.map((report) => (
+                          <small>
+                            <a href={`https://www.warcraftlogs.com/reports/${report.code}`} target="_blank" rel="noopener noreferrer">{report.code}</a>
+                            {' '}· {report.bossPulls} pulls · {reportTimes(report.startUtc, report.endUtc)}
+                          </small>
+                        ))}
+                      </div>
+                    )}
+                  </td>
+                  <td>
+                    <form method="POST" action="/api/admin/death-analysis/log-override" class="override-form">
+                      <input type="hidden" name="night_key" value={night.nightKey} />
+                      <select name="report_code" class="override-select">
+                        <option value="" selected={!night.overrideCode}>Auto match (no override)</option>
+                        {night.reports.map((report) => (
+                          <option value={report.code} selected={night.overrideCode === report.code}>
+                            {report.code} ({report.bossPulls} pulls)
+                          </option>
+                        ))}
+                      </select>
+                      <input
+                        type="text"
+                        name="report_code_manual"
+                        class="override-input"
+                        placeholder="Or paste WCL URL/code"
+                        inputmode="url"
+                        autocomplete="off"
+                      />
+                      <button type="submit" class="save-btn">Save</button>
+                    </form>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
       </div>
-
-      {rows.length === 0 ? (
-        <p class="empty-state">No main-raid occurrences found in the current attendance scoring window.</p>
-      ) : (
-        <div class="table-wrap">
-          <table class="review-table">
-            <thead>
-              <tr>
-                <th>Raid Night</th>
-                <th>Schedule</th>
-                <th>Current Match</th>
-                <th>Manual Override</th>
-                <th>Result</th>
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((row) => {
-                const effectiveCode = (row.override_report_code ?? '').trim() || (row.matched_report_code ?? '').trim() || null;
-                const autoCode = (row.matched_report_code ?? '').trim() || null;
-                const overrideCode = (row.override_report_code ?? '').trim() || null;
-                const totalBosses = Math.max(0, Number(row.total_boss_kills ?? 0)) + Math.max(0, Number(row.total_boss_wipes ?? 0));
-                return (
-                  <tr>
-                    <td>
-                      <div class="cell-stack">
-                        <strong>{raidNightFormatter.format(new Date(adjustedPrimaryDisplayStartUtc(row, row.occurrence_start_utc) * 1000))} ET</strong>
-                        <small>{row.raid_ref_key}</small>
-                      </div>
-                    </td>
-                    <td>
-                      <div class="cell-stack">
-                        <strong>{row.schedule_name}</strong>
-                        <small>{WEEKDAY_LABELS[row.weekday_utc] ?? `Day ${row.weekday_utc}`}</small>
-                      </div>
-                    </td>
-                    <td>
-                      {effectiveCode ? (
-                        <div class="cell-stack">
-                          <a href={`https://www.warcraftlogs.com/reports/${effectiveCode}`} target="_blank" rel="noopener noreferrer">{effectiveCode}</a>
-                          <small>{overrideCode ? 'Manual override active' : 'Auto-matched'}</small>
-                        </div>
-                      ) : (
-                        <span class="cell-subtext">No matched report yet</span>
-                      )}
-                    </td>
-                    <td>
-                      {hasLogOverrideTable ? (
-                        <form method="POST" action="/api/admin/attendance/log-matching" class="override-form">
-                          <input type="hidden" name="return_to" value="/admin/log-matching" />
-                          <input type="hidden" name="raid_kind" value="primary" />
-                          <input type="hidden" name="primary_schedule_id" value={String(row.primary_schedule_id)} />
-                          <input type="hidden" name="occurrence_start_utc" value={String(row.occurrence_start_utc)} />
-                          <input type="hidden" name="scheduled_duration_minutes" value={String(row.duration_minutes)} />
-
-                          <select
-                            name="report_code"
-                            class="override-select"
-                            data-candidate-select
-                            data-occurrence-start-utc={String(row.occurrence_start_utc)}
-                            data-duration-minutes={String(row.duration_minutes)}
-                            data-current-code={autoCode ?? ''}
-                            data-override-code={overrideCode ?? ''}
-                          >
-                            <option value="">Auto match (no override)</option>
-                            {overrideCode && (
-                              <option value={overrideCode} selected>{overrideCode} (manual)</option>
-                            )}
-                            {autoCode && autoCode !== overrideCode && (
-                              <option value={autoCode} selected={!overrideCode}>{autoCode} (current auto)</option>
-                            )}
-                          </select>
-                          <input
-                            type="text"
-                            name="report_code_manual"
-                            class="override-input"
-                            placeholder="Paste WCL report URL/code"
-                            inputmode="url"
-                            autocomplete="off"
-                          />
-                          <button type="submit" class="save-btn">Save</button>
-                        </form>
-                      ) : (
-                        <span class="cell-subtext">Migration required</span>
-                      )}
-                    </td>
-                    <td>
-                      <div class="cell-stack">
-                        <span>{totalBosses > 0 ? `${totalBosses} boss pulls` : 'No boss pulls yet'}</span>
-                        <small>{row.synced_at ? `Synced ${new Date(row.synced_at * 1000).toLocaleString()}` : 'Not synced'}</small>
-                      </div>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-      )}
     </section>
   </div>
 </AdminLayout>
-
-<script>
-  const loadedSelects = new WeakSet<HTMLSelectElement>();
-
-  async function loadCandidates(select: HTMLSelectElement) {
-    if (!(select instanceof HTMLSelectElement) || loadedSelects.has(select)) return;
-    loadedSelects.add(select);
-
-    const occurrenceStartUtc = select.dataset.occurrenceStartUtc;
-    const durationMinutes = select.dataset.durationMinutes;
-    if (!occurrenceStartUtc || !durationMinutes) return;
-
-    try {
-      const url = `/api/admin/attendance/log-candidates?occurrence_start_utc=${encodeURIComponent(occurrenceStartUtc)}&duration_minutes=${encodeURIComponent(durationMinutes)}`;
-      const response = await fetch(url, { headers: { Accept: 'application/json' } });
-      if (!response.ok) {
-        const failOption = document.createElement('option');
-        failOption.value = '';
-        failOption.disabled = true;
-        failOption.textContent = 'Could not load candidates (paste URL/code below).';
-        select.appendChild(failOption);
-        return;
-      }
-
-      const payload = await response.json();
-      const candidates = Array.isArray(payload?.candidates) ? payload.candidates : [];
-      const existing = new Set([...select.options].map((option) => option.value).filter(Boolean));
-
-      for (const row of candidates) {
-        const code = typeof row?.code === 'string' ? row.code.trim() : '';
-        if (!code || existing.has(code)) continue;
-
-        const labelTime = Number.isFinite(Number(row?.endUtc))
-          ? new Date(Number(row.endUtc) * 1000).toLocaleString()
-          : '';
-        const option = document.createElement('option');
-        option.value = code;
-        option.textContent = labelTime ? `${code} (${labelTime})` : code;
-        select.appendChild(option);
-        existing.add(code);
-      }
-
-      if (candidates.length === 0) {
-        const emptyOption = document.createElement('option');
-        emptyOption.value = '';
-        emptyOption.disabled = true;
-        emptyOption.textContent = 'No candidates found (paste URL/code below).';
-        select.appendChild(emptyOption);
-      }
-    } catch {
-      const failOption = document.createElement('option');
-      failOption.value = '';
-      failOption.disabled = true;
-      failOption.textContent = 'Could not load candidates (paste URL/code below).';
-      select.appendChild(failOption);
-    }
-  }
-
-  const selects = document.querySelectorAll('[data-candidate-select]');
-  for (const node of selects) {
-    if (!(node instanceof HTMLSelectElement)) continue;
-    node.addEventListener('focus', () => {
-      void loadCandidates(node);
-    }, { once: true });
-    node.addEventListener('pointerdown', () => {
-      void loadCandidates(node);
-    }, { once: true });
-  }
-</script>
 
 <style>
   .log-matching-page {
@@ -431,6 +190,29 @@ const WEEKDAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
     margin: 0.35rem 0 0;
     color: #c7c2b8;
     max-width: 70ch;
+  }
+
+  .header-actions {
+    flex-shrink: 0;
+  }
+
+  .sync-btn {
+    border: 1px solid rgba(214, 176, 106, 0.55);
+    border-radius: 0.45rem;
+    background: rgba(214, 176, 106, 0.12);
+    color: #f3e2be;
+    padding: 0.45rem 0.8rem;
+    font-size: 0.9rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: border-color 160ms ease, background 160ms ease;
+    white-space: nowrap;
+  }
+
+  .sync-btn:hover,
+  .sync-btn:focus-visible {
+    border-color: rgba(214, 176, 106, 0.8);
+    background: rgba(214, 176, 106, 0.2);
   }
 
   .admin-section {
