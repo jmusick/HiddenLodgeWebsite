@@ -33,9 +33,10 @@ Currently `false`:
 Currently `true`:
 
 - `deathAnalysis` — `/death-analysis` (raider-facing, in the Tools menu), `/admin/log-matching`, `/api/admin/death-analysis/*`, and the death-analysis leg of `/api/cron/refresh`. See [Death Analysis](#death-analysis).
+- `mechanicsAnalysis` — `/mechanics-analysis` (Tools menu, guild members) and the mechanics leg of `/api/cron/refresh-logs`. Also requires `deathAnalysis`, since it reads that feature's canonical reports. See [Mechanics Analysis](#mechanics-analysis).
 - `tools` — `/professions` (live, in the Tools menu) plus `/trinkets`, `/loot-history`, `/upgrades` (still redirected to `/hiatus` and not in the Tools menu).
 
-The "Tools" nav dropdown isn't gated as a whole; each entry checks its own flag. It currently holds Gear Summary (`/raiders/gear-summary`, guild members), Professions (logged-in users, `tools`), and Death Analysis (guild members, `deathAnalysis`).
+The "Tools" nav dropdown isn't gated as a whole; each entry checks its own flag. It currently holds Gear Summary (`/raiders/gear-summary`, guild members), Professions (logged-in users, `tools`), Death Analysis (guild members, `deathAnalysis`), and Mechanics Analysis (guild members, `deathAnalysis` + `mechanicsAnalysis`).
 
 Separately, `/signup`, `/trinkets`, `/loot-history`, and `/upgrades` are also redirected to `/hiatus` by `src/middleware.ts` (`HIATUS_PATHS`). `/raiders` and `/professions` were removed from that set so they stay live.
 
@@ -57,6 +58,7 @@ Separately, `/signup`, `/trinkets`, `/loot-history`, and `/upgrades` are also re
 - Raider detail profile with character render, equipment layout, and raid progress matrix
 - Authenticated profile with Battle.net login, character sync, main selection, and timezone preferences
 - Death Analysis (`/death-analysis`, Tools menu, guild members) — excessive-death rankings for Season 2 raid nights; see [Death Analysis](#death-analysis)
+- Mechanics Analysis (`/mechanics-analysis`, Tools menu, guild members) — per-boss mechanic leaderboards (first: Coiled Altar orb carries); see [Mechanics Analysis](#mechanics-analysis)
 - *Disabled during guild hiatus (code/data preserved, see Feature Flags):* guild-member raid signup calendar, Trinkets/Loot History/Upgrades tools, guild feedback form, application form, interactive Sim Tools panel and Attendance history on raider profiles
 
 ### Admin Features
@@ -77,6 +79,17 @@ Season 2 excessive-death tracking, sourced straight from the guild's Warcraft Lo
 - **Scoring** (same formula as Season 1): weighted score = (4 × first deaths + 3 × second + 2 × third + 1 × fourth) / pulls attended; only the first 4 deaths per pull count; only raiders with 20+ pulls across 4+ reports (`DEATH_ANALYSIS_MIN_PULLS` / `DEATH_ANALYSIS_MIN_REPORTS`; Season 1 was 5 pulls, no report minimum) are ranked and averaged — everyone else is hidden from the table; more than 25% above the qualified average is highlighted.
 - **Sync**: the `deathAnalysis` leg of `/api/cron/refresh-logs` (or `/api/cron/refresh` without `skipLogs=1`) processes up to 3 new reports per run (`?deathReportBatchSize=` to change); remaining reports carry over to the next run. Admins can also trigger it from Log Matching.
 - **Tables**: `death_analysis_reports`, `death_analysis_stats`, `death_analysis_night_overrides` (`migrations/0074_death_analysis.sql`).
+
+### Mechanics Analysis
+
+Per-boss leaderboards of who handles a boss mechanic, built on the same canonical raid-night reports as Death Analysis (one report per Thu/Fri night, Heroic + Mythic pulls, last 90 days). Logic lives in `src/lib/mechanics-analysis.ts`.
+
+- **Configured in code**: `MECHANICS_BOSSES` lists each boss (WCL encounter id) and its mechanics (WCL ability id). Adding a boss or mechanic there backfills it automatically on the next syncs.
+- **The Coiled Altar — Orb Carries** (encounter `3429`): counts `applydebuff` events for **Volatile Venom** (`1282419`) on friendly players. One application is one orb picked up, which matches the "uses" count on WCL's Auras view.
+- **Page** (`/mechanics-analysis`): boss tabs (`?boss=`), a range filter (`?range=latest` shows the most recent counted night that pulled the boss; the default is all logs), and a role filter (`?role=tank|healer|melee|ranged`; the default is all roles). The page shows a top-3 podium and a class-coloured bar leaderboard with per-pull rate, pulls carried out of pulls present, and best single pull, then lists players who were present but carried nothing.
+- **Roles** come from the `specID` on WCL CombatantInfo events, so they reflect the spec actually played. Each player's role is the one they played in the most counted pulls.
+- **Sync**: runs in `/api/cron/refresh-logs` right after death analysis (only if that finished within 16s), handling up to 3 reports per run with a 6s budget (`?mechanicsReportBatchSize=` to change). Log Matching's "Sync Now" button also runs a batch. Rows for reports that Death Analysis prunes are dropped.
+- **Tables**: `mechanics_analysis_reports` (per report + mechanic sync cursor) and `mechanics_analysis_stats` (per report + mechanic + character: role, pulls present, pulls hit, count, best pull) in `migrations/0075_mechanics_analysis.sql`.
 
 ## Quick Start
 
@@ -130,6 +143,7 @@ http://localhost:4321
 | `/loot-history` | Yes | **Disabled** (redirects to `/hiatus`) — guild loot history log |
 | `/upgrades` | Yes + Guild Member | **Disabled** (redirects to `/hiatus`) — gear upgrade comparison tool |
 | `/death-analysis` | Yes + Guild Member | Season 2 excessive-death rankings and the counted report per raid night (see [Death Analysis](#death-analysis)) |
+| `/mechanics-analysis` | Yes + Guild Member | Per-boss mechanic leaderboards with boss, range, and role filters (see [Mechanics Analysis](#mechanics-analysis)) |
 | `/feedback` | Yes + Guild Member | **Disabled** — anonymous guild feedback form |
 
 ### Authenticated / Admin Pages
@@ -283,7 +297,7 @@ curl -sS \
 |---|---|---|
 | `/api/cron/refresh` | GET | Refreshes roster, raiders, raid-log activity, death analysis, professions, gear icons, and warms trinket cache in small class batches; requires `X-Cron-Secret`. Accepts `?skipRaiders=1` and `?skipLogs=1` to pair with the two split-out endpoints below |
 | `/api/cron/refresh-raiders` | GET | Raiders-only refresh split out of `/api/cron/refresh` so it gets the full request timeout; requires `X-Cron-Secret` |
-| `/api/cron/refresh-logs` | GET | Warcraft Logs refresh (raid-log activity + death analysis) split out of `/api/cron/refresh`, since WCL latency is the least predictable; requires `X-Cron-Secret`; accepts `logReportBatchSize` / `deathReportBatchSize` |
+| `/api/cron/refresh-logs` | GET | Warcraft Logs refresh (raid-log activity + death analysis, then mechanics analysis) split out of `/api/cron/refresh`, since WCL latency is the least predictable; requires `X-Cron-Secret`; accepts `logReportBatchSize` / `deathReportBatchSize` / `mechanicsReportBatchSize` |
 | `/api/cron/refresh-attendance` | GET | **Disabled** — old signup-based attendance sync; requires `X-Cron-Secret` |
 | `/api/cron/backfill-gear` | GET | One-shot gear backfill for raiders missing cached gear, safe to call repeatedly; requires `X-Cron-Secret`; `?limit=` (default 25, max 100) |
 
@@ -294,6 +308,7 @@ curl -sS \
 - `professionBatchSize`: override professions sync batch size for this run.
 - `trinketBatchSize`: number of classes to pre-warm in trinkets cache for this run (defaults to `1`, rotates classes between runs).
 - `deathReportBatchSize`: max new Warcraft Logs reports the death-analysis sync processes this run (defaults to `3`).
+- `mechanicsReportBatchSize` (`/api/cron/refresh-logs` only): max reports the mechanics-analysis sync processes this run (defaults to `3`).
 - `logReportBatchSize`: max new Warcraft Logs reports the raid-log activity sync processes this run (defaults to `6`).
 - `skipRaiders=1` / `skipLogs=1`: skip the legs handled by `/api/cron/refresh-raiders` / `/api/cron/refresh-logs`.
 
@@ -411,6 +426,7 @@ These handlers remain in the codebase as retired stubs and currently return HTTP
 | `sim_runs` / `sim_raider_summaries` / `sim_item_winners` | Stored sim (droptimizer/single-target) run results *(interactive Sim Tools UI disabled; data left in place)* |
 | `raid_attendance_reports` and related attendance tables (from `migrations/0045`–`0048`, `0050`, `0064`) | Season 1 Warcraft Logs attendance/kill-presence/death data *(feature disabled; superseded by the `death_analysis_*` tables for Season 2)* |
 | `death_analysis_reports` / `death_analysis_stats` / `death_analysis_night_overrides` | Season 2 death analysis: in-window Venomous Abyss reports, per-character death stats per report, and officer-chosen report per night (last 90 days) |
+| `mechanics_analysis_reports` / `mechanics_analysis_stats` | Mechanics analysis: per report + mechanic sync cursor, and per-character mechanic counts/role for each canonical report |
 
 `links` and `link_categories` were dropped by `migrations/0072_drop_links_tables.sql` — `/links` now reads from Tagstash instead (see [Notes](#notes)). Articles similarly have no local table; `/articles` reads from a public Orboro.net API.
 

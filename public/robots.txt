@@ -16,5 +16,6 @@ Disallow: /professions
 Disallow: /loot-history
 Disallow: /upgrades
 Disallow: /death-analysis
+Disallow: /mechanics-analysis
 
 Sitemap: https://hidden-lodge.com/sitemap.xml

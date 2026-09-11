@@ -291,7 +291,7 @@ async function pruneOldRows(db: D1Database, cutoffUtc: number): Promise<void> {
   ]);
 }
 
-async function requireAccessToken(db: D1Database): Promise<string> {
+export async function requireAccessToken(db: D1Database): Promise<string> {
   const backoffUntil = await getWclBackoffUntil(db);
   if (backoffUntil && backoffUntil > nowInSeconds()) {
     throw new Error(`Warcraft Logs API backoff active until ${new Date(backoffUntil * 1000).toISOString()}.`);
@@ -605,18 +605,11 @@ function weightedDeathScore(entry: Pick<DeathAnalysisEntry, 'fightsPresent' | 'f
   );
 }
 
-export async function getDeathAnalysisSummary(dbInput?: D1Database): Promise<DeathAnalysisSummary> {
-  const db = getDatabase(dbInput);
-  const nights = await getDeathAnalysisNights(db);
-  const included = nights.filter((night) => night.canonical && night.canonical.bossPulls > 0);
-  const canonicalCodes = included.map((night) => night.canonical!.code);
-
-  const rankings: DeathAnalysisEntry[] = [];
-  if (canonicalCodes.length > 0) {
-    const placeholders = canonicalCodes.map(() => '?').join(', ');
-    const result = await db
-      .prepare(
-        `WITH identities AS (
+/**
+ * Picks one display identity per blizzard_char_id (characters > roster > raider
+ * cache). Join on `identity_choice ... AND ic.rn = 1`.
+ */
+export const CHARACTER_IDENTITY_CTE = `WITH identities AS (
            SELECT blizzard_char_id, name, realm, class_name, COALESCE(last_synced, 0) AS priority_ts, 1 AS priority_order
            FROM characters WHERE blizzard_char_id IS NOT NULL
            UNION ALL
@@ -628,7 +621,20 @@ export async function getDeathAnalysisSummary(dbInput?: D1Database): Promise<Dea
            SELECT blizzard_char_id, name, realm, class_name,
              ROW_NUMBER() OVER (PARTITION BY blizzard_char_id ORDER BY priority_order ASC, priority_ts DESC) AS rn
            FROM identities
-         )
+         )`;
+
+export async function getDeathAnalysisSummary(dbInput?: D1Database): Promise<DeathAnalysisSummary> {
+  const db = getDatabase(dbInput);
+  const nights = await getDeathAnalysisNights(db);
+  const included = nights.filter((night) => night.canonical && night.canonical.bossPulls > 0);
+  const canonicalCodes = included.map((night) => night.canonical!.code);
+
+  const rankings: DeathAnalysisEntry[] = [];
+  if (canonicalCodes.length > 0) {
+    const placeholders = canonicalCodes.map(() => '?').join(', ');
+    const result = await db
+      .prepare(
+        `${CHARACTER_IDENTITY_CTE}
          SELECT
            s.blizzard_char_id,
            COALESCE(ic.name, 'Unknown') AS name,

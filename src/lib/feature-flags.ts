@@ -6,6 +6,8 @@ export const FEATURE_FLAGS = {
   raidSignups: false,
   attendance: false,
   deathAnalysis: true,
+  // Reads Death Analysis's canonical reports, so it also needs deathAnalysis on.
+  mechanicsAnalysis: true,
   applications: false,
   feedback: false,
   tools: true,

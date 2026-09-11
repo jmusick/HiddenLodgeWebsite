@@ -259,6 +259,16 @@ export async function loadWclCharacterLookup(db: D1Database): Promise<WclCharact
   };
 }
 
+/** Matches a WCL player actor (name + server) to a roster/character blizzard_char_id. */
+export function matchWclActorCharId(
+  actor: { name?: string | null; server?: string | null },
+  ownership: WclCharacterLookup
+): number | null {
+  const name = normalizeName(actor.name);
+  if (!name) return null;
+  return ownership.charLookup.get(`${name}::${normalizeRealmSlug(actor.server)}`) ?? ownership.nameOnlyLookup.get(name) ?? null;
+}
+
 export function getWclAuthConfig(): WclAuthConfig | null {
   const clientId = (env.WCL_CLIENT_ID ?? '').trim();
   const clientSecret = (env.WCL_CLIENT_SECRET ?? '').trim();

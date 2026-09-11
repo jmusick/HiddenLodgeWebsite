@@ -2,12 +2,19 @@ import type { APIRoute } from 'astro';
 import { env } from 'cloudflare:workers';
 import { refreshRaidLogActivity } from '../../../lib/raid-log-activity';
 import { refreshDeathAnalysis } from '../../../lib/death-analysis';
+import { refreshMechanicsAnalysis } from '../../../lib/mechanics-analysis';
 import { FEATURE_FLAGS } from '../../../lib/feature-flags';
 
 export const prerender = false;
 
 /**
- * Warcraft Logs refresh: raid-log activity + death analysis.
+ * Mechanics analysis only starts if death analysis finished within this long,
+ * so its own 6s budget plus one in-flight report still fits under the 30s cron cap.
+ */
+const MECHANICS_START_CUTOFF_MS = 16_000;
+
+/**
+ * Warcraft Logs refresh: raid-log activity + death analysis (then mechanics analysis).
  *
  * Both legs depend on WCL, whose latency is the least predictable of any
  * upstream, and death analysis pages through whole reports after a raid night.
@@ -30,7 +37,11 @@ export const GET: APIRoute = async ({ request }) => {
   const deathReportBatchSize = url.searchParams.get('deathReportBatchSize')
     ? Number.parseInt(url.searchParams.get('deathReportBatchSize')!, 10)
     : undefined;
+  const mechanicsReportBatchSize = url.searchParams.get('mechanicsReportBatchSize')
+    ? Number.parseInt(url.searchParams.get('mechanicsReportBatchSize')!, 10)
+    : undefined;
   const runDeathAnalysis = FEATURE_FLAGS.deathAnalysis;
+  const runMechanicsAnalysis = FEATURE_FLAGS.deathAnalysis && FEATURE_FLAGS.mechanicsAnalysis;
 
   const timings: Record<string, number> = {};
   const timed = <T>(label: string, work: Promise<T>): Promise<T> => {
@@ -41,12 +52,29 @@ export const GET: APIRoute = async ({ request }) => {
   };
 
   const startedAt = Date.now();
-  const [logActivityResult, deathAnalysisResult] = await Promise.allSettled([
-    timed('logActivity', refreshRaidLogActivity(undefined, { maxReports: logReportBatchSize })),
-    runDeathAnalysis
-      ? timed('deathAnalysis', refreshDeathAnalysis(undefined, { maxReports: deathReportBatchSize }))
-      : Promise.resolve(null),
-  ]);
+  // Mechanics runs after death analysis in the same leg: it reads the reports
+  // death analysis just synced, and chaining keeps WCL load to one stream here.
+  const deathThenMechanics = async () => {
+    const [death] = await Promise.allSettled([
+      runDeathAnalysis
+        ? timed('deathAnalysis', refreshDeathAnalysis(undefined, { maxReports: deathReportBatchSize }))
+        : Promise.resolve(null),
+    ]);
+    const mechanicsSkipped = !runMechanicsAnalysis || Date.now() - startedAt > MECHANICS_START_CUTOFF_MS;
+    const [mechanics] = await Promise.allSettled([
+      mechanicsSkipped
+        ? Promise.resolve(null)
+        : timed('mechanicsAnalysis', refreshMechanicsAnalysis(undefined, { maxReports: mechanicsReportBatchSize })),
+    ]);
+    return { death, mechanics, mechanicsSkipped };
+  };
+  const [logActivityResult, { death: deathAnalysisResult, mechanics: mechanicsAnalysisResult, mechanicsSkipped }] =
+    await Promise.all([
+      Promise.allSettled([
+        timed('logActivity', refreshRaidLogActivity(undefined, { maxReports: logReportBatchSize })),
+      ]).then(([result]) => result),
+      deathThenMechanics(),
+    ]);
   timings.total = Date.now() - startedAt;
   console.log('Cron logs refresh timings (ms)', timings);
 
@@ -59,6 +87,10 @@ export const GET: APIRoute = async ({ request }) => {
     console.error('Cron death analysis refresh failed', deathAnalysisResult.reason);
     failures.push('deathAnalysis');
   }
+  if (mechanicsAnalysisResult.status === 'rejected') {
+    console.error('Cron mechanics analysis refresh failed', mechanicsAnalysisResult.reason);
+    failures.push('mechanicsAnalysis');
+  }
 
   return Response.json({
     success: failures.length === 0,
@@ -66,9 +98,11 @@ export const GET: APIRoute = async ({ request }) => {
     failed: failures,
     logActivity: logActivityResult.status === 'fulfilled' ? logActivityResult.value : null,
     deathAnalysis: deathAnalysisResult.status === 'fulfilled' ? deathAnalysisResult.value : null,
+    mechanicsAnalysis: mechanicsAnalysisResult.status === 'fulfilled' ? mechanicsAnalysisResult.value : null,
     timingsMs: timings,
-    skipped: { deathAnalysis: !runDeathAnalysis },
+    skipped: { deathAnalysis: !runDeathAnalysis, mechanicsAnalysis: mechanicsSkipped },
     requestedLogReportBatchSize: logReportBatchSize,
     requestedDeathReportBatchSize: deathReportBatchSize,
+    requestedMechanicsReportBatchSize: mechanicsReportBatchSize,
   });
 };

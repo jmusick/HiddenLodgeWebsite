@@ -1,0 +1,645 @@
+---
+export const prerender = false;
+
+import Layout from '../layouts/Layout.astro';
+import { Icon } from 'astro-icon/components';
+import { DEATH_ANALYSIS_RAID_NAME, DEATH_ANALYSIS_WINDOW_DAYS, raidWindowForNight } from '../lib/death-analysis';
+import {
+  MECHANICS_BOSSES,
+  MECHANIC_ROLES,
+  findBoss,
+  getMechanicLeaderboard,
+  parseMechanicRange,
+  parseMechanicRole,
+  type MechanicRange,
+  type MechanicRole,
+} from '../lib/mechanics-analysis';
+import { classColor } from '../lib/wow';
+import { FEATURE_FLAGS } from '../lib/feature-flags';
+
+if (!FEATURE_FLAGS.tools || !FEATURE_FLAGS.deathAnalysis || !FEATURE_FLAGS.mechanicsAnalysis) {
+  return Astro.redirect('/');
+}
+
+if (!Astro.locals.isGuildMember) {
+  return Astro.redirect('/auth/login');
+}
+
+const boss = findBoss(Astro.url.searchParams.get('boss'));
+const range = parseMechanicRange(Astro.url.searchParams.get('range'));
+const role = parseMechanicRole(Astro.url.searchParams.get('role'));
+const boards = await Promise.all(boss.mechanics.map((mechanic) => getMechanicLeaderboard(boss, mechanic, range, role)));
+
+const nightFormatter = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', weekday: 'short', month: 'short', day: 'numeric' });
+function nightLabel(nightKey: string): string {
+  const window = raidWindowForNight(nightKey);
+  return window ? nightFormatter.format(new Date(window.startUtc * 1000)) : nightKey;
+}
+function hrefFor(next: { boss?: string; range?: MechanicRange; role?: MechanicRole | null }): string {
+  const params = new URLSearchParams({ boss: next.boss ?? boss.slug });
+  const nextRange = next.range ?? range;
+  const nextRole = next.role === undefined ? role : next.role;
+  if (nextRange !== 'all') params.set('range', nextRange);
+  if (nextRole) params.set('role', nextRole);
+  return `/mechanics-analysis?${params}`;
+}
+const roleLabels: Record<MechanicRole, string> = { tank: 'Tank', healer: 'Healer', melee: 'Melee', ranged: 'Ranged' };
+const roleOptions: Array<{ value: MechanicRole | null; label: string }> = [
+  { value: null, label: 'All roles' },
+  ...MECHANIC_ROLES.map((value) => ({ value, label: roleLabels[value] })),
+];
+const lastSyncedAt = Math.max(0, ...boards.map((board) => board.lastSyncedAt ?? 0));
+const lastSyncedLabel = lastSyncedAt
+  ? new Date(lastSyncedAt * 1000).toLocaleString('en-US', { timeZone: 'America/New_York' }) + ' ET'
+  : 'Not synced yet';
+const rangeOptions: Array<{ value: MechanicRange; label: string }> = [
+  { value: 'latest', label: 'Latest log' },
+  { value: 'all', label: 'All logs' },
+];
+const medals = ['gold', 'silver', 'bronze'];
+---
+
+<Layout title="Mechanics Analysis | The Hidden Lodge">
+  <div class="mechanics-page">
+    <div class="page-header">
+      <div>
+        <h1>Mechanics Analysis</h1>
+        <div class="scope-badges" aria-label="Current review scope">
+          <span class="scope-badge">Season: Midnight S2</span>
+          <span class="scope-badge">Raid: {DEATH_ANALYSIS_RAID_NAME} (Heroic/Mythic)</span>
+          <span class="scope-badge">Thu/Fri raid nights</span>
+          <span class="scope-badge">Last {DEATH_ANALYSIS_WINDOW_DAYS} days</span>
+        </div>
+        <p class="page-desc">
+          Who is handling the boss mechanics, per boss. Uses the same one-report-per-raid-night logs as Death Analysis, counting every Heroic and Mythic pull.
+        </p>
+      </div>
+    </div>
+
+    <div class="filters">
+      <nav class="boss-tabs" aria-label="Boss">
+        {MECHANICS_BOSSES.map((option) => (
+          <a
+            href={hrefFor({ boss: option.slug })}
+            class:list={['boss-tab', { active: option.slug === boss.slug }]}
+            aria-current={option.slug === boss.slug ? 'page' : undefined}
+          >
+            {option.name}
+          </a>
+        ))}
+      </nav>
+      <div class="toggles">
+        <div class="range-toggle" role="group" aria-label="Role">
+          {roleOptions.map((option) => (
+            <a
+              href={hrefFor({ role: option.value })}
+              class:list={['range-option', { active: option.value === role }]}
+              aria-current={option.value === role ? 'true' : undefined}
+            >
+              {option.label}
+            </a>
+          ))}
+        </div>
+        <div class="range-toggle" role="group" aria-label="Log range">
+          {rangeOptions.map((option) => (
+            <a
+              href={hrefFor({ range: option.value })}
+              class:list={['range-option', { active: option.value === range }]}
+              aria-current={option.value === range ? 'true' : undefined}
+            >
+              {option.label}
+            </a>
+          ))}
+        </div>
+      </div>
+    </div>
+
+    {boards.map((board) => {
+      const carriers = board.entries.filter((entry) => entry.hitCount > 0);
+      const nonCarriers = board.entries.filter((entry) => entry.hitCount === 0);
+      const maxCount = carriers[0]?.hitCount ?? 0;
+      const podium = carriers.slice(0, 3);
+      const latest = board.range === 'latest' ? board.reports[0] : undefined;
+      return (
+        <section class="content-section">
+          <div class="section-heading-row">
+            <div>
+              <h2><Icon name="lucide:orbit" aria-hidden="true" />{board.mechanic.label}</h2>
+              <p class="section-copy">
+                <a
+                  href={`https://www.wowhead.com/spell=${board.mechanic.abilityId}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  class="spell-link"
+                >{board.mechanic.abilityName}</a> — {board.mechanic.description}
+              </p>
+            </div>
+          </div>
+
+          <div class="stat-row">
+            <div class="stat">
+              <span class="stat-label">{board.range === 'latest' ? 'Log' : 'Nights'}</span>
+              {latest ? (
+                <strong>
+                  <a href={`https://www.warcraftlogs.com/reports/${latest.code}`} target="_blank" rel="noopener noreferrer" class="report-link">
+                    {nightLabel(latest.nightKey)}
+                  </a>
+                </strong>
+              ) : (
+                <strong>{board.nightsCounted.toLocaleString()}</strong>
+              )}
+            </div>
+            <div class="stat">
+              <span class="stat-label">Pulls</span>
+              <strong>{board.pullsCounted.toLocaleString()}</strong>
+            </div>
+            <div class="stat">
+              <span class="stat-label">{board.mechanic.unitPlural} carried (raid)</span>
+              <strong>{board.totalCount.toLocaleString()}</strong>
+            </div>
+            <div class="stat">
+              <span class="stat-label">{board.role ? `${roleLabels[board.role]} carriers` : 'Carriers'}</span>
+              <strong>{carriers.length.toLocaleString()}</strong>
+            </div>
+          </div>
+
+          {carriers.length === 0 ? (
+            <p class="empty-state">
+              {board.role && board.totalCount > 0
+                ? `No ${roleLabels[board.role].toLowerCase()} players carried ${board.mechanic.unitPlural} in this range.`
+                : board.nightsPending > 0
+                ? `No ${boss.name} data synced yet — ${board.nightsPending} raid night${board.nightsPending === 1 ? ' is' : 's are'} still waiting on the next sync.`
+                : `No ${boss.name} pulls on a counted raid night yet.`}
+            </p>
+          ) : (
+            <>
+              <ol class="podium" aria-label="Top carriers">
+                {podium.map((entry, index) => (
+                  <li class:list={['podium-card', medals[index]]} style={`--class-color: ${classColor(entry.className)}`}>
+                    <span class="podium-rank">#{index + 1}</span>
+                    <strong class="podium-name">{entry.name}</strong>
+                    <span class="podium-count">{entry.hitCount.toLocaleString()}</span>
+                    <span class="podium-unit">{board.mechanic.unitPlural}</span>
+                    <span class="podium-meta">{entry.perPull.toFixed(1)} per pull · {(entry.share * 100).toFixed(0)}% of all</span>
+                  </li>
+                ))}
+              </ol>
+
+              <ol class="leaderboard" aria-label={`${board.mechanic.label} leaderboard`}>
+                {carriers.map((entry, index) => (
+                  <li class="leader-row" style={`--class-color: ${classColor(entry.className)}`}>
+                    <span class="leader-rank">{index + 1}</span>
+                    <div class="leader-name">
+                      <strong>{entry.name}</strong>
+                      <span>{entry.role ? `${roleLabels[entry.role]} · ` : ''}{entry.realm}</span>
+                    </div>
+                    <div class="leader-bar-track" aria-hidden="true">
+                      <div class="leader-bar" style={`width: ${Math.max(2, (entry.hitCount / maxCount) * 100).toFixed(1)}%`}></div>
+                    </div>
+                    <span class="leader-count" title={`${entry.hitCount} ${board.mechanic.unitPlural}`}>{entry.hitCount.toLocaleString()}</span>
+                    <span class="leader-meta">
+                      <span title={`${board.mechanic.unitPlural} per pull present`}>{entry.perPull.toFixed(1)}/pull</span>
+                      <span title="Pulls with at least one carry / pulls present">{entry.pullsHit}/{entry.pullsPresent} pulls</span>
+                      <span title="Most in a single pull">best {entry.bestPullCount}</span>
+                    </span>
+                  </li>
+                ))}
+              </ol>
+
+              {nonCarriers.length > 0 && (
+                <div class="non-carriers">
+                  <span class="stat-label">Present, no {board.mechanic.unitPlural}</span>
+                  <ul>
+                    {nonCarriers.map((entry) => (
+                      <li style={`color: ${classColor(entry.className)}`} title={`${entry.pullsPresent} pulls present`}>{entry.name}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </>
+          )}
+
+          {board.range === 'all' && board.reports.length > 0 && (
+            <details class="reports-list">
+              <summary>Logs counted ({board.reports.length})</summary>
+              <ul>
+                {board.reports.map((report) => (
+                  <li>
+                    <a href={`https://www.warcraftlogs.com/reports/${report.code}`} target="_blank" rel="noopener noreferrer" class="report-link">
+                      {nightLabel(report.nightKey)}
+                    </a>
+                    <span>{report.pulls} pull{report.pulls === 1 ? '' : 's'}</span>
+                  </li>
+                ))}
+              </ul>
+            </details>
+          )}
+        </section>
+      );
+    })}
+
+    <p class="sync-note">Last sync: {lastSyncedLabel}. New logs are picked up automatically after Death Analysis syncs them.</p>
+  </div>
+</Layout>
+
+<style>
+  .mechanics-page {
+    display: flex;
+    flex-direction: column;
+    gap: 1.5rem;
+  }
+
+  .page-desc {
+    max-width: 60rem;
+    color: var(--muted);
+    line-height: 1.6;
+    margin: 0.45rem 0 0;
+  }
+
+  .scope-badges {
+    display: flex;
+    align-items: center;
+    gap: 0.45rem;
+    flex-wrap: wrap;
+    margin-top: 0.45rem;
+  }
+
+  .scope-badge {
+    display: inline-flex;
+    align-items: center;
+    padding: 0.23rem 0.52rem;
+    border-radius: 999px;
+    border: 1px solid rgba(214, 176, 106, 0.4);
+    background: rgba(214, 176, 106, 0.12);
+    color: var(--gold-bright);
+    font-size: 0.76rem;
+    font-weight: 700;
+    letter-spacing: 0.03em;
+  }
+
+  .filters {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 0.75rem;
+    flex-wrap: wrap;
+  }
+
+  .boss-tabs {
+    display: flex;
+    gap: 0.4rem;
+    flex-wrap: wrap;
+  }
+
+  .boss-tab,
+  .range-option {
+    display: inline-flex;
+    align-items: center;
+    padding: 0.45rem 0.85rem;
+    border: 1px solid rgba(214, 176, 106, 0.3);
+    color: var(--muted);
+    font-weight: 700;
+    font-size: 0.88rem;
+    text-decoration: none;
+    transition: background 160ms ease, color 160ms ease, border-color 160ms ease;
+  }
+
+  .boss-tab {
+    border-radius: 0.55rem;
+  }
+
+  .boss-tab:hover,
+  .range-option:hover {
+    color: var(--gold-bright);
+    text-decoration: none;
+  }
+
+  .boss-tab.active,
+  .range-option.active {
+    color: #ffe7b1;
+    border-color: rgba(244, 194, 92, 0.7);
+    background: linear-gradient(180deg, rgba(244, 194, 92, 0.24), rgba(214, 176, 106, 0.2));
+  }
+
+  .toggles {
+    display: flex;
+    gap: 0.6rem;
+    flex-wrap: wrap;
+  }
+
+  .range-toggle {
+    display: inline-flex;
+    flex-wrap: wrap;
+  }
+
+  .range-option + .range-option {
+    margin-left: -1px;
+  }
+
+  .range-option:first-child {
+    border-radius: 999px 0 0 999px;
+  }
+
+  .range-option:last-child {
+    border-radius: 0 999px 999px 0;
+  }
+
+  .content-section {
+    border: 1px solid rgba(214, 176, 106, 0.2);
+    border-radius: 0.9rem;
+    background: linear-gradient(180deg, rgba(19, 28, 40, 0.92), rgba(10, 17, 26, 0.96));
+    box-shadow: 0 18px 40px rgba(0, 0, 0, 0.18);
+    padding: 1.15rem 1.2rem;
+    display: flex;
+    flex-direction: column;
+    gap: 1.1rem;
+  }
+
+  .section-heading-row h2 {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin: 0 0 0.35rem;
+  }
+
+  .section-copy {
+    margin: 0;
+    color: var(--muted);
+    line-height: 1.55;
+  }
+
+  .spell-link,
+  .report-link {
+    color: var(--gold-bright);
+    font-weight: 700;
+  }
+
+  .stat-row {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(8rem, 1fr));
+    gap: 0.75rem;
+  }
+
+  .stat {
+    border: 1px solid rgba(214, 176, 106, 0.14);
+    border-radius: 0.7rem;
+    padding: 0.65rem 0.8rem;
+    background: rgba(255, 255, 255, 0.02);
+  }
+
+  .stat strong {
+    display: block;
+    color: var(--gold-bright);
+    font-size: 1.25rem;
+    margin-top: 0.15rem;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .stat-label {
+    display: inline-block;
+    color: var(--gold);
+    font-size: 0.72rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    font-weight: 700;
+  }
+
+  /* Podium: #1 in the middle and tallest on wide screens. */
+  .podium {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    align-items: end;
+    gap: 0.8rem;
+  }
+
+  .podium-card {
+    --medal: #c9a45a;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+    gap: 0.1rem;
+    padding: 1rem 0.75rem 0.9rem;
+    border-radius: 0.8rem;
+    border: 1px solid color-mix(in srgb, var(--medal) 55%, transparent);
+    border-top: 4px solid var(--medal);
+    background: linear-gradient(180deg, color-mix(in srgb, var(--medal) 16%, transparent), rgba(10, 17, 26, 0.6));
+    min-width: 0;
+  }
+
+  .podium-card.gold {
+    --medal: #f4c25c;
+    order: 2;
+    padding-block: 1.5rem 1.2rem;
+  }
+
+  .podium-card.silver {
+    --medal: #c7ced8;
+    order: 1;
+  }
+
+  .podium-card.bronze {
+    --medal: #cd8a52;
+    order: 3;
+  }
+
+  .podium-rank {
+    color: var(--medal);
+    font-weight: 800;
+    font-size: 0.85rem;
+    letter-spacing: 0.06em;
+  }
+
+  .podium-name {
+    color: var(--class-color);
+    font-size: 1.05rem;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .podium-count {
+    color: var(--text);
+    font-size: 2.1rem;
+    font-weight: 800;
+    line-height: 1.1;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .podium-card.gold .podium-count {
+    font-size: 2.6rem;
+  }
+
+  .podium-unit {
+    color: var(--muted);
+    font-size: 0.78rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+  }
+
+  .podium-meta {
+    color: var(--muted);
+    font-size: 0.8rem;
+    margin-top: 0.35rem;
+  }
+
+  .leaderboard {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.15rem;
+  }
+
+  .leader-row {
+    display: grid;
+    grid-template-columns: 2rem minmax(7rem, 11rem) 1fr 3.5rem 14rem;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 0.45rem 0.4rem;
+    border-radius: 0.5rem;
+  }
+
+  .leader-row:hover {
+    background: rgba(255, 255, 255, 0.03);
+  }
+
+  .leader-rank {
+    color: var(--muted);
+    font-weight: 700;
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .leader-name {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+  }
+
+  .leader-name strong {
+    color: var(--class-color);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .leader-name span {
+    color: var(--muted);
+    font-size: 0.78rem;
+  }
+
+  .leader-bar-track {
+    height: 0.75rem;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.05);
+    overflow: hidden;
+  }
+
+  .leader-bar {
+    height: 100%;
+    border-radius: 999px;
+    background: linear-gradient(90deg, color-mix(in srgb, var(--class-color) 55%, transparent), var(--class-color));
+  }
+
+  .leader-count {
+    color: var(--gold-bright);
+    font-weight: 800;
+    font-size: 1.05rem;
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .leader-meta {
+    display: flex;
+    gap: 0.8rem;
+    color: var(--muted);
+    font-size: 0.8rem;
+    white-space: nowrap;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .non-carriers ul {
+    list-style: none;
+    margin: 0.4rem 0 0;
+    padding: 0;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.35rem 0.8rem;
+    font-size: 0.88rem;
+  }
+
+  .reports-list summary {
+    cursor: pointer;
+    color: var(--gold);
+    font-weight: 700;
+    font-size: 0.88rem;
+  }
+
+  .reports-list ul {
+    list-style: none;
+    margin: 0.5rem 0 0;
+    padding: 0;
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(11rem, 1fr));
+    gap: 0.35rem 1rem;
+  }
+
+  .reports-list li {
+    display: flex;
+    justify-content: space-between;
+    gap: 0.5rem;
+    font-size: 0.88rem;
+  }
+
+  .reports-list li span {
+    color: var(--muted);
+  }
+
+  .empty-state,
+  .sync-note {
+    margin: 0;
+    color: var(--muted);
+  }
+
+  .sync-note {
+    font-size: 0.85rem;
+  }
+
+  @media (max-width: 720px) {
+    .content-section {
+      padding: 1rem;
+    }
+
+    .podium {
+      grid-template-columns: 1fr;
+    }
+
+    .podium-card.gold,
+    .podium-card.silver,
+    .podium-card.bronze {
+      order: 0;
+    }
+
+    .leader-row {
+      grid-template-columns: 1.6rem minmax(0, 1fr) 3rem;
+      row-gap: 0.3rem;
+    }
+
+    .leader-bar-track {
+      grid-column: 2 / 4;
+      grid-row: 2;
+    }
+
+    .leader-meta {
+      grid-column: 2 / 4;
+      grid-row: 3;
+      flex-wrap: wrap;
+    }
+  }
+</style>
