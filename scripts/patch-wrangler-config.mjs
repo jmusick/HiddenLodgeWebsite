@@ -17,19 +17,11 @@ if (existsSync(generatedWorkerConfigPath)) {
 
 mkdirSync(workerEntryDir, { recursive: true });
 
+// No scheduled() export: this deploys as a Cloudflare Pages project, which has no
+// cron triggers, so one would never fire. The /api/cron/* endpoints are driven
+// by an external scheduler (cron-job.org) instead.
 const indexContent = `\
 import astroHandler from './entry.mjs';
 export default astroHandler;
-
-export const scheduled = async (event, env, ctx) => {
-  const fetchFn = typeof astroHandler === 'function'
-    ? astroHandler
-    : astroHandler.fetch.bind(astroHandler);
-  const req = new Request('https://placeholder/api/cron/refresh', {
-    method: 'GET',
-    headers: { 'X-Cron-Secret': env.CRON_SECRET ?? '' },
-  });
-  await fetchFn(req, env, ctx);
-};
 `;
 writeFileSync(workerIndexPath, indexContent, 'utf8');

@@ -50,13 +50,16 @@ export const GET: APIRoute = async ({ request }) => {
   // Opt out of the slowest leg when it is scheduled separately against
   // /api/cron/refresh-raiders, so it is not run twice.
   const skipRaiders = url.searchParams.get('skipRaiders') === '1';
+  // Same for the Warcraft Logs legs (raid-log activity + death analysis) when
+  // they are scheduled separately against /api/cron/refresh-logs.
+  const skipLogs = url.searchParams.get('skipLogs') === '1';
 
   // Don't spend the cron budget refreshing caches for features that are on
   // hiatus. Flipping the flag back in feature-flags.ts restores these with no
   // other change, same as everywhere else these flags are honoured.
   const runAttendance = FEATURE_FLAGS.attendance;
   const runTools = FEATURE_FLAGS.tools;
-  const runDeathAnalysis = FEATURE_FLAGS.deathAnalysis;
+  const runDeathAnalysis = FEATURE_FLAGS.deathAnalysis && !skipLogs;
 
   const startedAt = Date.now();
   const [
@@ -77,7 +80,9 @@ export const GET: APIRoute = async ({ request }) => {
     // Not gated on FEATURE_FLAGS.attendance: this is the small "seen in a guild
     // log lately" sync that the raiders/gear pages filter on, not the full
     // scheduled-raid attendance pipeline.
-    timed('logActivity', refreshRaidLogActivity(undefined, { maxReports: logReportBatchSize })),
+    skipLogs
+      ? Promise.resolve(null)
+      : timed('logActivity', refreshRaidLogActivity(undefined, { maxReports: logReportBatchSize })),
     // Newly equipped items land in raider_gear_cache on the 12h details
     // refresh; without this leg their icons were only ever resolved by the
     // manual /api/cron/backfill-gear endpoint, so fresh drops rendered the
@@ -155,6 +160,7 @@ export const GET: APIRoute = async ({ request }) => {
     timingsMs: timings,
     skipped: {
       raiders: skipRaiders,
+      logActivity: skipLogs,
       attendance: !runAttendance,
       professions: !runTools,
       trinkets: !runTools,

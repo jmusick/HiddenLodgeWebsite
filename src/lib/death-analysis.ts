@@ -33,6 +33,14 @@ const WCL_GUILD_ID = 781707;
 const REPORT_PAGE_SIZE = 50;
 const REPORT_MAX_PAGES = 20;
 const DEFAULT_MAX_REPORTS_PER_RUN = 3;
+/**
+ * No new report sync starts after this much of the run has elapsed; the rest
+ * stay pending for the next tick. Checked between reports (a single report's
+ * event paging can't be interrupted cleanly), so it leaves headroom under the
+ * 30s cron timeout for the report already in flight. WCL requests are capped
+ * individually in wcl.ts.
+ */
+const REFRESH_TIME_BUDGET_MS = 12_000;
 
 const zoneEncounterIdsCache = new Map<number, Set<number>>();
 
@@ -377,6 +385,8 @@ export interface DeathAnalysisRefreshResult {
   failed: number;
   remaining: number;
   rateLimited: boolean;
+  /** True when the run stopped early on REFRESH_TIME_BUDGET_MS; the rest carry over. */
+  budgetExhausted: boolean;
 }
 
 export async function refreshDeathAnalysis(
@@ -384,6 +394,7 @@ export async function refreshDeathAnalysis(
   options?: { maxReports?: number }
 ): Promise<DeathAnalysisRefreshResult> {
   const db = getDatabase(dbInput);
+  const deadline = Date.now() + REFRESH_TIME_BUDGET_MS;
   const accessToken = await requireAccessToken(db);
   const maxReports = Math.max(1, Math.floor(options?.maxReports ?? DEFAULT_MAX_REPORTS_PER_RUN));
   const cutoffUtc = deathAnalysisCutoffUtc();
@@ -407,11 +418,16 @@ export async function refreshDeathAnalysis(
     failed: 0,
     remaining: 0,
     rateLimited: false,
+    budgetExhausted: false,
   };
   if (pending.length === 0) return result;
 
   const ownership = await loadWclCharacterLookup(db);
   for (const report of pending.slice(0, maxReports)) {
+    if (Date.now() >= deadline) {
+      result.budgetExhausted = true;
+      break;
+    }
     try {
       await syncReport(db, accessToken, ownership, report);
       result.processed += 1;

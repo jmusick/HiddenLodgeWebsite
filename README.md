@@ -75,7 +75,7 @@ Season 2 excessive-death tracking, sourced straight from the guild's Warcraft Lo
 - **Scope**: reports whose zone is **The Venomous Abyss** and that overlap a **Thursday/Friday 9pm–midnight Eastern** window by at least 30 minutes (DST-aware). Only **Heroic and Mythic** boss pulls count. Rolling **last 90 days**; older rows are pruned on each sync.
 - **One report per night**: when several people log the same night, the report with the most qualifying pulls counts (tie → earliest start), unless an officer overrides it on `/admin/log-matching`.
 - **Scoring** (same formula as Season 1): weighted score = (4 × first deaths + 3 × second + 2 × third + 1 × fourth) / pulls attended; only the first 4 deaths per pull count; only raiders with 20+ pulls across 4+ reports (`DEATH_ANALYSIS_MIN_PULLS` / `DEATH_ANALYSIS_MIN_REPORTS`; Season 1 was 5 pulls, no report minimum) are ranked and averaged — everyone else is hidden from the table; more than 25% above the qualified average is highlighted.
-- **Sync**: the `deathAnalysis` leg of `/api/cron/refresh` processes up to 3 new reports per run (`?deathReportBatchSize=` to change); remaining reports carry over to the next run. Admins can also trigger it from Log Matching.
+- **Sync**: the `deathAnalysis` leg of `/api/cron/refresh-logs` (or `/api/cron/refresh` without `skipLogs=1`) processes up to 3 new reports per run (`?deathReportBatchSize=` to change); remaining reports carry over to the next run. Admins can also trigger it from Log Matching.
 - **Tables**: `death_analysis_reports`, `death_analysis_stats`, `death_analysis_night_overrides` (`migrations/0074_death_analysis.sql`).
 
 ## Quick Start
@@ -281,8 +281,9 @@ curl -sS \
 
 | Endpoint | Method | Description |
 |---|---|---|
-| `/api/cron/refresh` | GET | Refreshes roster, raiders, raid-log activity, death analysis, professions, and warms trinket cache in small class batches; requires `X-Cron-Secret` (formerly `/api/cron/refresh-roster`, which still works as an alias). Accepts `?skipRaiders=1` to pair with `/api/cron/refresh-raiders` below |
+| `/api/cron/refresh` | GET | Refreshes roster, raiders, raid-log activity, death analysis, professions, gear icons, and warms trinket cache in small class batches; requires `X-Cron-Secret`. Accepts `?skipRaiders=1` and `?skipLogs=1` to pair with the two split-out endpoints below |
 | `/api/cron/refresh-raiders` | GET | Raiders-only refresh split out of `/api/cron/refresh` so it gets the full request timeout; requires `X-Cron-Secret` |
+| `/api/cron/refresh-logs` | GET | Warcraft Logs refresh (raid-log activity + death analysis) split out of `/api/cron/refresh`, since WCL latency is the least predictable; requires `X-Cron-Secret`; accepts `logReportBatchSize` / `deathReportBatchSize` |
 | `/api/cron/refresh-attendance` | GET | **Disabled** — old signup-based attendance sync; requires `X-Cron-Secret` |
 | `/api/cron/backfill-gear` | GET | One-shot gear backfill for raiders missing cached gear, safe to call repeatedly; requires `X-Cron-Secret`; `?limit=` (default 25, max 100) |
 
@@ -293,6 +294,10 @@ curl -sS \
 - `professionBatchSize`: override professions sync batch size for this run.
 - `trinketBatchSize`: number of classes to pre-warm in trinkets cache for this run (defaults to `1`, rotates classes between runs).
 - `deathReportBatchSize`: max new Warcraft Logs reports the death-analysis sync processes this run (defaults to `3`).
+- `logReportBatchSize`: max new Warcraft Logs reports the raid-log activity sync processes this run (defaults to `6`).
+- `skipRaiders=1` / `skipLogs=1`: skip the legs handled by `/api/cron/refresh-raiders` / `/api/cron/refresh-logs`.
+
+Production schedule (cron-job.org, 30s request timeout): `/api/cron/refresh?skipRaiders=1&skipLogs=1` and `/api/cron/refresh-raiders` every 15 minutes, `/api/cron/refresh-logs` on its own job. Every leg stops starting new work partway through its run and carries the rest over, and every Blizzard / Raider.IO / Warcraft Logs request is capped at 8s, so each job stays under the timeout.
 
 You can also set `TRINKET_CACHE_WARM_BATCH_SIZE`, `ROSTER_DETAIL_BATCH_SIZE`, or `ROSTER_BACKFILL_BATCH_SIZE` in runtime env as defaults for the query params above.
 
@@ -561,7 +566,7 @@ When a tag matching `v*` is pushed:
 ## Notes
 
 - `/admin/*` routes are protected by middleware and require an officer-level guild rank or higher.
-- `/api/cron/refresh` should be called by an external scheduler such as Cloudflare Cron Triggers (or a third-party pinger); there is no `[triggers] crons` entry in `wrangler.toml`. The build also bakes a `scheduled()` handler into the Worker (`scripts/patch-wrangler-config.mjs`) that calls this endpoint internally.
+- The `/api/cron/*` endpoints are called by an external scheduler (cron-job.org). The site deploys as a Cloudflare Pages project, which has no cron triggers, so there is no `[triggers] crons` entry in `wrangler.toml` and no `scheduled()` handler.
 - External guild links (Raider.IO, Warcraft Logs, WoWProgress, YouTube) are defined in `src/data/externalLinks.ts` and render as favicon icon links in the main nav.
 - `/links` is sourced live from the Tagstash public API (bookmarks tagged `wow` under profile `JD`, `src/lib/bookmarks.ts`), cached 10 minutes at the edge. There is no admin CRUD or D1 table for it in this repo — links are curated in Tagstash itself.
 - `/articles` and the homepage's "Latest Articles" feed are sourced live from a public Orboro.net API (`src/lib/orboro-posts.ts`, posts tagged World of Warcraft), cached 10 minutes at the edge, with a small credit link back to orboro.net on both pages. `/articles/:slug` 301-redirects to the matching post on orboro.net rather than rendering content locally.

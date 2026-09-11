@@ -61,6 +61,12 @@ const WCL_MAX_BACKOFF_SECONDS = 2 * 60 * 60;
 
 const WCL_OAUTH_URL = 'https://www.warcraftlogs.com/oauth/token';
 const WCL_GRAPHQL_URL = 'https://www.warcraftlogs.com/api/v2/client';
+/**
+ * Per-request cap, matching blizzard-fetch.ts / raider-io.ts. These calls run
+ * inside cron requests with a 30s external timeout, so a hung WCL response must
+ * fail fast rather than stall the whole tick.
+ */
+const WCL_REQUEST_TIMEOUT_MS = 8_000;
 
 let wclTokenCache: { accessToken: string; expiresAt: number } | null = null;
 
@@ -273,6 +279,7 @@ export async function getWclAccessToken(config: WclAuthConfig): Promise<string |
       'Content-Type': 'application/x-www-form-urlencoded',
     },
     body: 'grant_type=client_credentials',
+    signal: AbortSignal.timeout(WCL_REQUEST_TIMEOUT_MS),
   });
 
   if (!response.ok) return null;
@@ -297,6 +304,7 @@ export async function queryWcl<T>(accessToken: string, query: string, variables:
       Authorization: `Bearer ${accessToken}`,
     },
     body: JSON.stringify({ query, variables }),
+    signal: AbortSignal.timeout(WCL_REQUEST_TIMEOUT_MS),
   });
 
   if (!response.ok) {

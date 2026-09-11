@@ -24,6 +24,14 @@ const REPORT_PAGE_SIZE = 50;
 const REPORT_MAX_PAGES = 4;
 /** Per-run ceiling on new-report participant fetches, to bound cron time. */
 const DEFAULT_MAX_REPORTS_PER_RUN = 6;
+/** Per-request cap, matching wcl.ts; a hung WCL response must not stall the cron. */
+const WCL_REQUEST_TIMEOUT_MS = 8_000;
+/**
+ * No new report fetch starts after this much of the run has elapsed; unfetched
+ * reports stay unseen and are picked up next tick. With the per-request cap this
+ * keeps the whole sync comfortably inside the 30s cron timeout.
+ */
+const REFRESH_TIME_BUDGET_MS = 15_000;
 
 let wclTokenCache: { accessToken: string; expiresAt: number } | null = null;
 
@@ -71,6 +79,7 @@ async function getWclAccessToken(): Promise<string | null> {
       'Content-Type': 'application/x-www-form-urlencoded',
     },
     body: 'grant_type=client_credentials',
+    signal: AbortSignal.timeout(WCL_REQUEST_TIMEOUT_MS),
   });
   if (!response.ok) return null;
 
@@ -93,6 +102,7 @@ async function queryWcl<T>(accessToken: string, query: string, variables: Record
       Authorization: `Bearer ${accessToken}`,
     },
     body: JSON.stringify({ query, variables }),
+    signal: AbortSignal.timeout(WCL_REQUEST_TIMEOUT_MS),
   });
   if (!response.ok) return null;
 
@@ -238,6 +248,7 @@ export async function refreshRaidLogActivity(
   options: { maxReports?: number } = {}
 ): Promise<RaidLogActivityRefreshResult> {
   const db = getDatabase(dbInput);
+  const deadline = Date.now() + REFRESH_TIME_BUDGET_MS;
   const empty = { reportsInWindow: 0, reportsProcessed: 0, reportsRemaining: 0, charactersTouched: 0 };
 
   const accessToken = await getWclAccessToken();
@@ -278,6 +289,8 @@ export async function refreshRaidLogActivity(
   let processed = 0;
 
   for (const report of batch) {
+    if (Date.now() >= deadline) break;
+
     let actors: Array<{ name: string; server: string }>;
     try {
       actors = await fetchReportPlayerNames(accessToken, report.code);
