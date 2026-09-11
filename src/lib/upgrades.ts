@@ -4,9 +4,6 @@ import midnightJournalData from '../data/midnight-journal-data.json';
 const RAIDBOTS_MAX_AGE_SECONDS = 7 * 24 * 60 * 60;
 const LODGESIM_MAX_AGE_SECONDS = 14 * 24 * 60 * 60;
 
-const SINGLE_TARGET_RUNNER_SQL =
-  "(sr.runner_version = 'wowsim-website-runner-v1-single-target' OR sr.runner_version LIKE '%single-target%' OR sr.runner_version LIKE '%single_target%')";
-
 function nowSeconds(): number {
   return Math.floor(Date.now() / 1000);
 }

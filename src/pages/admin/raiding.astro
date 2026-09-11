@@ -257,12 +257,12 @@ const recruitmentHtml  = contentMap.get('recruitment')       || DEFAULT_RECRUITM
       const form      = editorEl && editorEl.closest('form');
       if (!editorEl || !toolbarEl || !form) return;
 
-      const quill = new Quill(editorEl, {
+      const quill = new window.Quill(editorEl, {
         theme: 'snow',
         modules: { toolbar: toolbarEl },
       });
 
-      form.addEventListener('submit', function (e) {
+      form.addEventListener('submit', function () {
         const output = form.querySelector('.rich-output');
         if (output) {
           output.value = quill.getSemanticHTML();

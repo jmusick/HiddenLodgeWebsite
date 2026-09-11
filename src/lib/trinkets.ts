@@ -1239,7 +1239,6 @@ async function loadTrinketTierPageDataInternal(options?: {
   const failures: string[] = [];
   const useAggregateMode = selectedEncounter === null;
   const specConcurrency = useAggregateMode ? 1 : 3;
-  const encounterConcurrency = useAggregateMode ? 1 : 2;
   let aggregateSpecFetchCount = 0;
 
   const specResults = await mapWithConcurrency(specs, specConcurrency, async (spec) => {

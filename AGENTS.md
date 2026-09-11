@@ -25,7 +25,8 @@ Guidance for AI coding agents working in this repository.
 ## Commands
 
 - `npm run dev` — Astro dev server + local cron refresher (see `scripts/dev-with-cron.mjs`).
-- `npm run build` — `astro build` then patches the Wrangler config. Note: this does **not** run a full typecheck (no `astro check` in the build pipeline) — run `npx astro check` separately if you need one; the repo currently has some pre-existing type errors that build doesn't catch.
+- `npm run build` — `astro build` then patches the Wrangler config. It does **not** typecheck.
+- `npm run typecheck` — `astro check`. The repo is clean (0 errors, 0 warnings); keep it that way. The remaining hints are known false positives — values used only inside `<script type="application/json">` or inline `on*` attributes (`RaiderSimTools.astro`, `signup.astro`, `trinkets.astro`) — plus style suggestions, so don't "fix" those by deleting code.
 - `npm run db:migrate:local` / `db:migrate:prod` — apply migrations. Destructive migrations (DROP/DELETE/TRUNCATE/`ALTER TABLE ... DROP COLUMN`) are blocked unless the file has a `-- allow-destructive` annotation; `npm run db:check:migrations` verifies this plus migration numbering/state without touching a database.
 - `npm run db:copy-prod` — copies all production D1 data into your local D1 (schema intersection only; skips `sessions`, system tables, and by default `roster_cache_meta`/`site_settings`). Requires `wrangler` to be authenticated (`npx wrangler whoami`) and a bootstrapped local schema (`npm run db:bootstrap:local`). Safe to rerun — it clears local rows (FK-dependency order) before reinserting. Set `COPY_PROD_INCLUDE_SEEDED=1` in the environment to also copy the normally-skipped seeded tables.
 

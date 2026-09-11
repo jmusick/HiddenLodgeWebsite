@@ -5,7 +5,7 @@ import { env } from 'cloudflare:workers';
 import { isAuthorizedDesktopRequest } from '../../../lib/desktop-auth';
 import { getAttendanceSummaryMap } from '../../../lib/attendance';
 import { getVaultHistory } from '../../../lib/raiders';
-import { getUsWeeklyResetTimestamp, WEEK_SECONDS, US_WEEKLY_RESET_HOUR_EASTERN } from '../../../lib/wow-reset';
+import { getUsWeeklyResetTimestamp, US_WEEKLY_RESET_HOUR_EASTERN } from '../../../lib/wow-reset';
 
 function isPostResetThisCalendarWeek(now: Date): boolean {
 	const parts = new Intl.DateTimeFormat('en-US', {
@@ -149,10 +149,6 @@ export async function GET(context: APIContext): Promise<Response> {
 
 	const now = new Date();
 	const currentWeekStartTs = getUsWeeklyResetTimestamp();
-	const targetLastWeekStartTs = isPostResetThisCalendarWeek(now)
-		? currentWeekStartTs - WEEK_SECONDS
-		: currentWeekStartTs;
-	const targetLastWeekEndTs = targetLastWeekStartTs + WEEK_SECONDS;
 
 	const result = await env.DB.prepare(`
 		SELECT

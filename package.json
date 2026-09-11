@@ -1,7 +1,7 @@
 {
   "name": "hiddenlodgewebsite",
   "type": "module",
-  "version": "2.19.1",
+  "version": "2.19.2",
   "engines": {
     "node": ">=22.12.0"
   },
@@ -11,6 +11,7 @@
     "build": "astro build && node scripts/patch-wrangler-config.mjs",
     "preview": "astro preview",
     "astro": "astro",
+    "typecheck": "astro check",
     "cron:local": "node scripts/local-cron-refresh.mjs",
     "db:backfill:gear:local": "node scripts/backfill-raider-gear.mjs --local",
     "db:backfill:gear:prod": "node scripts/backfill-raider-gear.mjs --remote",

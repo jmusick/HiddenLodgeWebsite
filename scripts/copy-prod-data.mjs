@@ -115,8 +115,6 @@ function getLocalTableDependencies(tables) {
   const dependencies = new Map();
 
   for (const table of tables) {
-    const commandLine = `npx wrangler d1 execute ${DATABASE_NAME} --local --json --command "PRAGMA foreign_key_list(${quoteIdentifier(table)})"`;
-
     try {
       const output = runSqlCommand(`PRAGMA foreign_key_list(${quoteIdentifier(table)});`, { json: true });
       const parsed = parseJsonOutput(output);
@@ -162,7 +160,6 @@ function sortTablesByDependencies(tables, dependencyMap) {
 
 function getTableData(tables, remote = false) {
   const results = {};
-  const flag = remote ? '--remote' : '--local';
 
   console.log(`\n========================================`);
   console.log(`Fetching data from ${remote ? 'PRODUCTION' : 'LOCAL'} database`);

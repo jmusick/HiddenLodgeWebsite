@@ -18,15 +18,6 @@ if (!['local', 'remote'].includes(target)) {
   process.exit(1);
 }
 
-function runCommand(commandLine) {
-  return execSync(commandLine, {
-    cwd: PROJECT_ROOT,
-    encoding: 'utf8',
-    stdio: ['pipe', 'pipe', 'pipe'],
-    maxBuffer: 32 * 1024 * 1024,
-  });
-}
-
 function createScratchProject(rootDir) {
   const scratchProject = join(rootDir, 'project');
   const scratchMigrationsDir = join(scratchProject, 'migrations');

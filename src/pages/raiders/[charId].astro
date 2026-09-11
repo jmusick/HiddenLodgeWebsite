@@ -29,7 +29,6 @@ if (!raider) {
   return new Response('Not found', { status: 404 });
 }
 const { portrait, fullBody } = media;
-const nowEpoch = Math.floor(Date.now() / 1000);
 
 if (FEATURE_FLAGS.sim) {
   await getLatestSingleTargetForRaiders((env as any).DB, [id], { maxAgeSeconds: 14 * 24 * 60 * 60 });
@@ -93,13 +92,6 @@ function scoreColor(filled: number | null, total: number | null): string {
   if (pct >= 0.75) return '#0070dd';
   if (pct >= 0.5)  return '#1eff00';
   return '#ffffff';
-}
-
-function simDifficultyLabel(value: string): string {
-  const normalized = value.trim().toLowerCase();
-  if (normalized === 'mythic') return 'Mythic';
-  if (normalized === 'heroic') return 'Heroic';
-  return 'Unknown';
 }
 
 function formatScore(filled: number | null, total: number | null): string {

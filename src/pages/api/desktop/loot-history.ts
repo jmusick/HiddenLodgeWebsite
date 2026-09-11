@@ -89,7 +89,7 @@ function parseAwardedAtEpoch(dateValue: string, timeValue: string): number | nul
 	return Number.isFinite(epoch) ? epoch : null;
 }
 
-function isOnOrAfterSeasonOneCutoff(dateValue: string, timeValue: string, awardedAtEpoch: number | null): boolean {
+function isOnOrAfterSeasonOneCutoff(dateValue: string, awardedAtEpoch: number | null): boolean {
 	if (typeof awardedAtEpoch === 'number' && Number.isFinite(awardedAtEpoch)) {
 		return awardedAtEpoch >= SEASON_ONE_CUTOFF_EPOCH;
 	}
@@ -251,7 +251,7 @@ export async function POST(context: APIContext): Promise<Response> {
 			}
 		}
 		const awardedAtEpoch = parseAwardedAtEpoch(asString(entry.date), asString(entry.time));
-		if (!isOnOrAfterSeasonOneCutoff(asString(entry.date), asString(entry.time), awardedAtEpoch)) {
+		if (!isOnOrAfterSeasonOneCutoff(asString(entry.date), awardedAtEpoch)) {
 			return null;
 		}
 		if (!isMidnightSeasonOneRaid(instanceName)) {

@@ -32,7 +32,7 @@ Currently `false`:
 
 Currently `true`:
 
-- `deathAnalysis` — `/death-analysis` (raider-facing, in the Tools menu), `/admin/log-matching`, `/api/admin/death-analysis/*`, and the death-analysis leg of `/api/cron/refresh`. See [Death Analysis](#death-analysis).
+- `deathAnalysis` — `/death-analysis` (raider-facing, in the Tools menu), `/admin/log-matching`, `/api/admin/death-analysis/*`, and the death-analysis leg of `/api/cron/refresh-logs`. See [Death Analysis](#death-analysis).
 - `mechanicsAnalysis` — `/mechanics-analysis` (Tools menu, guild members) and the mechanics leg of `/api/cron/refresh-logs`. Also requires `deathAnalysis`, since it reads that feature's canonical reports. See [Mechanics Analysis](#mechanics-analysis).
 - `tools` — `/professions` (live, in the Tools menu) plus `/trinkets`, `/loot-history`, `/upgrades` (still redirected to `/hiatus` and not in the Tools menu).
 
@@ -77,6 +77,7 @@ Season 2 excessive-death tracking, sourced straight from the guild's Warcraft Lo
 - **Scope**: reports whose zone is **The Venomous Abyss** and that overlap a **Thursday/Friday 9pm–midnight Eastern** window by at least 30 minutes (DST-aware). Only **Heroic and Mythic** boss pulls count. Rolling **last 90 days**; older rows are pruned on each sync.
 - **One report per night**: when several people log the same night, the report with the most qualifying pulls counts (tie → earliest start), unless an officer overrides it on `/admin/log-matching`.
 - **Scoring** (same formula as Season 1): weighted score = (4 × first deaths + 3 × second + 2 × third + 1 × fourth) / pulls attended; only the first 4 deaths per pull count; only raiders with 20+ pulls across 4+ reports (`DEATH_ANALYSIS_MIN_PULLS` / `DEATH_ANALYSIS_MIN_REPORTS`; Season 1 was 5 pulls, no report minimum) are ranked and averaged — everyone else is hidden from the table; more than 25% above the qualified average is highlighted.
+- **Player matching**: WCL actors are matched to roster characters by their `gameID` (the Blizzard character id) when it's known, falling back to name + realm. Name-only matching used to credit stats to an old deleted character that shared a name; `migrations/0076_remap_stale_wcl_character_ids.sql` moved those rows to the right character.
 - **Sync**: the `deathAnalysis` leg of `/api/cron/refresh-logs` (or `/api/cron/refresh` without `skipLogs=1`) processes up to 3 new reports per run (`?deathReportBatchSize=` to change); remaining reports carry over to the next run. Admins can also trigger it from Log Matching.
 - **Tables**: `death_analysis_reports`, `death_analysis_stats`, `death_analysis_night_overrides` (`migrations/0074_death_analysis.sql`).
 
@@ -479,6 +480,12 @@ Build and preview locally:
 ```sh
 npm run build
 npm run preview
+```
+
+Typecheck (runs `astro check`; the build does not typecheck):
+
+```sh
+npm run typecheck
 ```
 
 ## Database Setup

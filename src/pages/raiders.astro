@@ -8,7 +8,7 @@ import { loadRaidersViewData, type RaiderRecord } from '../lib/raiders';
 import { SEASON_2_START_TIMESTAMP } from '../lib/wow-reset';
 import { getRaidLogActivity, RECENT_LOG_WINDOW_DAYS } from '../lib/raid-log-activity';
 
-const { raiders, totalMembers, readyCount } = await loadRaidersViewData();
+const { raiders } = await loadRaidersViewData();
 const logActivity = await getRaidLogActivity();
 const nowTs = Math.floor(Date.now() / 1000);
 const isBeforeSeason2 = nowTs < SEASON_2_START_TIMESTAMP;
@@ -103,21 +103,6 @@ function lastLogSeenLabel(lastLogSeenAt: number | null): string {
   return `Last seen in a Hidden Lodge log ${daysAgo} day${daysAgo === 1 ? '' : 's'} ago (${when})`;
 }
 
-function scoreColor(filled: number | null, total: number | null): string {
-  if (filled === null || total === null || total === 0) return '';
-  const pct = filled / total;
-  if (pct >= 1)   return '#a335ee'; // epic purple
-  if (pct >= 0.75) return '#0070dd'; // rare blue
-  if (pct >= 0.5)  return '#1eff00'; // uncommon green
-  return '#ffffff';                  // common white
-}
-
-function formatScore(filled: number | null, total: number | null): string {
-  if (filled === null || total === null) return '—';
-  if (total === 0) return 'N/A';
-  return `${Math.round((filled / total) * 100)}% (${filled}/${total})`;
-}
-
 function preparednessTotals(raider: (typeof sortedRaiders)[number]): { filled: number | null; total: number | null } {
   // Use 2-week averages if available, otherwise fall back to current values
   const socketedGems = raider.avg30dSocketedGems ?? raider.socketedGems;
@@ -179,28 +164,6 @@ function crestTotalValue(raider: (typeof sortedRaiders)[number]): number | null 
 function crestSortValue(raider: (typeof sortedRaiders)[number]): number {
   const total = crestTotalValue(raider);
   return total ?? -1;
-}
-
-function crestColor(label: string): string {
-  if (label === 'M') return '#ff8000';
-  if (label === 'H') return '#a335ee';
-  if (label === 'C') return '#0070dd';
-  if (label === 'V') return '#1eff00';
-  return '#ffffff';
-}
-
-function crestSummaryParts(raider: (typeof sortedRaiders)[number]): Array<{ label: string; value: number }> {
-  const parts: Array<{ label: string; value: number | null }> = [
-    { label: 'A', value: raider.adventurerCrests },
-    { label: 'V', value: raider.veteranCrests },
-    { label: 'C', value: raider.championCrests },
-    { label: 'H', value: raider.heroCrests },
-    { label: 'M', value: raider.mythCrests },
-  ];
-
-  return parts
-    .filter((part) => part.value !== null)
-    .map((part) => ({ label: part.label, value: part.value as number }));
 }
 
 function classAbbrev(className: string): string {
@@ -531,7 +494,6 @@ const mplusWinnerData = {
         </thead>
         {raiderGroups.map((group) => {
           const raider = group.primary;
-          const preparedness = preparednessTotals(raider);
           const vaultScore = greatVaultScoreForRaider(raider);
           return (
             <tbody
