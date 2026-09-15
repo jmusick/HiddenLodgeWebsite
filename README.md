@@ -326,7 +326,7 @@ Machine endpoints for the `HiddenLodgeDesktop` companion app (separate repo). Re
 | `/api/desktop/raid-signups-today` | GET | Today's raid signup/attendance status per roster member |
 | `/api/desktop/alt-notes` | GET | Per-character preferred-note data (nickname, falling back to main character) |
 | `/api/desktop/droptimizer-upgrades` | GET | Droptimizer upgrade entries formatted for the desktop app |
-| `/api/desktop/loot-history` | POST | Ingests loot-history entries from the desktop app (dedupes Midnight S1 raids) |
+| `/api/desktop/loot-history` | POST | Ingests loot-history entries from the desktop app (dedupes Midnight S1+S2 raids, see `src/lib/midnight-tracked-raids.ts`) |
 | `/api/desktop/preparedness` | GET | Gem/enchant preparedness and vault data |
 
 ### Debug API

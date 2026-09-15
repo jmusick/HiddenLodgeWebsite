@@ -3,7 +3,7 @@ export const prerender = false;
 import type { APIContext } from 'astro';
 import { env } from 'cloudflare:workers';
 import { isAuthorizedDesktopRequest } from '../../../lib/desktop-auth';
-import { isMidnightSeasonOneRaid } from '../../../lib/midnight-season-one';
+import { isMidnightTrackedRaid } from '../../../lib/midnight-tracked-raids';
 
 interface LootHistoryInputEntry {
 	entryKey?: string;
@@ -40,8 +40,8 @@ interface CharacterLookupRow {
 
 const ITEM_ID_PATTERN = /\|Hitem:(\d+)\b/i;
 const ITEM_NAME_PATTERN = /\|h\[([^\]]+)\]\|h/i;
-const SEASON_ONE_CUTOFF_DATE = '2026/03/17';
-const SEASON_ONE_CUTOFF_EPOCH = 1773705600;
+const LOOT_TRACKING_START_DATE = '2026/03/17';
+const LOOT_TRACKING_START_EPOCH = 1773705600;
 
 function asString(value: unknown): string {
 	return typeof value === 'string' ? value.trim() : '';
@@ -89,13 +89,13 @@ function parseAwardedAtEpoch(dateValue: string, timeValue: string): number | nul
 	return Number.isFinite(epoch) ? epoch : null;
 }
 
-function isOnOrAfterSeasonOneCutoff(dateValue: string, awardedAtEpoch: number | null): boolean {
+function isOnOrAfterLootTrackingStart(dateValue: string, awardedAtEpoch: number | null): boolean {
 	if (typeof awardedAtEpoch === 'number' && Number.isFinite(awardedAtEpoch)) {
-		return awardedAtEpoch >= SEASON_ONE_CUTOFF_EPOCH;
+		return awardedAtEpoch >= LOOT_TRACKING_START_EPOCH;
 	}
 
 	if (!dateValue) return false;
-	return dateValue >= SEASON_ONE_CUTOFF_DATE;
+	return dateValue >= LOOT_TRACKING_START_DATE;
 }
 
 function extractItemFromLootLink(lootLink: string): { itemId: number | null; itemName: string } {
@@ -251,10 +251,10 @@ export async function POST(context: APIContext): Promise<Response> {
 			}
 		}
 		const awardedAtEpoch = parseAwardedAtEpoch(asString(entry.date), asString(entry.time));
-		if (!isOnOrAfterSeasonOneCutoff(asString(entry.date), awardedAtEpoch)) {
+		if (!isOnOrAfterLootTrackingStart(asString(entry.date), awardedAtEpoch)) {
 			return null;
 		}
-		if (!isMidnightSeasonOneRaid(instanceName)) {
+		if (!isMidnightTrackedRaid(instanceName)) {
 			return null;
 		}
 

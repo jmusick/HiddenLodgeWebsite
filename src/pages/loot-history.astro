@@ -4,7 +4,7 @@ export const prerender = false;
 import Layout from '../layouts/Layout.astro';
 import { env } from 'cloudflare:workers';
 import { resolveUserTimeZone } from '../lib/time-zones';
-import { MIDNIGHT_SEASON_ONE_NORMALIZED_RAID_NAMES } from '../lib/midnight-season-one';
+import { MIDNIGHT_TRACKED_NORMALIZED_RAID_NAMES } from '../lib/midnight-tracked-raids';
 import { fetchItemIconUrls } from '../lib/upgrades';
 import { FEATURE_FLAGS } from '../lib/feature-flags';
 
@@ -83,22 +83,22 @@ const parsedDifficulty = Number.parseInt(rawDiff, 10);
 const difficultyFilter = RAID_DIFFICULTIES.has(parsedDifficulty) ? parsedDifficulty : 16;
 const hasDifficultyFilter = true;
 
-function midnightSeasonOneRaidScopeSql(alias = 'loot_history'): string {
+function midnightTrackedRaidScopeSql(alias = 'loot_history'): string {
 	const column = `LOWER(TRIM(COALESCE(${alias}.instance_name, '')))`;
-	return MIDNIGHT_SEASON_ONE_NORMALIZED_RAID_NAMES.map(() => `(${column} = ? OR ${column} LIKE ?)`)
+	return MIDNIGHT_TRACKED_NORMALIZED_RAID_NAMES.map(() => `(${column} = ? OR ${column} LIKE ?)`)
 		.join(' OR ');
 }
 
-function midnightSeasonOneRaidScopeBinds(): string[] {
-	return MIDNIGHT_SEASON_ONE_NORMALIZED_RAID_NAMES.flatMap((name) => [name, `${name}-%`]);
+function midnightTrackedRaidScopeBinds(): string[] {
+	return MIDNIGHT_TRACKED_NORMALIZED_RAID_NAMES.flatMap((name) => [name, `${name}-%`]);
 }
 
 const whereParts: string[] = [
 	'owner_blizzard_char_id IN (SELECT blizzard_char_id FROM roster_members_cache)',
 	'is_excluded = 0',
-	`(${midnightSeasonOneRaidScopeSql()})`,
+	`(${midnightTrackedRaidScopeSql()})`,
 ];
-const binds: (string | number)[] = [...midnightSeasonOneRaidScopeBinds()];
+const binds: (string | number)[] = [...midnightTrackedRaidScopeBinds()];
 
 if (rawQuery) {
 	whereParts.push(`(
@@ -160,10 +160,10 @@ const responseOptionsStmt = env.DB.prepare(
 	`SELECT DISTINCT TRIM(response_text) AS response_text
 	 FROM loot_history
 	 WHERE is_excluded = 0
-		AND (${midnightSeasonOneRaidScopeSql()})
+		AND (${midnightTrackedRaidScopeSql()})
 		AND response_text IS NOT NULL AND TRIM(response_text) != ''
 	 ORDER BY response_text COLLATE NOCASE ASC`
-).bind(...midnightSeasonOneRaidScopeBinds());
+).bind(...midnightTrackedRaidScopeBinds());
 
 const userSettingsStmt = env.DB.prepare(
 	`SELECT time_zone, time_zone_set
@@ -182,11 +182,11 @@ const raiderOptionsStmt = env.DB.prepare(
 		ON rmc.blizzard_char_id = lh.owner_blizzard_char_id
 	 WHERE lh.owner_blizzard_char_id IS NOT NULL
 		AND lh.is_excluded = 0
-		AND (${midnightSeasonOneRaidScopeSql('lh')})
+		AND (${midnightTrackedRaidScopeSql('lh')})
 	 GROUP BY lh.owner_blizzard_char_id
 	 HAVING TRIM(name) != ''
 	 ORDER BY LOWER(name) ASC, LOWER(realm) ASC`
-).bind(...midnightSeasonOneRaidScopeBinds());
+).bind(...midnightTrackedRaidScopeBinds());
 
 const [countResult, rowsResult, responseOptionsResult, userSettingsResult, raiderOptionsResult] = await env.DB.batch([
 	countStmt,
@@ -235,7 +235,7 @@ if (selectedMemberIds.length > 0) {
 	const placeholders = selectedMemberIds.map(() => '?').join(', ');
 	const comparisonBinds: (string | number)[] = [
 		...selectedMemberIds,
-		...midnightSeasonOneRaidScopeBinds(),
+		...midnightTrackedRaidScopeBinds(),
 	];
 	let comparisonDifficultySql = '';
 	if (hasDifficultyFilter) {
@@ -250,7 +250,7 @@ if (selectedMemberIds.length > 0) {
 		 FROM loot_history
 		 WHERE owner_blizzard_char_id IN (${placeholders})
 			AND is_excluded = 0
-			AND (${midnightSeasonOneRaidScopeSql()})${comparisonDifficultySql}
+			AND (${midnightTrackedRaidScopeSql()})${comparisonDifficultySql}
 		 GROUP BY owner_blizzard_char_id, COALESCE(NULLIF(TRIM(response_text), ''), 'Unspecified')`
 	).bind(...comparisonBinds);
 
