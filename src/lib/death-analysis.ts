@@ -18,8 +18,8 @@ import { isGuildOfficer } from './auth';
 
 export const DEATH_ANALYSIS_WINDOW_DAYS = 90;
 export const DEATH_ANALYSIS_RAID_NAME = 'The Venomous Abyss';
-export const DEATH_ANALYSIS_MIN_PULLS = 20;
-export const DEATH_ANALYSIS_MIN_REPORTS = 4;
+export const DEATH_ANALYSIS_MIN_PULLS = 10;
+export const DEATH_ANALYSIS_MIN_REPORTS = 2;
 const SIGNIFICANT_THRESHOLD = 0.25;
 
 // WCL difficulty ids: 3 Normal, 4 Heroic, 5 Mythic.
