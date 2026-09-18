@@ -24,6 +24,9 @@ const SIGNIFICANT_THRESHOLD = 0.25;
 
 // WCL difficulty ids: 3 Normal, 4 Heroic, 5 Mythic.
 const QUALIFYING_DIFFICULTIES = new Set([4, 5]);
+// Sub-30s fights are usually an immediate wipe (bad pull, DC, accidental pull)
+// rather than a real attempt; excluding them keeps pulls/deaths meaningful.
+const MIN_FIGHT_DURATION_MS = 30_000;
 // Raid nights are Thu/Fri 9pm–midnight Eastern.
 const RAID_WEEKDAYS_ET = new Set([4, 5]);
 const RAID_START_HOUR_ET = 21;
@@ -43,7 +46,7 @@ const DEFAULT_MAX_REPORTS_PER_RUN = 3;
  */
 const REFRESH_TIME_BUDGET_MS = 12_000;
 
-const zoneEncounterIdsCache = new Map<number, Set<number>>();
+const zoneEncountersCache = new Map<number, { ids: Set<number>; names: Map<number, string> }>();
 
 const etDateFormatter = new Intl.DateTimeFormat('en-CA', {
   timeZone: 'America/New_York',
@@ -192,17 +195,17 @@ async function listGuildReportsSince(accessToken: string, sinceUtc: number): Pro
   return [...byCode.values()];
 }
 
-async function getZoneEncounterIds(accessToken: string, zoneId: number): Promise<Set<number>> {
-  const cached = zoneEncounterIdsCache.get(zoneId);
+async function getZoneEncounters(accessToken: string, zoneId: number): Promise<{ ids: Set<number>; names: Map<number, string> }> {
+  const cached = zoneEncountersCache.get(zoneId);
   if (cached) return cached;
 
-  const payload = await queryWcl<{ worldData?: { zone?: { encounters?: Array<{ id?: number }> } | null } }>(
+  const payload = await queryWcl<{ worldData?: { zone?: { encounters?: Array<{ id?: number; name?: string }> } | null } }>(
     accessToken,
     `
       query DeathAnalysisZone($id: Int!) {
         worldData {
           zone(id: $id) {
-            encounters { id }
+            encounters { id name }
           }
         }
       }
@@ -210,11 +213,18 @@ async function getZoneEncounterIds(accessToken: string, zoneId: number): Promise
     { id: zoneId }
   );
 
-  const ids = new Set(
-    (payload?.worldData?.zone?.encounters ?? []).map((row) => toPositiveInt(row.id)).filter((id) => id > 0)
-  );
-  if (ids.size > 0) zoneEncounterIdsCache.set(zoneId, ids);
-  return ids;
+  const ids = new Set<number>();
+  const names = new Map<number, string>();
+  for (const row of payload?.worldData?.zone?.encounters ?? []) {
+    const id = toPositiveInt(row.id);
+    if (id <= 0) continue;
+    ids.add(id);
+    const name = (row.name ?? '').trim();
+    if (name) names.set(id, name);
+  }
+  const result = { ids, names };
+  if (ids.size > 0) zoneEncountersCache.set(zoneId, result);
+  return result;
 }
 
 async function syncReport(
@@ -224,11 +234,13 @@ async function syncReport(
   report: InWindowReport
 ): Promise<void> {
   if (!report.zoneId) throw new Error('Report has no zone.');
-  const encounterIds = await getZoneEncounterIds(accessToken, report.zoneId);
-  if (encounterIds.size === 0) throw new Error(`Could not resolve encounters for zone ${report.zoneId}.`);
+  const encounters = await getZoneEncounters(accessToken, report.zoneId);
+  if (encounters.ids.size === 0) throw new Error(`Could not resolve encounters for zone ${report.zoneId}.`);
 
   const isQualifyingFight = (fight: WclFightRow) =>
-    encounterIds.has(toPositiveInt(fight.encounterID)) && QUALIFYING_DIFFICULTIES.has(toPositiveInt(fight.difficulty));
+    encounters.ids.has(toPositiveInt(fight.encounterID)) &&
+    QUALIFYING_DIFFICULTIES.has(toPositiveInt(fight.difficulty)) &&
+    Number(fight.endTime ?? 0) - Number(fight.startTime ?? 0) >= MIN_FIGHT_DURATION_MS;
 
   const details = await fetchReportFightStats(accessToken, report.code, ownership, isQualifyingFight);
 
@@ -275,6 +287,24 @@ async function syncReport(
             stats.fourthDeathCount
           )
       ),
+    db.prepare('DELETE FROM death_analysis_events WHERE report_code = ?').bind(report.code),
+    ...details.deathEvents.map((event) =>
+      db
+        .prepare(
+          `INSERT INTO death_analysis_events (
+             report_code, fight_id, death_position, blizzard_char_id, encounter_id, encounter_name, death_offset_ms
+           ) VALUES (?, ?, ?, ?, ?, ?, ?)`
+        )
+        .bind(
+          report.code,
+          event.fightId,
+          event.deathPosition,
+          event.blizzardCharId,
+          event.encounterId,
+          encounters.names.get(event.encounterId) ?? '',
+          event.deathOffsetMs
+        )
+    ),
   ];
   await db.batch(statements);
 }
@@ -506,6 +536,16 @@ export interface DeathAnalysisNight {
   reports: DeathAnalysisReportRow[];
 }
 
+export interface DeathAnalysisDeathLink {
+  reportCode: string;
+  nightKey: string | null;
+  fightId: number;
+  encounterName: string;
+  /** 1-4; position within the pull. */
+  deathPosition: number;
+  deathOffsetMs: number;
+}
+
 export interface DeathAnalysisEntry {
   blizzardCharId: number;
   name: string;
@@ -522,6 +562,8 @@ export interface DeathAnalysisEntry {
   totalDeathRate: number;
   percentAboveAverage: number | null;
   isSignificantlyAboveAverage: boolean;
+  /** Individual counted deaths across the reports that fed this raider's stats, most recent first. */
+  deathLinks: DeathAnalysisDeathLink[];
 }
 
 export interface DeathAnalysisSummary {
@@ -627,9 +669,40 @@ export async function getDeathAnalysisSummary(dbInput?: D1Database): Promise<Dea
   const included = nights.filter((night) => night.canonical && night.canonical.bossPulls > 0);
   const canonicalCodes = included.map((night) => night.canonical!.code);
 
+  const nightKeyByReportCode = new Map(included.map((night) => [night.canonical!.code, night.nightKey]));
+
   const rankings: DeathAnalysisEntry[] = [];
+  const linksByChar = new Map<number, DeathAnalysisDeathLink[]>();
   if (canonicalCodes.length > 0) {
     const placeholders = canonicalCodes.map(() => '?').join(', ');
+
+    const eventsResult = await db
+      .prepare(
+        `SELECT report_code, fight_id, death_position, blizzard_char_id, encounter_name, death_offset_ms
+         FROM death_analysis_events
+         WHERE report_code IN (${placeholders})`
+      )
+      .bind(...canonicalCodes)
+      .all<Record<string, unknown>>();
+    for (const row of eventsResult.results ?? []) {
+      const blizzardCharId = toPositiveInt(row.blizzard_char_id);
+      if (blizzardCharId <= 0) continue;
+      const reportCode = String(row.report_code);
+      const list = linksByChar.get(blizzardCharId) ?? [];
+      list.push({
+        reportCode,
+        nightKey: nightKeyByReportCode.get(reportCode) ?? null,
+        fightId: toPositiveInt(row.fight_id),
+        encounterName: String(row.encounter_name ?? ''),
+        deathPosition: toPositiveInt(row.death_position),
+        deathOffsetMs: toPositiveInt(row.death_offset_ms),
+      });
+      linksByChar.set(blizzardCharId, list);
+    }
+    for (const list of linksByChar.values()) {
+      list.sort((a, b) => (b.nightKey ?? '').localeCompare(a.nightKey ?? '') || a.fightId - b.fightId || a.deathPosition - b.deathPosition);
+    }
+
     const result = await db
       .prepare(
         `${CHARACTER_IDENTITY_CTE}
@@ -670,6 +743,7 @@ export async function getDeathAnalysisSummary(dbInput?: D1Database): Promise<Dea
         totalDeathRate: 0,
         percentAboveAverage: null,
         isSignificantlyAboveAverage: false,
+        deathLinks: linksByChar.get(toPositiveInt(row.blizzard_char_id)) ?? [],
       };
       if (entry.blizzardCharId <= 0 || entry.fightsPresent <= 0) continue;
       entry.weightedScore = weightedDeathScore(entry);

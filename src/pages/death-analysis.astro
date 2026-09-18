@@ -31,6 +31,16 @@ function nightLabel(nightKey: string): string {
   const window = raidWindowForNight(nightKey);
   return window ? nightFormatter.format(new Date(window.startUtc * 1000)) : nightKey;
 }
+const deathOrdinals = ['1st', '2nd', '3rd', '4th'];
+function deathOrdinal(position: number): string {
+  return deathOrdinals[position - 1] ?? `${position}th`;
+}
+function formatDeathOffset(ms: number): string {
+  const totalSeconds = Math.max(0, Math.round(ms / 1000));
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return `${minutes}:${String(seconds).padStart(2, '0')}`;
+}
 const guildRankingsUrl = 'https://www.warcraftlogs.com/guild/rankings/781707/latest?difficulty=4&playerdisplay=median&recent=true';
 ---
 
@@ -140,6 +150,26 @@ const guildRankingsUrl = 'https://www.warcraftlogs.com/guild/rankings/781707/lat
                       <strong style={`color: ${classColor(row.className)}`}>{row.name}</strong>
                       <span>{row.realm}</span>
                     </div>
+                    {row.deathLinks.length > 0 && (
+                      <details class="death-links">
+                        <summary>{row.deathLinks.length} death{row.deathLinks.length === 1 ? '' : 's'} logged</summary>
+                        <ul>
+                          {row.deathLinks.map((link) => (
+                            <li>
+                              <a
+                                href={`https://www.warcraftlogs.com/reports/${link.reportCode}#fight=${link.fightId}&type=deaths&death=${link.deathPosition}`}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                class="report-link"
+                              >
+                                {link.nightKey ? nightLabel(link.nightKey) : link.reportCode}{link.encounterName ? ` · ${link.encounterName}` : ''}
+                              </a>
+                              <span>{deathOrdinal(link.deathPosition)} death &middot; {formatDeathOffset(link.deathOffsetMs)} into pull</span>
+                            </li>
+                          ))}
+                        </ul>
+                      </details>
+                    )}
                   </td>
                   <td data-sort-value={String(row.reportCount)}>{row.reportCount.toLocaleString()}</td>
                   <td data-sort-value={String(row.fightsPresent)}>{row.fightsPresent.toLocaleString()}</td>
@@ -517,6 +547,43 @@ const guildRankingsUrl = 'https://www.warcraftlogs.com/guild/rankings/781707/lat
   .score-cell + small {
     color: var(--muted);
     font-size: 0.86rem;
+  }
+
+  .death-links {
+    margin-top: 0.4rem;
+  }
+
+  .death-links summary {
+    cursor: pointer;
+    color: var(--gold);
+    font-size: 0.78rem;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+  }
+
+  .death-links summary:hover,
+  .death-links summary:focus-visible {
+    color: var(--gold-bright);
+  }
+
+  .death-links ul {
+    list-style: none;
+    margin: 0.5rem 0 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+  }
+
+  .death-links li {
+    display: flex;
+    flex-direction: column;
+    gap: 0.05rem;
+  }
+
+  .death-links li span {
+    color: var(--muted);
+    font-size: 0.78rem;
   }
 
   .score-cell {

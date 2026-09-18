@@ -34,6 +34,16 @@ export interface WclDeathAggregate {
   fourthDeathCount: number;
 }
 
+export interface WclDeathEventRow {
+  fightId: number;
+  encounterId: number;
+  blizzardCharId: number;
+  /** 1-4; position within the fight, matching the death_analysis_stats cap. */
+  deathPosition: number;
+  /** Milliseconds from the start of the fight to the death. */
+  deathOffsetMs: number;
+}
+
 export interface WclAuthConfig {
   clientId: string;
   clientSecret: string;
@@ -352,6 +362,7 @@ export async function fetchReportFightStats(
   bossesByCharId: Map<number, number>;
   bossKillsByCharId: Map<number, number>;
   deathStatsByCharId: Map<number, WclDeathAggregate>;
+  deathEvents: WclDeathEventRow[];
   reportStartUtc: number | null;
   reportEndUtc: number | null;
 }> {
@@ -420,6 +431,7 @@ export async function fetchReportFightStats(
       bossesByCharId: new Map(),
       bossKillsByCharId: new Map(),
       deathStatsByCharId: new Map(),
+      deathEvents: [],
       reportStartUtc: reportStartMs > 0 ? Math.floor(reportStartMs / 1000) : null,
       reportEndUtc: reportEndMs > 0 ? Math.floor(reportEndMs / 1000) : null,
     };
@@ -467,6 +479,9 @@ export async function fetchReportFightStats(
   );
   const encounterByFightId = new Map<number, number>(
     fights.map((fight) => [Number(fight.id), Number(fight.encounterID ?? 0)])
+  );
+  const fightStartById = new Map<number, number>(
+    fights.map((fight) => [Number(fight.id), Number(fight.startTime ?? 0)])
   );
   const attemptedEncounterIds = new Set<number>(
     fights.map((fight) => Number(fight.encounterID ?? 0)).filter((encounterId) => encounterId > 0)
@@ -554,13 +569,14 @@ export async function fetchReportFightStats(
   nextStart = Number.isFinite(minFightStart) ? minFightStart : 0;
   const deathPositionByFight = new Map<number, number>();
   const deathStatsByCharIdMutable = new Map<number, WclDeathAggregate>();
+  const deathEvents: WclDeathEventRow[] = [];
 
   while (nextStart <= absoluteEnd) {
     const page = await queryWcl<{
       reportData?: {
         report?: {
           events?: {
-            data?: Array<{ targetID?: number; fight?: number }>;
+            data?: Array<{ targetID?: number; fight?: number; timestamp?: number }>;
             nextPageTimestamp?: number | null;
           };
         };
@@ -602,6 +618,16 @@ export async function fetchReportFightStats(
       if (deathPosition > 4) {
         continue;
       }
+
+      const fightStartMs = fightStartById.get(fightId) ?? 0;
+      const eventTimestamp = Number(event.timestamp ?? 0);
+      deathEvents.push({
+        fightId,
+        encounterId: encounterByFightId.get(fightId) ?? 0,
+        blizzardCharId: targetCharId,
+        deathPosition,
+        deathOffsetMs: fightStartMs > 0 && eventTimestamp > 0 ? Math.max(0, eventTimestamp - fightStartMs) : 0,
+      });
 
       const aggregate = deathStatsByCharIdMutable.get(targetCharId) ?? createDeathAggregate();
       aggregate.totalDeaths += 1;
@@ -715,6 +741,7 @@ export async function fetchReportFightStats(
     bossesByCharId,
     bossKillsByCharId,
     deathStatsByCharId,
+    deathEvents,
     reportStartUtc: reportStartMs > 0 ? Math.floor(reportStartMs / 1000) : null,
     reportEndUtc: reportEndMs > 0 ? Math.floor(reportEndMs / 1000) : null,
   };
