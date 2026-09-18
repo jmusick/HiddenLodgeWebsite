@@ -49,6 +49,25 @@ export async function isGuildAdmin(db: D1Database, userId: number): Promise<bool
 	return row !== null;
 }
 
+/**
+ * Returns true if the user has any guild character with rank 0–3 (officers and
+ * above). Admins (rank 0–2) are a subset. Gates officer tools such as Bench and
+ * Log Matching.
+ */
+export async function isGuildOfficer(db: D1Database, userId: number): Promise<boolean> {
+	const row = await db
+		.prepare(
+			`SELECT 1
+			FROM characters c
+			JOIN roster_members_cache rmc ON rmc.blizzard_char_id = c.blizzard_char_id
+			WHERE c.user_id = ? AND rmc.rank <= 3
+			LIMIT 1`
+		)
+		.bind(userId)
+		.first();
+	return row !== null;
+}
+
 /** Returns true if the user has any character currently in the guild roster cache. */
 export async function isGuildMember(db: D1Database, userId: number): Promise<boolean> {
 	const row = await db

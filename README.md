@@ -78,7 +78,7 @@ Season 2 excessive-death tracking, sourced straight from the guild's Warcraft Lo
 - **One report per night**: when several people log the same night, the report with the most qualifying pulls counts (tie → earliest start), unless an officer overrides it on `/admin/log-matching`.
 - **Scoring** (same formula as Season 1): weighted score = (4 × first deaths + 3 × second + 2 × third + 1 × fourth) / pulls attended; only the first 4 deaths per pull count; only raiders with 20+ pulls across 4+ reports (`DEATH_ANALYSIS_MIN_PULLS` / `DEATH_ANALYSIS_MIN_REPORTS`; Season 1 was 5 pulls, no report minimum) are ranked and averaged — everyone else is hidden from the table; more than 25% above the qualified average is highlighted.
 - **Player matching**: WCL actors are matched to roster characters by their `gameID` (the Blizzard character id) when it's known, falling back to name + realm. Name-only matching used to credit stats to an old deleted character that shared a name; `migrations/0076_remap_stale_wcl_character_ids.sql` moved those rows to the right character.
-- **Sync**: the `deathAnalysis` leg of `/api/cron/refresh-logs` (or `/api/cron/refresh` without `skipLogs=1`) processes up to 3 new reports per run (`?deathReportBatchSize=` to change); remaining reports carry over to the next run. Admins can also trigger it from Log Matching.
+- **Sync**: the `deathAnalysis` leg of `/api/cron/refresh-logs` (or `/api/cron/refresh` without `skipLogs=1`) processes up to 3 reports per run (`?deathReportBatchSize=` to change): new reports, plus any report whose WCL end time is later than its last sync (a live log synced mid-raid). Re-syncs keep the report's stored night, and remaining reports carry over to the next run. Admins can also trigger it from Log Matching.
 - **Tables**: `death_analysis_reports`, `death_analysis_stats`, `death_analysis_night_overrides` (`migrations/0074_death_analysis.sql`).
 
 ### Mechanics Analysis
@@ -89,7 +89,7 @@ Per-boss leaderboards of who handles a boss mechanic, built on the same canonica
 - **The Coiled Altar — Orb Carries** (encounter `3429`): counts `applydebuff` events for **Volatile Venom** (`1282419`) on friendly players. One application is one orb picked up, which matches the "uses" count on WCL's Auras view.
 - **Page** (`/mechanics-analysis`): boss tabs (`?boss=`), a range filter (`?range=latest` shows the most recent counted night that pulled the boss; the default is all logs), and a role filter (`?role=tank|healer|melee|ranged`; the default is all roles). The page shows a top-3 podium and a class-coloured bar leaderboard with per-pull rate, pulls carried out of pulls present, and best single pull, then lists players who were present but carried nothing.
 - **Roles** come from the `specID` on WCL CombatantInfo events, so they reflect the spec actually played. Each player's role is the one they played in the most counted pulls.
-- **Sync**: runs in `/api/cron/refresh-logs` right after death analysis (only if that finished within 16s), handling up to 3 reports per run with a 6s budget (`?mechanicsReportBatchSize=` to change). Log Matching's "Sync Now" button also runs a batch. Rows for reports that Death Analysis prunes are dropped.
+- **Sync**: runs in `/api/cron/refresh-logs` right after death analysis (only if that finished within 16s), handling up to 3 reports per run with a 6s budget, and re-syncing a mechanic when Death Analysis re-synced its report after it (`?mechanicsReportBatchSize=` to change). Log Matching's "Sync Now" button also runs a batch. Rows for reports that Death Analysis prunes are dropped.
 - **Tables**: `mechanics_analysis_reports` (per report + mechanic sync cursor) and `mechanics_analysis_stats` (per report + mechanic + character: role, pulls present, pulls hit, count, best pull) in `migrations/0075_mechanics_analysis.sql`.
 
 ## Quick Start
@@ -202,7 +202,7 @@ http://localhost:4321
 | `/api/admin/raider-notes/delete` | POST | Delete a raider note; restricted to `isAdmin` plus a single hardcoded battle tag |
 | `/api/admin/loot-history/exclude` | POST | Mark a loot history entry excluded with a required admin note |
 | `/api/admin/death-analysis/refresh` | POST | Admin: run a death-analysis sync batch now; redirects to `/admin/log-matching` |
-| `/api/admin/death-analysis/log-override` | POST | Admin/officer: set or clear the counted report for a raid night (`night_key`, `report_code` or pasted `report_code_manual`); syncs the report first if needed |
+| `/api/admin/death-analysis/log-override` | POST | Admin/officer: set or clear the counted report for a raid night (`night_key`, `report_code` or pasted `report_code_manual`); always re-pulls the report from WCL so saving also refreshes stale pull counts |
 | `/api/admin/attendance/log-candidates` | GET | **Disabled** — candidate Warcraft Logs reports for an attendance occurrence (old pipeline) |
 | `/api/admin/attendance/log-matching` | POST, GET | **Disabled** — link/rematch a WCL report to an attendance occurrence (old pipeline) |
 | `/api/admin/attendance/toggle-bench` | POST, GET | **Disabled** — toggle a member's bench status for a raid occurrence |

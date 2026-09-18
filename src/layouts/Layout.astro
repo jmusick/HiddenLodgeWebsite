@@ -15,7 +15,7 @@ const {
 } = Astro.props;
 
 const user = Astro.locals.user;
-const isAdmin = Astro.locals.isAdmin;
+const isOfficer = Astro.locals.isOfficer;
 const isGuildMember = Astro.locals.isGuildMember;
 const publicNavItems = [
 	{ href: '/', label: 'Home' },
@@ -47,7 +47,7 @@ const memberNavItems = [
 ];
 
 const adminNavItems = [
-	...(isAdmin ? [{ href: '/admin', label: 'Admin' }] : []),
+	...(isOfficer ? [{ href: '/admin', label: 'Admin' }] : []),
 ];
 
 const responsiveMainMenuItems = [...publicNavItems, ...guildNavItems, ...toolsNavItems];

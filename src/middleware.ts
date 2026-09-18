@@ -1,8 +1,12 @@
 import { defineMiddleware } from 'astro:middleware';
-import { getSessionUser, isGuildAdmin, isGuildMember } from './lib/auth';
+import { getSessionUser, isGuildAdmin, isGuildMember, isGuildOfficer } from './lib/auth';
 import { env } from 'cloudflare:workers';
 
 const MEMBER_ONLY_PATHS = new Set(['/raiders', '/signup', '/feedback', '/trinkets']);
+
+// Admin pages open to officers (rank 0–3) as well as admins. Everything else
+// under /admin stays admin-only (rank 0–2).
+const OFFICER_ADMIN_PATHS = new Set(['/admin', '/admin/bench', '/admin/log-matching']);
 
 // Guild is on hiatus between seasons — redirect raider/tool features to the hiatus page.
 const HIATUS_PATHS = new Set(['/signup', '/trinkets', '/loot-history', '/upgrades']);
@@ -34,6 +38,7 @@ export const onRequest = defineMiddleware(async (context, next) => {
 	context.locals.user = user;
 	context.locals.isGuildMember = user ? await isGuildMember(env.DB, user.id) : false;
 	context.locals.isAdmin = user ? await isGuildAdmin(env.DB, user.id) : false;
+	context.locals.isOfficer = context.locals.isAdmin || (user ? await isGuildOfficer(env.DB, user.id) : false);
 
 	const path = new URL(context.request.url).pathname;
 
@@ -50,7 +55,8 @@ export const onRequest = defineMiddleware(async (context, next) => {
 		if (!user) {
 			return context.redirect('/auth/login');
 		}
-		if (!context.locals.isAdmin) {
+		const isOfficerPage = OFFICER_ADMIN_PATHS.has(path.replace(/\/+$/, '') || '/');
+		if (!context.locals.isAdmin && !(isOfficerPage && context.locals.isOfficer)) {
 			return new Response('Forbidden', { status: 403 });
 		}
 	}

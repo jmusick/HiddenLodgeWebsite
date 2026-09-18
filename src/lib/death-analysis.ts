@@ -14,6 +14,7 @@ import {
   type WclFightRow,
 } from './wcl';
 import { easternWallClockToUtcSeconds } from './wow-reset';
+import { isGuildOfficer } from './auth';
 
 export const DEATH_ANALYSIS_WINDOW_DAYS = 90;
 export const DEATH_ANALYSIS_RAID_NAME = 'The Venomous Abyss';
@@ -311,17 +312,7 @@ export async function canManageLogMatching(
 ): Promise<boolean> {
   if (isAdmin) return true;
   if (!user) return false;
-  const row = await getDatabase(dbInput)
-    .prepare(
-      `SELECT 1 AS ok
-       FROM characters c
-       JOIN roster_members_cache rmc ON rmc.blizzard_char_id = c.blizzard_char_id
-       WHERE c.user_id = ? AND rmc.rank IN (0, 1, 2, 3)
-       LIMIT 1`
-    )
-    .bind(user.id)
-    .first<{ ok: number }>();
-  return Boolean(row?.ok);
+  return isGuildOfficer(getDatabase(dbInput), user.id);
 }
 
 export async function setNightOverride(
@@ -352,15 +343,8 @@ export async function setNightOverride(
     return;
   }
 
-  const existing = await db
-    .prepare('SELECT 1 AS found FROM death_analysis_reports WHERE report_code = ? LIMIT 1')
-    .bind(reportCode)
-    .first<{ found: number }>();
-  if (existing) {
-    await db.prepare('UPDATE death_analysis_reports SET night_key = ? WHERE report_code = ?').bind(nightKey, reportCode).run();
-  } else {
-    await syncDeathAnalysisReport(db, reportCode, nightKey);
-  }
+  // Always re-pull from WCL so saving also refreshes a report synced before it finished.
+  await syncDeathAnalysisReport(db, reportCode, nightKey);
 
   await db
     .prepare(
@@ -408,9 +392,21 @@ export async function refreshDeathAnalysis(
     if (nightKey) inWindow.push({ ...report, nightKey });
   }
 
-  const seenResult = await db.prepare('SELECT report_code FROM death_analysis_reports').all<{ report_code: string }>();
-  const seen = new Set((seenResult.results ?? []).map((row) => row.report_code));
-  const pending = inWindow.filter((report) => !seen.has(report.code)).sort((a, b) => b.startUtc - a.startUtc);
+  const seenResult = await db
+    .prepare('SELECT report_code, night_key, synced_at FROM death_analysis_reports')
+    .all<{ report_code: string; night_key: string; synced_at: number }>();
+  const seen = new Map((seenResult.results ?? []).map((row) => [row.report_code, row]));
+  // New reports, plus live-logged ones that kept growing after their last sync
+  // (otherwise a report synced mid-raid stays frozen at the pulls it had then).
+  // A re-sync keeps the stored night so manual overrides aren't undone.
+  const pending = inWindow
+    .flatMap((report) => {
+      const existing = seen.get(report.code);
+      if (!existing) return [report];
+      if (report.endUtc > toPositiveInt(existing.synced_at)) return [{ ...report, nightKey: existing.night_key }];
+      return [];
+    })
+    .sort((a, b) => b.startUtc - a.startUtc);
 
   const result: DeathAnalysisRefreshResult = {
     inWindowReports: inWindow.length,
@@ -539,6 +535,8 @@ export interface DeathAnalysisSummary {
   qualifiedPlayers: number;
   averageWeightedScore: number | null;
   rankings: DeathAnalysisEntry[];
+  /** Raiders seen in counted reports but under the pull/report minimum; unsorted, no average comparison. */
+  belowMinimum: DeathAnalysisEntry[];
 }
 
 function pickCanonical(reports: DeathAnalysisReportRow[], overrideCode: string | null): DeathAnalysisReportRow | null {
@@ -680,9 +678,10 @@ export async function getDeathAnalysisSummary(dbInput?: D1Database): Promise<Dea
     }
   }
 
-  const qualified = rankings.filter(
-    (row) => row.fightsPresent >= DEATH_ANALYSIS_MIN_PULLS && row.reportCount >= DEATH_ANALYSIS_MIN_REPORTS
-  );
+  const meetsMinimum = (row: DeathAnalysisEntry) =>
+    row.fightsPresent >= DEATH_ANALYSIS_MIN_PULLS && row.reportCount >= DEATH_ANALYSIS_MIN_REPORTS;
+  const qualified = rankings.filter(meetsMinimum);
+  const belowMinimum = rankings.filter((row) => !meetsMinimum(row));
   const averageWeightedScore =
     qualified.length > 0 ? qualified.reduce((sum, row) => sum + row.weightedScore, 0) / qualified.length : null;
 
@@ -718,5 +717,6 @@ export async function getDeathAnalysisSummary(dbInput?: D1Database): Promise<Dea
     qualifiedPlayers: qualified.length,
     averageWeightedScore,
     rankings: qualified,
+    belowMinimum,
   };
 }

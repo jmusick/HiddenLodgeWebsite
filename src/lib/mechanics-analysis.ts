@@ -360,12 +360,23 @@ export async function refreshMechanicsAnalysis(
     .sort((a, b) => b.startUtc - a.startUtc);
 
   const syncedResult = await db
-    .prepare('SELECT report_code, mechanic_key FROM mechanics_analysis_reports')
-    .all<{ report_code: string; mechanic_key: string }>();
-  const synced = new Set((syncedResult.results ?? []).map((row) => `${row.report_code}::${row.mechanic_key}`));
+    .prepare('SELECT report_code, mechanic_key, synced_at FROM mechanics_analysis_reports')
+    .all<{ report_code: string; mechanic_key: string; synced_at: number }>();
+  const syncedAt = new Map(
+    (syncedResult.results ?? []).map((row) => [`${row.report_code}::${row.mechanic_key}`, toPositiveInt(row.synced_at)])
+  );
   const keys = allMechanics().map(({ mechanic }) => mechanic.key);
+  // A mechanic is stale if Death Analysis re-synced the report after it (e.g. a live log that grew).
   const pending = canonical
-    .map((report) => ({ code: report.code, missing: new Set(keys.filter((key) => !synced.has(`${report.code}::${key}`))) }))
+    .map((report) => ({
+      code: report.code,
+      missing: new Set(
+        keys.filter((key) => {
+          const at = syncedAt.get(`${report.code}::${key}`);
+          return at === undefined || at < report.syncedAt;
+        })
+      ),
+    }))
     .filter((report) => report.missing.size > 0);
 
   const result: MechanicsAnalysisRefreshResult = {

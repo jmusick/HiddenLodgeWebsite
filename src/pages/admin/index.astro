@@ -1,9 +1,16 @@
 ---
 export const prerender = false;
 
-if (!Astro.locals.isAdmin) {
-	return Astro.redirect('/');
+import { FEATURE_FLAGS } from '../../lib/feature-flags';
+
+if (Astro.locals.isAdmin) {
+	return Astro.redirect('/admin/mains');
 }
 
-return Astro.redirect('/admin/mains');
+// Rank-3 officers only get the officer modules (see OFFICER_ADMIN_PATHS in middleware.ts).
+if (Astro.locals.isOfficer && FEATURE_FLAGS.deathAnalysis) {
+	return Astro.redirect('/admin/bench');
+}
+
+return Astro.redirect('/');
 ---

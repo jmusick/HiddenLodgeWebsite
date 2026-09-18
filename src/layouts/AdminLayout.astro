@@ -11,16 +11,20 @@ const { title } = Astro.props;
 
 const currentPath = new URL(Astro.request.url).pathname;
 
-const adminModules = [
+// `officer: true` modules are also open to rank-3 officers; keep in sync with
+// OFFICER_ADMIN_PATHS in middleware.ts.
+const allAdminModules = [
 	{ href: '/admin/mains', label: 'Mains & Alts', icon: 'lucide:users' },
 	...(FEATURE_FLAGS.rosterTeams ? [{ href: '/admin/roster-teams', label: 'Roster Teams', icon: 'lucide:users-round' }] : []),
 	...(FEATURE_FLAGS.raidSignups ? [{ href: '/admin/raid-signups', label: 'Raid Signups', icon: 'lucide:calendar-plus' }] : []),
-	...(FEATURE_FLAGS.deathAnalysis ? [{ href: '/admin/log-matching', label: 'Log Matching', icon: 'lucide:scan-search' }] : []),
+	...(FEATURE_FLAGS.deathAnalysis ? [{ href: '/admin/log-matching', label: 'Log Matching', icon: 'lucide:scan-search', officer: true }] : []),
+	...(FEATURE_FLAGS.deathAnalysis ? [{ href: '/admin/bench', label: 'Bench', icon: 'lucide:armchair', officer: true }] : []),
 	...(FEATURE_FLAGS.applications ? [{ href: '/admin/applications', label: 'Applications', icon: 'lucide:clipboard-list' }] : []),
 	...(FEATURE_FLAGS.feedback ? [{ href: '/admin/feedback', label: 'Feedback', icon: 'lucide:message-square-warning' }] : []),
 	{ href: '/admin/raiding', label: 'Raiding Content', icon: 'lucide:swords' },
 	{ href: '/admin/settings', label: 'Settings', icon: 'lucide:settings' },
 ];
+const adminModules = Astro.locals.isAdmin ? allAdminModules : allAdminModules.filter((module) => module.officer);
 
 const currentAdminModule = adminModules.find((module) => currentPath.startsWith(module.href))?.label ?? 'Modules';
 ---

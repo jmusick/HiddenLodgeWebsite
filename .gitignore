@@ -35,3 +35,6 @@ pnpm-debug.log*
 
 # local agent/assistant settings
 .claude/
+
+# Local working checklist (audit findings) — not a deliverable
+TODO.md

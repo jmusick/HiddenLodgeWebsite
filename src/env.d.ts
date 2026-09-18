@@ -40,5 +40,7 @@ declare namespace App {
 		} | null;
 		isGuildMember: boolean;
 		isAdmin: boolean;
+		/** Rank 0–3 (includes admins). Unlocks the officer admin pages. */
+		isOfficer: boolean;
 	}
 }
