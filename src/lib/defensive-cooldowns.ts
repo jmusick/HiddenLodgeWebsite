@@ -80,17 +80,26 @@ const CLASS_DEFENSIVES: Record<string, DefensiveAbility[]> = {
     { abilityId: 109304, name: 'Exhilaration', cooldownSeconds: 120 },
     { abilityId: 264735, name: 'Survival of the Fittest', cooldownSeconds: 180 },
   ],
-  // Ice Cold and Alter Time are class-tree talents, available to all three
-  // specs (like Ice Block). Each spec also has its own barrier — Frost gets
-  // Ice Barrier, Fire gets Blazing Barrier, Arcane gets Prismatic Barrier —
-  // added per spec via SPEC_OVERRIDES rather than here. All three barriers
-  // share a 30s-per-charge cooldown (raised from 25s in a recent balance
-  // pass) but commonly have 2 charges via an Improved-* talent, which our
-  // simple last-cast model doesn't account for — a second banked charge can
-  // make one "available" sooner than 30s after the last cast suggests.
+  // Ice Cold is a talent choice that REPLACES Ice Block — a Mage only ever
+  // has one of the two, never both (confirmed by the user). Without talent
+  // data from WCL we can't tell which one a given player has, so they share
+  // a cooldownGroup: whichever one actually gets cast drives both entries'
+  // status, instead of the untalented one sitting at a false "Available"
+  // forever because it's never cast. Both still render as separate chips
+  // (a known imperfection — a player really only has one of them), but at
+  // least neither can show a stale, wrong "Available".
+  // Alter Time is a separate class-tree talent, available to all three
+  // specs (like Ice Block/Ice Cold). Each spec also has its own barrier —
+  // Frost gets Ice Barrier, Fire gets Blazing Barrier, Arcane gets
+  // Prismatic Barrier — added per spec via SPEC_OVERRIDES rather than here.
+  // All three barriers share a 30s-per-charge cooldown (raised from 25s in
+  // a recent balance pass) but commonly have 2 charges via an Improved-*
+  // talent, which our simple last-cast model doesn't account for — a second
+  // banked charge can make one "available" sooner than 30s after the last
+  // cast suggests.
   Mage: [
-    { abilityId: 45438, name: 'Ice Block', cooldownSeconds: 240 },
-    { abilityId: 414659, name: 'Ice Cold', cooldownSeconds: 180 },
+    { abilityId: 45438, name: 'Ice Block', cooldownSeconds: 240, cooldownGroup: 'ice-block' },
+    { abilityId: 414659, name: 'Ice Cold', cooldownSeconds: 180, cooldownGroup: 'ice-block' },
     { abilityId: 108978, name: 'Alter Time', cooldownSeconds: 60 },
   ],
   Monk: [
