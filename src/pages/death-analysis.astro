@@ -144,48 +144,87 @@ const guildRankingsUrl = 'https://www.warcraftlogs.com/guild/rankings/781707/lat
             </thead>
             <tbody>
               {review.rankings.map((row) => (
-                <tr class:list={{ flagged: row.isSignificantlyAboveAverage }}>
-                  <td data-sort-value={`${row.name.toLowerCase()} ${row.realm.toLowerCase()}`}>
-                    <div class="raider-cell">
-                      <strong style={`color: ${classColor(row.className)}`}>{row.name}</strong>
-                      <span>{row.realm}</span>
-                    </div>
-                    {row.deathLinks.length > 0 && (
-                      <details class="death-links">
-                        <summary>{row.deathLinks.length} death{row.deathLinks.length === 1 ? '' : 's'} logged</summary>
-                        <ul>
-                          {row.deathLinks.map((link) => (
-                            <li>
-                              <a
-                                href={`https://www.warcraftlogs.com/reports/${link.reportCode}#fight=${link.fightId}&type=deaths&death=${link.deathPosition}`}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                class="report-link"
-                              >
-                                {link.nightKey ? nightLabel(link.nightKey) : link.reportCode}{link.encounterName ? ` · ${link.encounterName}` : ''}
-                              </a>
-                              <span>{deathOrdinal(link.deathPosition)} death &middot; {formatDeathOffset(link.deathOffsetMs)} into pull</span>
-                            </li>
-                          ))}
-                        </ul>
-                      </details>
-                    )}
-                  </td>
-                  <td data-sort-value={String(row.reportCount)}>{row.reportCount.toLocaleString()}</td>
-                  <td data-sort-value={String(row.fightsPresent)}>{row.fightsPresent.toLocaleString()}</td>
-                  <td data-sort-value={String(row.totalDeaths)}>{row.totalDeaths.toLocaleString()}</td>
-                  <td data-sort-value={row.totalDeathRate.toFixed(6)}>{(row.totalDeathRate * 100).toFixed(1)}%</td>
-                  <td data-sort-value={String(row.firstDeathCount)}>{row.firstDeathCount.toLocaleString()}</td>
-                  <td data-sort-value={String(row.secondDeathCount)}>{row.secondDeathCount.toLocaleString()}</td>
-                  <td data-sort-value={String(row.thirdDeathCount)}>{row.thirdDeathCount.toLocaleString()}</td>
-                  <td data-sort-value={String(row.fourthDeathCount)}>{row.fourthDeathCount.toLocaleString()}</td>
-                  <td data-sort-value={row.weightedScore.toFixed(6)}>
-                    <span class="score-cell">{row.weightedScore.toFixed(2)}</span>
-                    {row.percentAboveAverage !== null && row.percentAboveAverage > 0 && (
-                      <small>{row.percentAboveAverage.toFixed(1)}% above avg</small>
-                    )}
-                  </td>
-                </tr>
+                <>
+                  <tr
+                    class:list={{ flagged: row.isSignificantlyAboveAverage }}
+                    data-detail-target={row.deathLinks.length > 0 ? `death-links-${row.blizzardCharId}` : undefined}
+                  >
+                    <td data-sort-value={`${row.name.toLowerCase()} ${row.realm.toLowerCase()}`}>
+                      <div class="raider-cell">
+                        <strong style={`color: ${classColor(row.className)}`}>{row.name}</strong>
+                        <span>{row.realm}</span>
+                      </div>
+                      {row.deathLinks.length > 0 && (
+                        <button
+                          type="button"
+                          class="death-links-toggle"
+                          aria-expanded="false"
+                          aria-controls={`death-links-${row.blizzardCharId}`}
+                        >
+                          {row.deathLinks.length} death{row.deathLinks.length === 1 ? '' : 's'} logged
+                        </button>
+                      )}
+                    </td>
+                    <td data-sort-value={String(row.reportCount)}>{row.reportCount.toLocaleString()}</td>
+                    <td data-sort-value={String(row.fightsPresent)}>{row.fightsPresent.toLocaleString()}</td>
+                    <td data-sort-value={String(row.totalDeaths)}>{row.totalDeaths.toLocaleString()}</td>
+                    <td data-sort-value={row.totalDeathRate.toFixed(6)}>{(row.totalDeathRate * 100).toFixed(1)}%</td>
+                    <td data-sort-value={String(row.firstDeathCount)}>{row.firstDeathCount.toLocaleString()}</td>
+                    <td data-sort-value={String(row.secondDeathCount)}>{row.secondDeathCount.toLocaleString()}</td>
+                    <td data-sort-value={String(row.thirdDeathCount)}>{row.thirdDeathCount.toLocaleString()}</td>
+                    <td data-sort-value={String(row.fourthDeathCount)}>{row.fourthDeathCount.toLocaleString()}</td>
+                    <td data-sort-value={row.weightedScore.toFixed(6)}>
+                      <span class="score-cell">{row.weightedScore.toFixed(2)}</span>
+                      {row.percentAboveAverage !== null && row.percentAboveAverage > 0 && (
+                        <small>{row.percentAboveAverage.toFixed(1)}% above avg</small>
+                      )}
+                    </td>
+                  </tr>
+                  {row.deathLinks.length > 0 && (
+                    <tr id={`death-links-${row.blizzardCharId}`} class="death-links-row" hidden>
+                      <td colspan={10}>
+                        <div class="death-links-panel">
+                          <table class="death-links-table">
+                            <thead>
+                              <tr>
+                                <th>Death</th>
+                                <th>Defensives available</th>
+                                <th>Healthstone / Potion</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {row.deathLinks.map((link) => (
+                                <tr
+                                  class="death-cooldown-row"
+                                  data-report-code={link.reportCode}
+                                  data-fight-id={link.fightId}
+                                  data-death-position={link.deathPosition}
+                                  data-death-offset-ms={link.deathOffsetMs}
+                                  data-blizzard-char-id={row.blizzardCharId}
+                                >
+                                  <td>
+                                    <a
+                                      href={`https://www.warcraftlogs.com/reports/${link.reportCode}#fight=${link.fightId}&type=deaths&death=${link.deathPosition}`}
+                                      target="_blank"
+                                      rel="noopener noreferrer"
+                                      class="report-link"
+                                    >
+                                      {link.nightKey ? nightLabel(link.nightKey) : link.reportCode}{link.encounterName ? ` · ${link.encounterName}` : ''}
+                                    </a>
+                                    <span>{deathOrdinal(link.deathPosition)} death &middot; {formatDeathOffset(link.deathOffsetMs)} into pull</span>
+                                  </td>
+                                  <td class="death-cooldown-defensives">—</td>
+                                  <td class="death-cooldown-consumables">—</td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                          <p class="death-cooldown-note">Defensive/consumable availability is estimated from cast history and may not reflect talent or gear cooldown reductions.</p>
+                        </div>
+                      </td>
+                    </tr>
+                  )}
+                </>
               ))}
             </tbody>
           </table>
@@ -230,6 +269,15 @@ const guildRankingsUrl = 'https://www.warcraftlogs.com/guild/rankings/781707/lat
   </div>
 </Layout>
 
+<script is:inline>
+  window.whTooltips = {
+    colorLinks: true,
+    iconizeLinks: false,
+    renameLinks: false,
+  };
+</script>
+<script is:inline src="https://wow.zamimg.com/js/tooltips.js"></script>
+
 <script>
   // @ts-nocheck
   (() => {
@@ -270,7 +318,15 @@ const guildRankingsUrl = 'https://www.warcraftlogs.com/guild/rankings/781707/lat
           }
           button.setAttribute('data-sort-dir', nextDir);
 
-          const rows = Array.from(tbody.querySelectorAll('tr'));
+          // Only direct-child rows of this tbody: querySelectorAll('tr') would
+          // also reach into the nested death-links-table's own <tr>s (inside a
+          // detail row's <td>) and reparent them here, corrupting that table.
+          // Detail rows are separate full-width <tr>s linked to their raider
+          // row via data-detail-target/id, not nested inside it, so they must
+          // be excluded from sorting and re-paired with their raider row after.
+          const rows = Array.from(tbody.children).filter(
+            (row) => row.tagName === 'TR' && !row.classList.contains('death-links-row')
+          );
           rows.sort((leftRow, rightRow) => {
             const leftCell = leftRow.children.item(colIndex);
             const rightCell = rightRow.children.item(colIndex);
@@ -295,10 +351,123 @@ const guildRankingsUrl = 'https://www.warcraftlogs.com/guild/rankings/781707/lat
 
           for (const row of rows) {
             tbody.appendChild(row);
+            const detailId = row.getAttribute('data-detail-target');
+            const detailRow = detailId ? document.getElementById(detailId) : null;
+            if (detailRow) tbody.appendChild(detailRow);
           }
         });
       }
     }
+  })();
+
+  // @ts-nocheck
+  (() => {
+    const loadedDetails = new WeakSet();
+
+    const STATUS_LABELS = { available: 'Available', on_cooldown: 'On CD', unknown: 'Unknown', not_tracked: 'Not tracked' };
+
+    /** @param {{status: string, secondsRemaining: number|null}} ability */
+    const statusText = (ability) => {
+      const label = STATUS_LABELS[ability.status] ?? 'Unknown';
+      return ability.status === 'on_cooldown' && ability.secondsRemaining ? `${label} (~${ability.secondsRemaining}s)` : label;
+    };
+
+    /** @param {{abilityId: number, name: string, status: string, secondsRemaining: number|null, iconUrl: string|null}} ability */
+    const buildChip = (ability) => {
+      // Wowhead's tooltip script (loaded below) only scans <a> tags for
+      // data-wowhead, same convention as the item links on /upgrades and
+      // /raiders/gear-summary — a plain <span> is silently ignored.
+      const chip = document.createElement(ability.abilityId > 0 ? 'a' : 'span');
+      chip.className = `cd-chip cd-chip-${ability.status}`;
+      if (ability.abilityId > 0) {
+        chip.href = `https://www.wowhead.com/spell=${ability.abilityId}`;
+        chip.target = '_blank';
+        chip.rel = 'noopener noreferrer';
+        chip.setAttribute('data-wowhead', `spell=${ability.abilityId}`);
+      }
+      if (ability.iconUrl) {
+        const img = document.createElement('img');
+        img.src = ability.iconUrl;
+        img.alt = '';
+        img.loading = 'lazy';
+        img.className = 'cd-chip-icon';
+        chip.appendChild(img);
+      }
+      const label = document.createElement('span');
+      label.className = 'cd-chip-label';
+      label.textContent = `${ability.name} · ${statusText(ability)}`;
+      chip.appendChild(label);
+      // Native title as a fallback for when the Wowhead tooltip script is blocked.
+      chip.title = `${ability.name}: ${statusText(ability)}`;
+      return chip;
+    };
+
+    /** @param {Element} container @param {Array<object>} abilities @param {string} emptyText */
+    const renderChips = (container, abilities, emptyText) => {
+      container.textContent = '';
+      if (abilities.length === 0) {
+        const empty = document.createElement('span');
+        empty.className = 'cd-empty';
+        empty.textContent = emptyText;
+        container.appendChild(empty);
+        return;
+      }
+      const wrap = document.createElement('div');
+      wrap.className = 'cd-chip-row';
+      for (const ability of abilities) wrap.appendChild(buildChip(ability));
+      container.appendChild(wrap);
+    };
+
+    /** @param {HTMLTableRowElement} row */
+    const loadCooldownRow = async (row) => {
+      const defensivesCell = row.querySelector('.death-cooldown-defensives');
+      const consumablesCell = row.querySelector('.death-cooldown-consumables');
+      if (!defensivesCell || !consumablesCell) return;
+
+      defensivesCell.textContent = 'Loading…';
+      consumablesCell.textContent = 'Loading…';
+
+      const params = new URLSearchParams({
+        reportCode: row.getAttribute('data-report-code') ?? '',
+        fightId: row.getAttribute('data-fight-id') ?? '',
+        deathPosition: row.getAttribute('data-death-position') ?? '',
+        deathOffsetMs: row.getAttribute('data-death-offset-ms') ?? '',
+        blizzardCharId: row.getAttribute('data-blizzard-char-id') ?? '',
+      });
+
+      try {
+        const response = await fetch(`/api/death-analysis/death-cooldowns?${params.toString()}`);
+        if (!response.ok) throw new Error('request failed');
+        const payload = await response.json();
+        const detail = payload?.data;
+        if (!detail) throw new Error('no data');
+
+        renderChips(defensivesCell, detail.defensives, 'No defensives tracked for this spec');
+        renderChips(consumablesCell, detail.consumables, 'No consumables tracked');
+        // Chips are inserted after tooltips.js's initial DOM scan, so it needs
+        // to be told about the new data-wowhead elements explicitly.
+        window.$WowheadPower?.refreshLinks();
+      } catch {
+        defensivesCell.textContent = 'Failed to load';
+        consumablesCell.textContent = 'Failed to load';
+      }
+    };
+
+    document.querySelectorAll('.death-links-toggle').forEach((button) => {
+      button.addEventListener('click', () => {
+        const targetId = button.getAttribute('aria-controls');
+        const detailRow = targetId ? document.getElementById(targetId) : null;
+        if (!detailRow) return;
+
+        const nowHidden = !detailRow.hidden;
+        detailRow.hidden = nowHidden;
+        button.setAttribute('aria-expanded', String(!nowHidden));
+
+        if (nowHidden || loadedDetails.has(detailRow)) return;
+        loadedDetails.add(detailRow);
+        detailRow.querySelectorAll('.death-cooldown-row').forEach((row) => loadCooldownRow(row));
+      });
+    });
   })();
 </script>
 
@@ -549,39 +718,162 @@ const guildRankingsUrl = 'https://www.warcraftlogs.com/guild/rankings/781707/lat
     font-size: 0.86rem;
   }
 
-  .death-links {
+  .death-links-toggle {
     margin-top: 0.4rem;
-  }
-
-  .death-links summary {
     cursor: pointer;
+    border: none;
+    background: transparent;
+    padding: 0;
     color: var(--gold);
+    font: inherit;
     font-size: 0.78rem;
     font-weight: 700;
     letter-spacing: 0.02em;
   }
 
-  .death-links summary:hover,
-  .death-links summary:focus-visible {
+  .death-links-toggle::after {
+    content: ' ▾';
+  }
+
+  .death-links-toggle[aria-expanded='true']::after {
+    content: ' ▴';
+  }
+
+  .death-links-toggle:hover,
+  .death-links-toggle:focus-visible {
     color: var(--gold-bright);
   }
 
-  .death-links ul {
-    list-style: none;
-    margin: 0.5rem 0 0;
-    padding: 0;
-    display: flex;
-    flex-direction: column;
-    gap: 0.4rem;
+  /* Rendered as a full-width row (colspan across every column) rather than
+     nested in the Raider cell, so the expanded death list isn't squeezed
+     into one narrow table column. */
+  .death-links-row > td {
+    padding-top: 0.9rem;
+    padding-bottom: 0.9rem;
+    background: rgba(10, 17, 26, 0.5);
   }
 
-  .death-links li {
+  .death-links-panel {
+    overflow-x: auto;
+  }
+
+  .death-links-table {
+    width: 100%;
+    min-width: 40rem;
+    border-collapse: collapse;
+    table-layout: fixed;
+  }
+
+  .death-links-table th:first-child,
+  .death-links-table td:first-child {
+    width: 15rem;
+  }
+
+  .death-links-table th,
+  .death-links-table td {
+    padding: 0.5rem 0.6rem;
+    border-top: 1px solid rgba(214, 176, 106, 0.12);
+    text-align: left;
+    vertical-align: top;
+    font-size: 0.82rem;
+  }
+
+  .death-links-table thead th {
+    border-top: none;
+    color: var(--gold-bright);
+    font-size: 0.72rem;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+  }
+
+  .death-links-table td:first-child {
     display: flex;
     flex-direction: column;
     gap: 0.05rem;
   }
 
-  .death-links li span {
+  .death-links-table td span {
+    color: var(--muted);
+    font-size: 0.78rem;
+  }
+
+  .death-cooldown-note {
+    margin: 0.5rem 0 0;
+    color: var(--muted);
+    font-size: 0.74rem;
+    font-style: italic;
+  }
+
+  /*
+   * The chip elements below are built with document.createElement() in the
+   * page's <script> (see loadCooldownRow/buildChip), not written in this
+   * component's template. Astro's default scoped-CSS attribute is only
+   * applied to elements present in the template at build time, so these
+   * rules must opt out of scoping with :global() or they silently never
+   * match the JS-created nodes (icons render at native size, chips don't
+   * lay out as pills).
+   */
+  :global(.cd-chip-row) {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.35rem;
+  }
+
+  :global(.cd-chip) {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    padding: 0.2rem 0.5rem 0.2rem 0.2rem;
+    border-radius: 999px;
+    border: 1px solid rgba(214, 176, 106, 0.25);
+    background: rgba(255, 255, 255, 0.03);
+    font-size: 0.76rem;
+    line-height: 1.3;
+    white-space: nowrap;
+    /* Chips that link to Wowhead (<a data-wowhead>) shouldn't look like plain text links. */
+    text-decoration: none;
+    cursor: default;
+  }
+
+  :global(a.cd-chip) {
+    cursor: pointer;
+  }
+
+  :global(a.cd-chip:hover),
+  :global(a.cd-chip:focus-visible) {
+    border-color: rgba(214, 176, 106, 0.5);
+  }
+
+  :global(.cd-chip-icon) {
+    width: 1.2rem;
+    height: 1.2rem;
+    min-width: 1.2rem;
+    border-radius: 0.3rem;
+    object-fit: cover;
+    flex-shrink: 0;
+    display: block;
+  }
+
+  :global(.cd-chip-available) {
+    border-color: rgba(74, 196, 116, 0.45);
+    background: rgba(74, 196, 116, 0.1);
+    color: #9fe8b6;
+  }
+
+  :global(.cd-chip-on_cooldown) {
+    border-color: rgba(196, 30, 58, 0.45);
+    background: rgba(196, 30, 58, 0.12);
+    color: #f3a3ae;
+  }
+
+  :global(.cd-chip-unknown),
+  :global(.cd-chip-not_tracked) {
+    border-color: rgba(214, 176, 106, 0.2);
+    background: rgba(255, 255, 255, 0.02);
+    color: var(--muted);
+  }
+
+  :global(.cd-empty) {
     color: var(--muted);
     font-size: 0.78rem;
   }
