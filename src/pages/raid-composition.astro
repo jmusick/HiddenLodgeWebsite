@@ -1901,12 +1901,19 @@ const clientData = {
   }
 
   .comp-controls input[type='number'] {
+    box-sizing: border-box;
     width: 5rem;
+    height: 2.3rem;
     border: 1px solid rgba(214, 176, 106, 0.3);
     border-radius: 0.45rem;
     background: rgba(12, 8, 2, 0.75);
     color: #f7efe0;
     padding: 0.35rem 0.5rem;
+  }
+
+  .comp-generate-control .action-btn {
+    box-sizing: border-box;
+    height: 2.3rem;
   }
 
   .comp-target-summary {
@@ -2257,6 +2264,12 @@ const clientData = {
     outline: none;
     border-color: #d6b06a;
     box-shadow: 0 0 0 2px rgba(214, 176, 106, 0.16);
+  }
+
+  .temp-candidate-form .action-btn {
+    box-sizing: border-box;
+    min-height: 2.35rem;
+    padding: 0.4rem 0.8rem;
   }
 
   /*
