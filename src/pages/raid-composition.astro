@@ -167,6 +167,7 @@ const clientData = {
       <div class="section-header">
         <h2>Raid Groups</h2>
         <div class="section-header-actions">
+          <button type="button" class="action-btn" id="comp-export">Export to Addon</button>
           <button type="button" class="action-btn" id="comp-clear" disabled={!isOfficer}>Clear Comp</button>
           <button type="button" class="action-btn comp-generate-btn" id="comp-generate-groups" disabled={!isOfficer}>Regenerate Comp</button>
         </div>
@@ -413,6 +414,19 @@ const clientData = {
       </div>
     </details>
   </div>
+
+  <dialog id="export-dialog" aria-labelledby="export-dialog-title">
+    <h2 id="export-dialog-title">Export to Addon</h2>
+    <p class="export-dialog-copy">
+      Copy this string and paste it into the Hidden Lodge addon's Raid Comp panel (<code>/hl raidcomp</code>) to invite missing raiders and organize raid groups to match this board.
+    </p>
+    <textarea id="export-text" readonly rows="6" aria-label="Raid comp export string"></textarea>
+    <p id="export-empty" class="export-dialog-copy" hidden>The board is empty — regenerate or place raiders in groups first.</p>
+    <div class="export-dialog-actions">
+      <button type="button" id="export-copy" class="action-btn">Copy</button>
+      <button type="button" id="export-close" class="action-btn">Close</button>
+    </div>
+  </dialog>
 </Layout>
 
 <script is:inline type="application/json" id="raid-comp-data" set:html={JSON.stringify(clientData).replace(/</g, '\\u003c')}></script>
@@ -1620,6 +1634,68 @@ const clientData = {
         for (const button of generateButtons) button.disabled = false;
       }
     });
+
+    // Addon export: a name-realm token has to survive the "-" that separates
+    // it from the group/class fields, so the realm is stripped of spaces,
+    // hyphens, and apostrophes the same way the addon normalizes realms for
+    // matching — case is kept so the string still works as an invite target.
+    function normalizeRealmForExport(realm: string): string {
+      return realm.trim().replace(/[\s'-]/g, '');
+    }
+
+    function classTokenForExport(className: string): string {
+      return className.toUpperCase().replace(/\s+/g, '');
+    }
+
+    function buildRaidCompExportString(): string {
+      const rows: string[] = [];
+      for (const [charId, group] of assignments) {
+        const raider = raiderById.get(charId);
+        if (!raider) continue;
+        const name = raider.name.trim();
+        if (!name) continue;
+        const key = raider.isTemporary ? name : `${name}-${normalizeRealmForExport(raider.realm)}`;
+        rows.push(`${key}:${group}:${classTokenForExport(raider.className)}`);
+      }
+      return `HLRC1|${rows.join(',')}`;
+    }
+
+    const exportDialog = document.getElementById('export-dialog') as HTMLDialogElement | null;
+    const exportText = document.getElementById('export-text') as HTMLTextAreaElement | null;
+    const exportEmpty = document.getElementById('export-empty') as HTMLParagraphElement | null;
+    const exportButton = document.getElementById('comp-export') as HTMLButtonElement | null;
+    const exportCopyButton = document.getElementById('export-copy') as HTMLButtonElement | null;
+    const exportCloseButton = document.getElementById('export-close') as HTMLButtonElement | null;
+
+    exportButton?.addEventListener('click', () => {
+      if (!exportDialog || !exportText || !exportEmpty) return;
+      const value = buildRaidCompExportString();
+      const isEmpty = assignments.size === 0;
+      exportText.hidden = isEmpty;
+      exportEmpty.hidden = !isEmpty;
+      exportText.value = value;
+      exportDialog.showModal();
+      if (!isEmpty) {
+        exportText.focus();
+        exportText.select();
+      }
+    });
+
+    exportCopyButton?.addEventListener('click', async () => {
+      if (!exportText) return;
+      try {
+        await navigator.clipboard.writeText(exportText.value);
+        exportCopyButton.textContent = 'Copied!';
+      } catch (error) {
+        console.error('Failed to copy raid comp export string', error);
+        exportText.select();
+      }
+      setTimeout(() => {
+        exportCopyButton.textContent = 'Copy';
+      }, 2000);
+    });
+
+    exportCloseButton?.addEventListener('click', () => exportDialog?.close());
   }
 </script>
 
@@ -1628,6 +1704,53 @@ const clientData = {
     display: flex;
     flex-direction: column;
     gap: 2rem;
+  }
+
+  #export-dialog {
+    background: var(--bg-panel, #0d1a28);
+    border: 1px solid rgba(214, 176, 106, 0.45);
+    border-radius: 0.6rem;
+    color: var(--text, #ecf2f7);
+    padding: 1.25rem 1.5rem;
+    width: min(36rem, calc(100vw - 2rem));
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.6);
+  }
+
+  #export-dialog::backdrop {
+    background: rgba(0, 0, 0, 0.65);
+  }
+
+  #export-dialog h2 {
+    margin: 0 0 0.5rem;
+    font-size: 1.1rem;
+    color: #d6b06a;
+  }
+
+  .export-dialog-copy {
+    margin: 0 0 1rem;
+    font-size: 0.9rem;
+    color: var(--muted, #8fa3b3);
+  }
+
+  #export-text {
+    width: 100%;
+    padding: 0.5rem 0.6rem;
+    border: 1px solid rgba(214, 176, 106, 0.35);
+    background: rgba(7, 14, 22, 0.85);
+    color: var(--text, #ecf2f7);
+    border-radius: 0.35rem;
+    font: inherit;
+    font-family: monospace;
+    font-size: 0.85rem;
+    resize: vertical;
+    box-sizing: border-box;
+  }
+
+  .export-dialog-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 0.5rem;
+    margin-top: 1rem;
   }
 
   .page-header {
