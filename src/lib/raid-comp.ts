@@ -1,9 +1,10 @@
 import type { D1Database } from '@cloudflare/workers-types';
 import { env } from 'cloudflare:workers';
 import { getBenchData, type BenchRaider } from './bench';
-import { ALL_RAID_BUFFS, classRaidData } from './raid-teams';
+import { ALL_RAID_BUFFS, CONFIGURABLE_RAID_BUFFS, DEFAULT_CONFIGURABLE_BUFF_MINIMUM, classRaidData } from './raid-teams';
 
 export type UtilityMinimums = Map<string, number>;
+export type BuffMinimums = Map<string, number>;
 
 // Raid Comp (Tools menu, guild members; officers edit): a shared 20-man
 // suggested comp built from Bench's own priority order. `raid_comp_settings`
@@ -247,11 +248,11 @@ function improveCoverage(picks: BuffPicks, priorityOrder: BenchRaider[], require
   }
 }
 
-function coverageRequirements(utilityMinimums: UtilityMinimums): CoverageRequirement[] {
+function coverageRequirements(utilityMinimums: UtilityMinimums, buffMinimums: BuffMinimums): CoverageRequirement[] {
   const buffRequirements = ALL_RAID_BUFFS.map((buff) => ({
-    minCount: 1,
+    minCount: CONFIGURABLE_RAID_BUFFS.includes(buff) ? buffMinimums.get(buff) ?? DEFAULT_CONFIGURABLE_BUFF_MINIMUM : 1,
     provides: (className: string) => classRaidData(className).buffs.includes(buff),
-  }));
+  })).filter((req) => req.minCount > 0);
   const utilityRequirements = [...utilityMinimums.entries()]
     .filter(([, minCount]) => minCount > 0)
     .map(([utility, minCount]) => ({
@@ -265,22 +266,29 @@ function coverageRequirements(utilityMinimums: UtilityMinimums): CoverageRequire
  * Fills tank/healer/melee-DPS/ranged-DPS quotas from the priority order (best raider first).
  * `isAbsent` raiders are never picked; `isRaidLeader` raiders are always
  * picked (bumping the lowest-priority same-role pick if the quota is
- * otherwise full). A pass then tries to swap in a raider for
- * every raid buff (minimum 1) and every utility item with an officer-set
- * minimum (e.g. "2 Demonic Gateways") that isn't yet met — see improveCoverage.
+ * otherwise full). A pass then tries to swap in a raider for every raid buff
+ * (minimum 1, except per-target buffs like Hunter's Mark which use an
+ * officer-set minimum the same as utility) and every utility item with an
+ * officer-set minimum (e.g. "2 Demonic Gateways") that isn't yet met — see
+ * improveCoverage.
  *
  * Group placement isn't a plain round-robin: tanks only ever go in groups 1
  * and 2 (alternating), healers get one per group before doubling up, and DPS
- * are placed to keep each of melee and ranged as even as possible between odd
- * and even group numbers, then across the least-loaded eligible groups.
- * Once those are full, every player beyond the 20-player standard gets their
- * own overflow group. This keeps the odd/even group split balanced (21 is
- * 5/5/5/5/1; 22 is 5/5/5/5/1/1), while no group can exceed five players.
+ * are placed to keep the summed median parse of tanks + DPS as even as
+ * possible between odd- and even-numbered groups, with melee/ranged role
+ * balance and then the least-loaded eligible group only breaking ties.
+ * Healers use the same parse-parity preference once they'd otherwise tie on
+ * headcount, so both halves of the raid end up roughly equal in total
+ * Coverage-panel-style parse. Once the four primary groups are full, every
+ * player beyond the 20-player standard gets their own overflow group. This
+ * keeps the odd/even group split balanced (21 is 5/5/5/5/1; 22 is
+ * 5/5/5/5/1/1), while no group can exceed five players.
  */
 export function buildAssignments(
   priorityOrder: BenchRaider[],
   quotas: RaidCompSettings,
-  utilityMinimums: UtilityMinimums = new Map()
+  utilityMinimums: UtilityMinimums = new Map(),
+  buffMinimums: BuffMinimums = new Map()
 ): Map<number, number> {
   const eligible = priorityOrder.filter((raider) => !raider.isAbsent);
 
@@ -305,7 +313,7 @@ export function buildAssignments(
     melee: withForced(melee, quotas.meleeDpsQuota),
     ranged: withForced(ranged, quotas.rangedDpsQuota),
   };
-  improveCoverage(picks, eligible, coverageRequirements(utilityMinimums));
+  improveCoverage(picks, eligible, coverageRequirements(utilityMinimums, buffMinimums));
 
   const finalDps: BenchRaider[] = [];
   for (let i = 0; i < Math.max(picks.melee.length, picks.ranged.length); i += 1) {
@@ -319,7 +327,10 @@ export function buildAssignments(
   const groupCapacities = new Array(groupCount).fill(1);
   groupCapacities.fill(MAX_GROUP_SIZE, 0, MIN_GROUP_COUNT);
 
-  // Tanks alternate strictly between groups 1 and 2 — never 3 or 4.
+  // Tanks alternate strictly between groups 1 and 2 — never 3 or 4. Their
+  // parse still counts toward nonHealerParitySum below, since tank/DPS parse
+  // balance is judged across the whole odd/even split, not DPS alone.
+  const nonHealerParitySum: [number, number] = [0, 0];
   let tankCursor = 0;
   for (const raider of picks.tank) {
     let skipped = 0;
@@ -331,41 +342,52 @@ export function buildAssignments(
     if (skipped >= 2) break; // both groups 1 and 2 are full
     assignments.set(raider.blizzardCharId, tankCursor + 1);
     groupCounts[tankCursor] += 1;
+    nonHealerParitySum[tankCursor % 2] += raider.parse ?? 0;
     tankCursor = tankCursor === 0 ? 1 : 0;
   }
 
-  // Healers round-robin through the four primary groups first. Overflow groups
-  // are intentionally one player each, in numerical order, after those primary
-  // groups are full.
-  let cursor = 0;
-  const roundRobin = (raiders: BenchRaider[]) => {
+  // Healers spread across the four primary groups before any group gets a
+  // second (tracked via healerCounts), same as the old plain round-robin, but
+  // when several groups are tied on healer count it now prefers whichever
+  // parity has the lower cumulative healer parse so healer strength stays
+  // balanced between odd and even groups too. Overflow groups are still one
+  // player each once the primary groups are full.
+  const healerCounts = new Array(groupCount).fill(0);
+  const healerParitySum: [number, number] = [0, 0];
+  const placeHealers = (raiders: BenchRaider[]) => {
     for (const raider of raiders) {
-      let group: number | null = null;
-      for (let offset = 0; offset < MIN_GROUP_COUNT; offset += 1) {
-        const candidate = (cursor + offset) % MIN_GROUP_COUNT;
-        if (groupCounts[candidate] < groupCapacities[candidate]) {
-          group = candidate;
-          cursor = (candidate + 1) % MIN_GROUP_COUNT;
-          break;
-        }
-      }
-      if (group === null) {
-        group = groupCounts.findIndex((count, index) => index >= MIN_GROUP_COUNT && count < groupCapacities[index]);
-      }
-      if (group === null || group < 0) return; // every configured group is full
+      const primaryCandidates = Array.from({ length: MIN_GROUP_COUNT }, (_, index) => index).filter(
+        (index) => groupCounts[index] < groupCapacities[index]
+      );
+      const candidates = primaryCandidates.length > 0
+        ? primaryCandidates
+        : groupCounts.map((_, index) => index).filter((index) => index >= MIN_GROUP_COUNT && groupCounts[index] < groupCapacities[index]);
+      if (candidates.length === 0) return;
+
+      candidates.sort((a, b) => {
+        const healerCountDelta = healerCounts[a] - healerCounts[b];
+        if (healerCountDelta !== 0) return healerCountDelta;
+        const parityDelta = healerParitySum[a % 2] - healerParitySum[b % 2];
+        if (parityDelta !== 0) return parityDelta;
+        return groupCounts[a] - groupCounts[b] || a - b;
+      });
+
+      const group = candidates[0];
       assignments.set(raider.blizzardCharId, group + 1);
       groupCounts[group] += 1;
+      healerCounts[group] += 1;
+      healerParitySum[group % 2] += raider.parse ?? 0;
     }
   };
-  roundRobin(picks.healer);
+  placeHealers(picks.healer);
 
-  // Keep melee and ranged DPS independently balanced between odd/even group
-  // numbers. A group that is already full (often due to tanks or healers) is
-  // skipped, so this is deliberately best-effort rather than a hard guarantee.
-  const dpsParityCounts: Record<'melee-dps' | 'ranged-dps', [number, number]> = {
-    'melee-dps': [0, 0],
-    'ranged-dps': [0, 0],
-  };
+  // Melee and ranged DPS are placed to prioritize keeping the whole
+  // tank/DPS parse total even between odd- and even-numbered groups
+  // (nonHealerParitySum, seeded above by the already-placed tanks); melee
+  // vs. ranged role balance within a group (dpsRoleCounts) and then total
+  // group size only break ties once parse is even. A group that is already
+  // full (often due to tanks or healers) is skipped, so this is
+  // deliberately best-effort rather than a hard guarantee.
   const dpsRoleCounts = new Map<number, Record<'melee-dps' | 'ranged-dps', number>>();
   const placeDps = (raiders: BenchRaider[]) => {
     for (const raider of raiders) {
@@ -381,9 +403,7 @@ export function buildAssignments(
       if (candidates.length === 0) return;
 
       candidates.sort((a, b) => {
-        const parityA = a % 2; // Group 1 is odd, Group 2 is even.
-        const parityB = b % 2;
-        const parityDelta = dpsParityCounts[role][parityA] - dpsParityCounts[role][parityB];
+        const parityDelta = nonHealerParitySum[a % 2] - nonHealerParitySum[b % 2]; // Group 1 is odd, Group 2 is even.
         if (parityDelta !== 0) return parityDelta;
         const roleDelta = (dpsRoleCounts.get(a)?.[role] ?? 0) - (dpsRoleCounts.get(b)?.[role] ?? 0);
         if (roleDelta !== 0) return roleDelta;
@@ -393,7 +413,7 @@ export function buildAssignments(
       const group = candidates[0];
       assignments.set(raider.blizzardCharId, group + 1);
       groupCounts[group] += 1;
-      dpsParityCounts[role][group % 2] += 1;
+      nonHealerParitySum[group % 2] += raider.parse ?? 0;
       const counts = dpsRoleCounts.get(group) ?? { 'melee-dps': 0, 'ranged-dps': 0 };
       counts[role] += 1;
       dpsRoleCounts.set(group, counts);
@@ -465,6 +485,36 @@ export async function setUtilityMinimum(
          updated_at = excluded.updated_at`
     )
     .bind(utilityName, Math.max(0, Math.floor(minimumCount)), userId)
+    .run();
+}
+
+/** Officer-set minimum providers for a per-target raid buff (see CONFIGURABLE_RAID_BUFFS); a missing row falls back to the fixed default (1). */
+export async function getBuffMinimums(dbInput?: D1Database): Promise<BuffMinimums> {
+  const db = getDatabase(dbInput);
+  const result = await db
+    .prepare('SELECT buff_name, minimum_count FROM raid_comp_buff_minimums')
+    .all<{ buff_name: string; minimum_count: number }>();
+  return new Map((result.results ?? []).map((row) => [row.buff_name, Number(row.minimum_count)]));
+}
+
+export async function setBuffMinimum(
+  dbInput: D1Database | undefined,
+  buffName: string,
+  minimumCount: number,
+  userId: number
+): Promise<void> {
+  if (!CONFIGURABLE_RAID_BUFFS.includes(buffName)) throw new Error('Not a configurable raid buff.');
+  const db = getDatabase(dbInput);
+  await db
+    .prepare(
+      `INSERT INTO raid_comp_buff_minimums (buff_name, minimum_count, updated_by_user_id, updated_at)
+       VALUES (?, ?, ?, unixepoch())
+       ON CONFLICT(buff_name) DO UPDATE SET
+         minimum_count = excluded.minimum_count,
+         updated_by_user_id = excluded.updated_by_user_id,
+         updated_at = excluded.updated_at`
+    )
+    .bind(buffName, Math.max(0, Math.floor(minimumCount)), userId)
     .run();
 }
 
@@ -549,6 +599,16 @@ function parseLoadoutUtilityMinimums(value: string): Array<[string, number]> {
   });
 }
 
+function parseLoadoutBuffMinimums(value: string): Array<[string, number]> {
+  const parsed = JSON.parse(value) as unknown;
+  if (!Array.isArray(parsed)) throw new Error('Saved loadout has invalid buff minimums.');
+  return parsed.flatMap((entry): Array<[string, number]> => {
+    if (!Array.isArray(entry) || typeof entry[0] !== 'string' || !CONFIGURABLE_RAID_BUFFS.includes(entry[0])) return [];
+    const minimum = Number(entry[1]);
+    return Number.isInteger(minimum) && minimum >= 0 ? [[entry[0], minimum]] : [];
+  });
+}
+
 function parseLoadoutManualOverrideIds(value: string): number[] {
   const parsed = JSON.parse(value) as unknown;
   if (!Array.isArray(parsed)) throw new Error('Saved loadout has invalid manual placement markers.');
@@ -599,24 +659,34 @@ export async function saveRaidCompLoadout(dbInput: D1Database | undefined, rawNa
   const name = rawName.trim();
   if (name.length < 1 || name.length > 80) throw new Error('Loadout names must be between 1 and 80 characters.');
   const db = getDatabase(dbInput);
-  const [settings, utilityMinimums, assignments, manualOverrideIds] = await Promise.all([
+  const [settings, utilityMinimums, buffMinimums, assignments, manualOverrideIds] = await Promise.all([
     getRaidCompSettings(db),
     getUtilityMinimums(db),
+    getBuffMinimums(db),
     getRaidCompAssignments(db),
     getRaidCompManualOverrideIds(db),
   ]);
   await db
     .prepare(
-      `INSERT INTO raid_comp_loadouts (name, settings_json, utility_minimums_json, manual_override_ids_json, created_by_user_id, updated_by_user_id, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, unixepoch(), unixepoch())
+      `INSERT INTO raid_comp_loadouts (name, settings_json, utility_minimums_json, buff_minimums_json, manual_override_ids_json, created_by_user_id, updated_by_user_id, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, unixepoch(), unixepoch())
        ON CONFLICT(name) DO UPDATE SET
          settings_json = excluded.settings_json,
          utility_minimums_json = excluded.utility_minimums_json,
+         buff_minimums_json = excluded.buff_minimums_json,
          manual_override_ids_json = excluded.manual_override_ids_json,
          updated_by_user_id = excluded.updated_by_user_id,
          updated_at = excluded.updated_at`
     )
-    .bind(name, JSON.stringify(settings), JSON.stringify([...utilityMinimums.entries()]), JSON.stringify([...manualOverrideIds]), userId, userId)
+    .bind(
+      name,
+      JSON.stringify(settings),
+      JSON.stringify([...utilityMinimums.entries()]),
+      JSON.stringify([...buffMinimums.entries()]),
+      JSON.stringify([...manualOverrideIds]),
+      userId,
+      userId
+    )
     .run();
   const loadout = await db.prepare('SELECT id FROM raid_comp_loadouts WHERE name = ?').bind(name).first<{ id: number }>();
   if (!loadout) throw new Error('Could not save the loadout.');
@@ -634,12 +704,13 @@ export async function saveRaidCompLoadout(dbInput: D1Database | undefined, rawNa
 export async function loadRaidCompLoadout(dbInput: D1Database | undefined, loadoutId: number, userId: number): Promise<string> {
   const db = getDatabase(dbInput);
   const loadout = await db
-    .prepare('SELECT name, settings_json, utility_minimums_json, manual_override_ids_json FROM raid_comp_loadouts WHERE id = ?')
+    .prepare('SELECT name, settings_json, utility_minimums_json, buff_minimums_json, manual_override_ids_json FROM raid_comp_loadouts WHERE id = ?')
     .bind(loadoutId)
-    .first<{ name: string; settings_json: string; utility_minimums_json: string; manual_override_ids_json: string }>();
+    .first<{ name: string; settings_json: string; utility_minimums_json: string; buff_minimums_json: string; manual_override_ids_json: string }>();
   if (!loadout) throw new Error('Saved loadout not found.');
   const settings = parseLoadoutSettings(loadout.settings_json);
   const utilityMinimums = parseLoadoutUtilityMinimums(loadout.utility_minimums_json);
+  const buffMinimums = parseLoadoutBuffMinimums(loadout.buff_minimums_json);
   const manualOverrideIds = parseLoadoutManualOverrideIds(loadout.manual_override_ids_json);
   const assignmentResult = await db
     .prepare('SELECT blizzard_char_id, raid_group FROM raid_comp_loadout_assignments WHERE loadout_id = ?')
@@ -653,6 +724,12 @@ export async function loadRaidCompLoadout(dbInput: D1Database | undefined, loado
       db
         .prepare('INSERT INTO raid_comp_utility_minimums (utility_name, minimum_count, updated_by_user_id, updated_at) VALUES (?, ?, ?, unixepoch())')
         .bind(utility, minimum, userId)
+    ),
+    db.prepare('DELETE FROM raid_comp_buff_minimums'),
+    ...buffMinimums.map(([buff, minimum]) =>
+      db
+        .prepare('INSERT INTO raid_comp_buff_minimums (buff_name, minimum_count, updated_by_user_id, updated_at) VALUES (?, ?, ?, unixepoch())')
+        .bind(buff, minimum, userId)
     ),
     db.prepare('DELETE FROM raid_comp_assignments'),
     ...assignments.map((assignment) =>
@@ -811,9 +888,9 @@ export async function swapRaidCompAssignments(
 /** Saves the given settings, then rebuilds and persists the whole board from Bench's current priority order. */
 export async function regenerateRaidComp(dbInput: D1Database | undefined, settings: RaidCompSettings, userId: number): Promise<void> {
   const db = getDatabase(dbInput);
-  const [bench, utilityMinimums] = await Promise.all([getBenchData(db), getUtilityMinimums(db)]);
+  const [bench, utilityMinimums, buffMinimums] = await Promise.all([getBenchData(db), getUtilityMinimums(db), getBuffMinimums(db)]);
   const priorityOrder = rankByPriority(bench.ranked, settings);
-  const assignments = buildAssignments(priorityOrder, settings, utilityMinimums);
+  const assignments = buildAssignments(priorityOrder, settings, utilityMinimums, buffMinimums);
 
   const statements = [
     db

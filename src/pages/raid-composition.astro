@@ -4,8 +4,8 @@ export const prerender = false;
 import Layout from '../layouts/Layout.astro';
 import { env } from 'cloudflare:workers';
 import { BENCH_PARSE_DIFFICULTY, getBenchData, type BenchRaider } from '../lib/bench';
-import { getRaidCompAssignments, getRaidCompLoadouts, getRaidCompManualOverrideIds, getRaidCompSettings, getTempRaidCompCandidates, getUtilityMinimums } from '../lib/raid-comp';
-import { ALL_UTILITY } from '../lib/raid-teams';
+import { getBuffMinimums, getRaidCompAssignments, getRaidCompLoadouts, getRaidCompManualOverrideIds, getRaidCompSettings, getTempRaidCompCandidates, getUtilityMinimums } from '../lib/raid-comp';
+import { ALL_UTILITY, CONFIGURABLE_RAID_BUFFS, DEFAULT_CONFIGURABLE_BUFF_MINIMUM } from '../lib/raid-teams';
 import { DEATH_ANALYSIS_RAID_NAME } from '../lib/death-analysis';
 import { FEATURE_FLAGS } from '../lib/feature-flags';
 import { CLASS_COLORS, classColor } from '../lib/wow';
@@ -19,12 +19,13 @@ if (!Astro.locals.isGuildMember) {
 }
 
 const isOfficer = Astro.locals.isOfficer;
-const [bench, settings, assignments, manualOverrideIds, utilityMinimums, temporaryCandidates, loadouts] = await Promise.all([
+const [bench, settings, assignments, manualOverrideIds, utilityMinimums, buffMinimums, temporaryCandidates, loadouts] = await Promise.all([
   getBenchData(env.DB),
   getRaidCompSettings(env.DB),
   getRaidCompAssignments(env.DB),
   getRaidCompManualOverrideIds(env.DB),
   getUtilityMinimums(env.DB),
+  getBuffMinimums(env.DB),
   getTempRaidCompCandidates(env.DB),
   getRaidCompLoadouts(env.DB),
 ]);
@@ -98,6 +99,7 @@ const clientData = {
   settings,
   isOfficer,
   utilityMinimums: ALL_UTILITY.map((utility) => [utility, utilityMinimums.get(utility) ?? 0] as [string, number]),
+  buffMinimums: CONFIGURABLE_RAID_BUFFS.map((buff) => [buff, buffMinimums.get(buff) ?? DEFAULT_CONFIGURABLE_BUFF_MINIMUM] as [string, number]),
 };
 ---
 
@@ -202,6 +204,7 @@ const clientData = {
         </div>
       )}
       <p id="comp-quota-warning" class="comp-quota-warning" role="status" aria-live="polite" hidden></p>
+      <div id="comp-parity-summary" class="comp-parity-summary"></div>
       <div class="comp-groups" id="comp-groups"></div>
     </section>
 
@@ -262,11 +265,6 @@ const clientData = {
         <div class="coverage-col">
           <h3>Raid Buffs</h3>
           <ul id="coverage-buffs"></ul>
-        </div>
-        <div class="coverage-col">
-          <h3>Healer Cooldowns</h3>
-          <ul id="coverage-healer-cds"></ul>
-          <p id="coverage-healer-cds-empty" class="empty-state" hidden>No healers placed yet.</p>
         </div>
         <div class="coverage-col">
           <h3>Utility</h3>
@@ -420,7 +418,7 @@ const clientData = {
 <script is:inline type="application/json" id="raid-comp-data" set:html={JSON.stringify(clientData).replace(/</g, '\\u003c')}></script>
 
 <script>
-  import { computeTeamSummary, classRaidData, ALL_RAID_BUFFS, ALL_UTILITY, type AssignedRole } from '../lib/raid-teams';
+  import { computeTeamSummary, classRaidData, ALL_RAID_BUFFS, ALL_UTILITY, CONFIGURABLE_RAID_BUFFS, DEFAULT_CONFIGURABLE_BUFF_MINIMUM, type AssignedRole } from '../lib/raid-teams';
 
   type Role = 'dps' | 'healer' | 'tank';
   type MechanicRole = 'tank' | 'healer' | 'melee' | 'ranged';
@@ -471,6 +469,7 @@ const clientData = {
     };
     isOfficer: boolean;
     utilityMinimums: Array<[string, number]>;
+    buffMinimums: Array<[string, number]>;
   }
 
   const ROLE_LABELS: Record<Role, string> = { dps: 'DPS', healer: 'Healer', tank: 'Tank' };
@@ -684,6 +683,7 @@ const clientData = {
   const compCounts = document.getElementById('comp-counts') as HTMLParagraphElement;
   const compSaveError = document.getElementById('comp-save-error') as HTMLParagraphElement;
   const compQuotaWarning = document.getElementById('comp-quota-warning') as HTMLParagraphElement;
+  const compParitySummary = document.getElementById('comp-parity-summary') as HTMLDivElement;
   const compGroupsEl = document.getElementById('comp-groups') as HTMLDivElement;
   const compBenchEls: Record<AssignedRole, HTMLUListElement> = {
     tank: document.getElementById('comp-bench-tank') as HTMLUListElement,
@@ -697,11 +697,10 @@ const clientData = {
   for (const el of Object.values(compBenchEls)) registerDropZone(el, 'bench');
   const coverageRolesEl = document.getElementById('coverage-roles') as HTMLUListElement;
   const coverageBuffsEl = document.getElementById('coverage-buffs') as HTMLUListElement;
-  const coverageHealerCdsEl = document.getElementById('coverage-healer-cds') as HTMLUListElement;
-  const coverageHealerCdsEmpty = document.getElementById('coverage-healer-cds-empty') as HTMLParagraphElement;
   const coverageUtilityEl = document.getElementById('coverage-utility') as HTMLUListElement;
 
   const utilityMinimums = new Map<string, number>(data.utilityMinimums);
+  const buffMinimums = new Map<string, number>(data.buffMinimums);
 
   async function saveUtilityMinimum(utility: string, minimum: number): Promise<boolean> {
     try {
@@ -713,6 +712,20 @@ const clientData = {
       return response.ok;
     } catch (error) {
       console.error('Failed to save utility minimum', error);
+      return false;
+    }
+  }
+
+  async function saveBuffMinimum(buff: string, minimum: number): Promise<boolean> {
+    try {
+      const response = await fetch('/api/raid-composition/buff-minimum', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ buff, minimum }),
+      });
+      return response.ok;
+    } catch (error) {
+      console.error('Failed to save buff minimum', error);
       return false;
     }
   }
@@ -867,10 +880,17 @@ const clientData = {
     if (raiderBuffs.length === 0) {
       reasons.push(`${raider.className} doesn't provide a raid buff, so buff coverage wasn't a factor.`);
     } else {
-      const covered = raiderBuffs.filter((buff) => inComp.some((r) => classRaidData(r.className).buffs.includes(buff)));
-      const uncovered = raiderBuffs.filter((buff) => !covered.includes(buff));
-      if (covered.length > 0) reasons.push(`Provides ${covered.join(', ')} — already covered by someone in the comp (buff-redundant).`);
-      if (uncovered.length > 0) reasons.push(`Would add ${uncovered.join(', ')}, which nobody in the comp currently provides.`);
+      for (const buff of raiderBuffs) {
+        const min = CONFIGURABLE_RAID_BUFFS.includes(buff) ? buffMinimums.get(buff) ?? DEFAULT_CONFIGURABLE_BUFF_MINIMUM : 1;
+        if (min <= 0) continue;
+        const count = inComp.filter((r) => classRaidData(r.className).buffs.includes(buff)).length;
+        const minSuffix = min > 1 ? ` (minimum ${min})` : '';
+        reasons.push(
+          count >= min
+            ? `Provides ${buff}${minSuffix} — already covered by someone in the comp (buff-redundant).`
+            : `Would add ${buff}${minSuffix} — the comp only has ${count} of the required ${min}.`
+        );
+      }
     }
 
     const raiderUtility = classRaidData(raider.className).utility;
@@ -964,7 +984,7 @@ const clientData = {
     tag.textContent = temporaryIds.has(raider.blizzardCharId)
       ? `${ROLE_TAG_LABELS[naturalRole(raider)]} · Temporary`
       : scoredIds.has(raider.blizzardCharId)
-        ? ROLE_TAG_LABELS[naturalRole(raider)]
+        ? `${ROLE_TAG_LABELS[naturalRole(raider)]} · Parse ${(raider.parse ?? 0).toFixed(1)}`
         : `${ROLE_TAG_LABELS[naturalRole(raider)]} · Not scored`;
     if (temporaryIds.has(raider.blizzardCharId)) li.classList.add('is-temporary');
     else if (!scoredIds.has(raider.blizzardCharId)) li.classList.add('is-unscored');
@@ -1097,6 +1117,11 @@ const clientData = {
     const countsLine = document.createElement('p');
     countsLine.className = 'comp-group-counts';
     countsLine.textContent = `${counts.tank}T · ${counts.healer}H · ${counts['melee-dps']}M · ${counts['ranged-dps']}R`;
+    const healerParseSum = members.filter((raider) => naturalRole(raider) === 'healer').reduce((sum, raider) => sum + (raider.parse ?? 0), 0);
+    const nonHealerParseSum = members.filter((raider) => naturalRole(raider) !== 'healer').reduce((sum, raider) => sum + (raider.parse ?? 0), 0);
+    const parseLine = document.createElement('p');
+    parseLine.className = 'comp-group-parse';
+    parseLine.textContent = `Tank/DPS Parse: ${nonHealerParseSum.toFixed(1)} · Healer Parse: ${healerParseSum.toFixed(1)}`;
     const list = document.createElement('ul');
     list.className = 'comp-chip-list';
     registerDropZone(list, groupNumber);
@@ -1104,7 +1129,7 @@ const clientData = {
       (a, b) => ROLE_ORDER.indexOf(naturalRole(a)) - ROLE_ORDER.indexOf(naturalRole(b)) || a.name.localeCompare(b.name)
     );
     list.append(...sorted.map((raider) => chipElement(raider, groupNumber)));
-    card.append(heading, countsLine, list);
+    card.append(heading, countsLine, parseLine, list);
     return card;
   }
 
@@ -1135,6 +1160,29 @@ const clientData = {
     compQuotaWarning.hidden = quotaWarnings.length === 0;
     compQuotaWarning.textContent = quotaWarnings.length > 0 ? `Quota warning — ${quotaWarnings.join(' · ')}` : '';
 
+    const sumParse = (members: Raider[], predicate: (raider: Raider) => boolean) =>
+      members.filter(predicate).reduce((sum, raider) => sum + (raider.parse ?? 0), 0);
+    const oddMembers = groups.filter((_, index) => (index + 1) % 2 === 1).flat();
+    const evenMembers = groups.filter((_, index) => (index + 1) % 2 === 0).flat();
+    const isHealer = (raider: Raider) => naturalRole(raider) === 'healer';
+    const isNotHealer = (raider: Raider) => !isHealer(raider);
+    const parityStat = (label: string, oddValue: number, evenValue: number): HTMLElement => {
+      const stat = document.createElement('div');
+      stat.className = 'comp-parity-stat';
+      const statLabel = document.createElement('span');
+      statLabel.className = 'comp-parity-label';
+      statLabel.textContent = label;
+      const statValue = document.createElement('span');
+      statValue.className = 'comp-parity-value';
+      statValue.textContent = `Odd ${oddValue.toFixed(1)} · Even ${evenValue.toFixed(1)} · Δ ${Math.abs(oddValue - evenValue).toFixed(1)}`;
+      stat.append(statLabel, statValue);
+      return stat;
+    };
+    compParitySummary.replaceChildren(
+      parityStat('Tank/DPS Parse', sumParse(oddMembers, isNotHealer), sumParse(evenMembers, isNotHealer)),
+      parityStat('Healer Parse', sumParse(oddMembers, isHealer), sumParse(evenMembers, isHealer))
+    );
+
     compGroupsEl.replaceChildren(...groups.map((members, index) => renderCompGroup(index + 1, members)));
 
     for (const role of ROLE_ORDER) {
@@ -1149,7 +1197,14 @@ const clientData = {
     coverageRolesEl.replaceChildren(
       ...ROLE_ORDER.map((role) => {
         const li = document.createElement('li');
-        li.textContent = `${ROLE_TAG_LABELS[role]}: ${summary.roleCounts[role]}`;
+        li.className = 'coverage-row';
+        const name = document.createElement('span');
+        name.className = 'coverage-name';
+        name.textContent = ROLE_TAG_LABELS[role];
+        const badge = document.createElement('span');
+        badge.className = 'coverage-badge';
+        badge.textContent = String(summary.roleCounts[role]);
+        li.append(name, badge);
         return li;
       })
     );
@@ -1158,24 +1213,47 @@ const clientData = {
       ...ALL_RAID_BUFFS.map((buff) => {
         const li = document.createElement('li');
         const count = summary.raidBuffCounts.find((entry) => entry.buff === buff)?.count ?? 0;
-        li.textContent = count > 0 ? `${buff} (${count})` : `${buff} — missing`;
-        li.className = count > 0 ? 'coverage-ok' : 'coverage-missing';
-        return li;
-      })
-    );
+        const isConfigurable = CONFIGURABLE_RAID_BUFFS.includes(buff);
+        const minimum = isConfigurable ? buffMinimums.get(buff) ?? DEFAULT_CONFIGURABLE_BUFF_MINIMUM : 1;
+        const covered = minimum === 0 || count >= minimum;
+        li.className = covered ? 'coverage-row coverage-ok' : 'coverage-row coverage-missing';
+        const dot = document.createElement('span');
+        dot.className = 'coverage-dot';
+        const name = document.createElement('span');
+        name.className = 'coverage-name';
+        name.textContent = isConfigurable ? `${buff}: ${count}` : buff;
+        li.append(dot, name);
 
-    const healers = allEntries.filter((raider) => naturalRole(raider) === 'healer');
-    const healerCooldowns = [...new Set(healers.flatMap((raider) => classRaidData(raider.className).healerCooldowns))].sort((a, b) =>
-      a.localeCompare(b)
-    );
-    coverageHealerCdsEl.replaceChildren(
-      ...healerCooldowns.map((cooldown) => {
-        const li = document.createElement('li');
-        li.textContent = cooldown;
+        if (isConfigurable) {
+          const minInput = document.createElement('input');
+          minInput.type = 'number';
+          minInput.min = '0';
+          minInput.max = '8';
+          minInput.value = String(minimum);
+          minInput.className = 'coverage-buff-min';
+          minInput.disabled = !data.isOfficer;
+          minInput.setAttribute('aria-label', `Minimum ${buff} targets`);
+          minInput.title = 'Minimum targets marked this fight (e.g. 3 on a multi-target fight) — Regenerate will try to guarantee this many providers.';
+          minInput.addEventListener('change', () => {
+            const next = Math.max(0, Math.floor(Number(minInput.value) || 0));
+            minInput.value = String(next);
+            buffMinimums.set(buff, next);
+            renderComp();
+            void saveBuffMinimum(buff, next).then((ok) => {
+              if (ok) return;
+              showSaveError('Failed to save that minimum — reload and try again.');
+            });
+          });
+          li.append(minInput);
+        } else {
+          const badge = document.createElement('span');
+          badge.className = 'coverage-badge';
+          badge.textContent = count > 0 ? String(count) : 'missing';
+          li.append(badge);
+        }
         return li;
       })
     );
-    coverageHealerCdsEmpty.hidden = healers.length > 0;
 
     coverageUtilityEl.replaceChildren(
       ...ALL_UTILITY.map((utility) => {
@@ -1184,8 +1262,9 @@ const clientData = {
         const count = summary.utilityCounts.find((entry) => entry.utility === utility)?.count ?? 0;
         const minimum = utilityMinimums.get(utility) ?? 0;
         const label = document.createElement('span');
+        label.className = 'coverage-name';
         label.textContent = `${utility}: ${count}`;
-        if (minimum > 0 && count < minimum) label.className = 'coverage-missing';
+        if (minimum > 0 && count < minimum) label.classList.add('coverage-missing');
         const minInput = document.createElement('input');
         minInput.type = 'number';
         minInput.min = '0';
@@ -2159,6 +2238,41 @@ const clientData = {
     font-weight: 700;
   }
 
+  .comp-parity-summary {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.75rem;
+    margin: 0 0 0.9rem;
+  }
+
+  .comp-parity-summary:empty {
+    display: none;
+  }
+
+  :global(.comp-parity-stat) {
+    flex: 1 1 14rem;
+    border: 1px solid rgba(214, 176, 106, 0.2);
+    border-radius: 0.55rem;
+    padding: 0.5rem 0.75rem;
+    background: rgba(12, 8, 2, 0.4);
+    display: flex;
+    flex-direction: column;
+    gap: 0.15rem;
+  }
+
+  :global(.comp-parity-label) {
+    color: #f2dfb5;
+    font-size: 0.78rem;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+  }
+
+  :global(.comp-parity-value) {
+    color: #e8dcc4;
+    font-size: 0.88rem;
+    font-variant-numeric: tabular-nums;
+  }
+
   .comp-groups {
     display: grid;
     grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -2186,9 +2300,16 @@ const clientData = {
   }
 
   :global(.comp-group-counts) {
-    margin: 0.2rem 0 0.6rem;
+    margin: 0.2rem 0 0.2rem;
     color: #aea99f;
     font-size: 0.8rem;
+    font-variant-numeric: tabular-nums;
+  }
+
+  :global(.comp-group-parse) {
+    margin: 0 0 0.6rem;
+    color: #8f8a80;
+    font-size: 0.76rem;
     font-variant-numeric: tabular-nums;
   }
 
@@ -2421,14 +2542,25 @@ const clientData = {
 
   .coverage-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr));
-    gap: 1.25rem;
+    grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr));
+    gap: 1rem;
+  }
+
+  .coverage-col {
+    border: 1px solid rgba(214, 176, 106, 0.15);
+    border-radius: 0.6rem;
+    background: rgba(12, 8, 2, 0.35);
+    padding: 0.85rem 0.9rem;
   }
 
   .coverage-col h3 {
-    margin: 0 0 0.4rem;
+    margin: 0 0 0.6rem;
+    padding-bottom: 0.4rem;
+    border-bottom: 1px solid rgba(214, 176, 106, 0.2);
     color: #f2dfb5;
-    font-size: 0.95rem;
+    font-size: 0.9rem;
+    letter-spacing: 0.03em;
+    text-transform: uppercase;
   }
 
   .coverage-col ul {
@@ -2437,9 +2569,51 @@ const clientData = {
     padding: 0;
     display: flex;
     flex-direction: column;
-    gap: 0.2rem;
+    gap: 0.25rem;
     font-size: 0.88rem;
     color: #e8dcc4;
+  }
+
+  .coverage-col :global(.coverage-row) {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.3rem 0.45rem;
+    border-radius: 0.4rem;
+    background: rgba(255, 255, 255, 0.02);
+  }
+
+  .coverage-col :global(.coverage-dot) {
+    width: 0.5rem;
+    height: 0.5rem;
+    border-radius: 50%;
+    flex: 0 0 auto;
+    background: #6a9c6f;
+  }
+
+  .coverage-col :global(.coverage-missing .coverage-dot) {
+    background: #c46a6a;
+  }
+
+  .coverage-col :global(.coverage-name) {
+    flex: 1;
+  }
+
+  .coverage-col :global(.coverage-badge) {
+    flex: 0 0 auto;
+    min-width: 1.5rem;
+    text-align: center;
+    padding: 0.05rem 0.4rem;
+    border-radius: 999px;
+    font-size: 0.76rem;
+    font-variant-numeric: tabular-nums;
+    background: rgba(106, 156, 111, 0.18);
+    color: #bfe3c2;
+  }
+
+  .coverage-col :global(.coverage-missing .coverage-badge) {
+    background: rgba(196, 106, 106, 0.18);
+    color: #e6b0b0;
   }
 
   .coverage-col :global(.coverage-missing) {
@@ -2451,9 +2625,13 @@ const clientData = {
     align-items: center;
     justify-content: space-between;
     gap: 0.5rem;
+    padding: 0.3rem 0.45rem;
+    border-radius: 0.4rem;
+    background: rgba(255, 255, 255, 0.02);
   }
 
-  .coverage-col :global(.coverage-utility-min) {
+  .coverage-col :global(.coverage-utility-min),
+  .coverage-col :global(.coverage-buff-min) {
     width: 3rem;
     border: 1px solid rgba(214, 176, 106, 0.3);
     border-radius: 0.35rem;

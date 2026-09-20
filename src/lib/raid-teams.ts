@@ -6,7 +6,6 @@ export interface ClassRaidData {
   buffs: string[];
   /** Non-stat raid utility (battle rez, summons/gateways, healthstones) — tracked separately since, unlike buffs, coverage is fight-specific rather than "always want at least one". */
   utility: string[];
-  healerCooldowns: string[];
   token: TokenGroup;
 }
 
@@ -32,79 +31,66 @@ const CLASS_RAID_DATA: Record<string, ClassRaidData> = {
   'Death Knight': {
     buffs: [],
     utility: ['Battle Resurrection'],
-    healerCooldowns: [],
     token: 'Plate',
   },
   'Demon Hunter': {
     buffs: ['Chaos Brand'],
     utility: [],
-    healerCooldowns: [],
     token: 'Leather',
   },
   Druid: {
     buffs: ['Mark of the Wild'],
     utility: ['Battle Resurrection'],
-    healerCooldowns: ['Tranquility'],
     token: 'Leather',
   },
   Evoker: {
     buffs: ['Blessing of the Bronze', 'Bloodlust/Heroism'],
     utility: [],
-    healerCooldowns: ['Rewind'],
     token: 'Mail',
   },
   Hunter: {
-    buffs: ['Bloodlust/Heroism'],
+    buffs: ['Bloodlust/Heroism', "Hunter's Mark"],
     utility: [],
-    healerCooldowns: [],
     token: 'Mail',
   },
   Mage: {
     buffs: ['Arcane Intellect', 'Bloodlust/Heroism'],
     utility: [],
-    healerCooldowns: [],
     token: 'Cloth',
   },
   Monk: {
     buffs: ['Mystic Touch'],
     utility: [],
-    healerCooldowns: ['Revival'],
     token: 'Leather',
   },
   Paladin: {
     buffs: [],
     utility: [],
-    healerCooldowns: ['Aura Mastery'],
     token: 'Plate',
   },
   Priest: {
     buffs: ['Power Word: Fortitude'],
     utility: [],
-    healerCooldowns: ['Power Word: Barrier', 'Divine Hymn'],
     token: 'Cloth',
   },
   Rogue: {
     buffs: ['Atrophic Poison'],
     utility: [],
-    healerCooldowns: [],
     token: 'Leather',
   },
   Shaman: {
     buffs: ['Bloodlust/Heroism'],
     utility: [],
-    healerCooldowns: ['Spirit Link Totem', 'Healing Tide Totem'],
     token: 'Mail',
   },
   Warlock: {
     buffs: [],
     utility: ['Healthstones', 'Summoning Gateway', 'Demonic Gateway', 'Battle Resurrection'],
-    healerCooldowns: [],
     token: 'Cloth',
   },
   Warrior: {
     buffs: ['Battle Shout'],
     utility: [],
-    healerCooldowns: ['Rallying Cry'],
     token: 'Plate',
   },
 };
@@ -117,6 +103,16 @@ export const ALL_UTILITY = [...new Set(Object.values(CLASS_RAID_DATA).flatMap((d
   a.localeCompare(b)
 );
 
+/**
+ * Raid buffs that apply per-target (e.g. Hunter's Mark) rather than to the
+ * whole raid, so a fixed "at least 1" requirement is wrong on multi-target
+ * fights. Officers can raise the minimum per buff the same way they do for
+ * utility items; every other raid buff keeps a fixed minimum of 1.
+ */
+export const CONFIGURABLE_RAID_BUFFS = ["Hunter's Mark"];
+
+export const DEFAULT_CONFIGURABLE_BUFF_MINIMUM = 1;
+
 const RAID_BUFF_DESCRIPTIONS: Record<string, string> = {
   'Arcane Intellect': 'Increases Intellect for all raid members.',
   'Atrophic Poison': 'Reduces enemies\' physical damage dealt while the poison is active.',
@@ -124,6 +120,7 @@ const RAID_BUFF_DESCRIPTIONS: Record<string, string> = {
   'Blessing of the Bronze': 'Increases movement speed and extends major movement cooldowns.',
   'Bloodlust/Heroism': 'Provides a temporary haste increase for the group.',
   'Chaos Brand': 'Increases magic damage taken by targets hit by the raid.',
+  "Hunter's Mark": 'Increases damage taken by the marked target from all sources.',
   'Mark of the Wild': 'Increases Versatility for all raid members.',
   'Mystic Touch': 'Increases physical damage taken by targets hit by the raid.',
   'Power Word: Fortitude': 'Increases Stamina for all raid members.',
@@ -151,7 +148,7 @@ export function normalizeAssignedRole(value: string | null | undefined): Assigne
 }
 
 export function classRaidData(className: string): ClassRaidData {
-  return CLASS_RAID_DATA[className] ?? { buffs: [], utility: [], healerCooldowns: [], token: 'Unknown' };
+  return CLASS_RAID_DATA[className] ?? { buffs: [], utility: [], token: 'Unknown' };
 }
 
 export function tokenArmorType(token: TokenGroup): string {
