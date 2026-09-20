@@ -5,6 +5,7 @@ import Layout from '../layouts/Layout.astro';
 import { Icon } from 'astro-icon/components';
 import {
   DEATH_ANALYSIS_RAID_NAME,
+  DEATH_ANALYSIS_RECENCY_HALF_LIFE_DAYS,
   DEATH_ANALYSIS_WINDOW_DAYS,
   getDeathAnalysisSummary,
   raidWindowForNight,
@@ -54,6 +55,7 @@ const guildRankingsUrl = 'https://www.warcraftlogs.com/guild/rankings/781707/lat
           <span class="scope-badge">Raid: {DEATH_ANALYSIS_RAID_NAME} (Heroic/Mythic)</span>
           <span class="scope-badge">Thu/Fri 9pm–midnight ET</span>
           <span class="scope-badge">Last {DEATH_ANALYSIS_WINDOW_DAYS} days</span>
+          <span class="scope-badge">Recent logs weighted more</span>
         </div>
         <p class="page-desc">
           Tracks excessive deaths on our Thursday and Friday raid nights by weighting early deaths in each Heroic or Mythic {DEATH_ANALYSIS_RAID_NAME} boss pull. When several people log the same night, only one report counts.
@@ -96,11 +98,15 @@ const guildRankingsUrl = 'https://www.warcraftlogs.com/guild/rankings/781707/lat
       <div class="formula-grid">
         <div>
           <span class="formula-label">Weighted score</span>
-          <p><strong>(4 × first deaths + 3 × second + 2 × third + 1 × fourth) / pulls attended</strong></p>
+          <p><strong>Recency-weighted (4 × first + 3 × second + 2 × third + 1 × fourth) / recency-weighted pulls</strong></p>
         </div>
         <div>
           <span class="formula-label">Death rate</span>
-          <p><strong>counted deaths / pulls attended</strong></p>
+          <p><strong>Recency-weighted counted deaths / recency-weighted pulls</strong></p>
+        </div>
+        <div>
+          <span class="formula-label">Recent-log weighting</span>
+          <p>Each report’s weight halves every {DEATH_ANALYSIS_RECENCY_HALF_LIFE_DAYS} days: <strong>100%</strong> today, <strong>50%</strong> at {DEATH_ANALYSIS_RECENCY_HALF_LIFE_DAYS} days, and <strong>25%</strong> at {DEATH_ANALYSIS_WINDOW_DAYS} days. This lets sustained improvements surface sooner while every report in the window still counts.</p>
         </div>
         <div>
           <span class="formula-label">Filter</span>
@@ -622,8 +628,8 @@ const guildRankingsUrl = 'https://www.warcraftlogs.com/guild/rankings/781707/lat
 
   .formula-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr));
-    gap: 0.9rem;
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    gap: 0.75rem;
   }
 
   .formula-grid p {
@@ -889,6 +895,12 @@ const guildRankingsUrl = 'https://www.warcraftlogs.com/guild/rankings/781707/lat
     color: var(--muted);
   }
 
+  @media (max-width: 1100px) {
+    .formula-grid {
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
+  }
+
   @media (max-width: 720px) {
     .page-header {
       flex-direction: column;
@@ -903,6 +915,10 @@ const guildRankingsUrl = 'https://www.warcraftlogs.com/guild/rankings/781707/lat
 
     .content-section {
       padding: 1rem;
+    }
+
+    .formula-grid {
+      grid-template-columns: 1fr;
     }
 
     .review-table {

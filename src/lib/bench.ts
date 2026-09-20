@@ -1,6 +1,14 @@
 import type { D1Database } from '@cloudflare/workers-types';
 import { env } from 'cloudflare:workers';
-import { WclRateLimitError, applyWclRateLimitBackoff, clearWclBackoff, queryWcl } from './wcl';
+import {
+  WclRateLimitError,
+  applyWclRateLimitBackoff,
+  clearWclBackoff,
+  loadWclCharacterLookup,
+  matchWclActorCharId,
+  queryWcl,
+  type WclFightRow,
+} from './wcl';
 import {
   getDeathAnalysisNights,
   getDeathAnalysisSummary,
@@ -8,10 +16,14 @@ import {
   type DeathAnalysisEntry,
   type DeathAnalysisSummary,
 } from './death-analysis';
+import { ROLE_BY_SPEC_ID, type MechanicRole } from './mechanics-analysis';
+import { computeGreatVaultScore } from './raiders';
+import { getUsWeeklyResetTimestamp } from './wow-reset';
 
-// Bench analysis (Admin > Bench): Death Analysis + each raider's median WCL
-// parse. Parses are cached in bench_parses; scoring and the DPS/deaths weight
-// slider run client-side on /admin/bench.
+// Bench analysis: Death Analysis + each raider's median WCL parse. Backs the
+// officer-only scoring section of /raid-composition (Tools menu). Parses are cached
+// in bench_parses; scoring inputs are configured on Raid Comp client-side,
+// and Raid Comp (src/lib/raid-comp.ts) reuses this same priority order.
 
 /** WCL difficulty the parses are pulled for (4 = Heroic), matching the guild rankings page. */
 export const BENCH_PARSE_DIFFICULTY = 4;
@@ -23,6 +35,11 @@ const PARSE_BATCH_SIZE = 10;
 const DEFAULT_TIME_BUDGET_MS = 8_000;
 /** Stays under D1's 100 bound-parameter limit per statement. */
 const D1_PARAM_CHUNK = 90;
+/** WCL difficulty ids: 4 Heroic, 5 Mythic — same scope as Death Analysis. */
+const MECHANIC_ROLE_DIFFICULTIES = new Set([4, 5]);
+/** Cached mechanic roles older than this are refetched (same cadence as parses). */
+export const BENCH_MECHANIC_ROLE_STALE_SECONDS = 6 * 60 * 60;
+const EVENT_MAX_PAGES = 20;
 
 export type BenchRole = 'dps' | 'healer' | 'tank';
 export const BENCH_ROLES: BenchRole[] = ['dps', 'healer', 'tank'];
@@ -42,10 +59,30 @@ export interface BenchRaider {
   role: BenchRole;
   autoRole: BenchRole;
   roleOverride: BenchRole | null;
+  /** Melee/ranged (or tank/healer) from the latest raid night's WCL spec, null if never seen in a synced report. */
+  mechanicRole: MechanicRole | null;
+  /** Officer correction when the auto/WCL-derived melee-vs-ranged is wrong (e.g. an Enhancement Shaman auto-detected as ranged). */
+  meleeRangedOverride: 'melee' | 'ranged' | null;
+  /** Excluded from Raid Comp's "Regenerate" pool entirely (e.g. on vacation this raid). */
+  isAbsent: boolean;
+  /** Always included by "Regenerate", bumping a lower-priority same-role pick if needed. */
+  isRaidLeader: boolean;
   /** Median parse for `role` (WCL medianPerformanceAverage), null unless parseStatus is 'ok'. */
   parse: number | null;
   parseBosses: number;
   parseStatus: BenchParseStatus;
+  /** Current 0-100 Great Vault completion score, before guild-relative ranking. */
+  vaultScore: number;
+  /** Two-week rolling gem/enchant coverage percentage (current snapshot fallback), before guild-relative ranking. */
+  preparednessScore: number;
+  /** Upgrades completed since the weekly reset, based on the drop in missing upgrade ranks. */
+  upgradesCompleted: number;
+}
+
+export interface BenchFlags {
+  meleeRangedOverride: 'melee' | 'ranged' | null;
+  isAbsent: boolean;
+  isRaidLeader: boolean;
 }
 
 export interface BenchData {
@@ -74,6 +111,24 @@ interface ParseRow {
   tank_median: number | null;
   tank_bosses: number;
   synced_at: number;
+}
+
+interface BenchMetricsRow {
+  blizzard_char_id: number;
+  raid_progress_label: string | null;
+  mythic_plus_vault_ilvl_1: number | null;
+  mythic_plus_vault_ilvl_2: number | null;
+  mythic_plus_vault_ilvl_3: number | null;
+  world_vault_weekly_objectives: number | null;
+  socketed_gems: number | null;
+  total_sockets: number | null;
+  enchanted_slots: number | null;
+  enchantable_slots: number | null;
+  avg_30d_socketed_gems: number | null;
+  avg_30d_total_sockets: number | null;
+  avg_30d_enchanted_slots: number | null;
+  avg_30d_enchantable_slots: number | null;
+  total_upgrades_missing: number | null;
 }
 
 interface WclZoneRankings {
@@ -154,6 +209,143 @@ async function resolveZoneId(db: D1Database, accessToken: string): Promise<numbe
   return zoneId;
 }
 
+/** Pages through a report's CombatantInfo events for the given fights. */
+async function fetchCombatantInfoEvents(
+  accessToken: string,
+  reportCode: string,
+  fights: WclFightRow[]
+): Promise<Array<{ sourceID?: number; fight?: number; specID?: number; type?: string }>> {
+  const fightIds = fights.map((fight) => Number(fight.id));
+  let nextStart = Math.min(...fights.map((fight) => Number(fight.startTime ?? 0)));
+  const end = Math.max(...fights.map((fight) => Number(fight.endTime ?? 0)));
+  const all: Array<{ sourceID?: number; fight?: number; specID?: number; type?: string }> = [];
+
+  for (let page = 0; page < EVENT_MAX_PAGES && nextStart <= end; page += 1) {
+    const payload = await queryWcl<{
+      reportData?: {
+        report?: {
+          events?: {
+            data?: Array<{ sourceID?: number; fight?: number; specID?: number; type?: string }>;
+            nextPageTimestamp?: number | null;
+          };
+        };
+      };
+    }>(
+      accessToken,
+      `
+        query BenchCombatants($code: String!, $fightIDs: [Int]!, $startTime: Float!, $endTime: Float!) {
+          reportData {
+            report(code: $code) {
+              events(dataType: CombatantInfo, fightIDs: $fightIDs, startTime: $startTime, endTime: $endTime) {
+                data
+                nextPageTimestamp
+              }
+            }
+          }
+        }
+      `,
+      { code: reportCode, fightIDs: fightIds, startTime: nextStart, endTime: end }
+    );
+    if (!payload) throw new Error('Unable to load CombatantInfo events from Warcraft Logs.');
+
+    all.push(...(payload.reportData?.report?.events?.data ?? []));
+    const nextPage = Number(payload.reportData?.report?.events?.nextPageTimestamp ?? 0);
+    if (!Number.isFinite(nextPage) || nextPage <= nextStart) break;
+    nextStart = nextPage;
+  }
+  return all;
+}
+
+/**
+ * Refreshes each raider's melee/ranged/tank/healer role from the latest
+ * canonical raid night's WCL spec (CombatantInfo), same source as Mechanics
+ * Analysis. Skipped if that report was already synced within
+ * BENCH_MECHANIC_ROLE_STALE_SECONDS. A character absent from the latest
+ * report (benched that night) keeps its last known role.
+ */
+export async function refreshBenchMechanicRoles(dbInput?: D1Database): Promise<{ synced: boolean; reportCode: string | null }> {
+  const db = getDatabase(dbInput);
+  const nights = await getDeathAnalysisNights(db);
+  const latest = nights
+    .map((night) => night.canonical)
+    .filter((report): report is NonNullable<typeof report> => Boolean(report && report.bossPulls > 0))
+    .sort((a, b) => b.startUtc - a.startUtc)[0];
+  if (!latest) return { synced: false, reportCode: null };
+
+  const syncedRow = await db
+    .prepare('SELECT MAX(synced_at) AS synced_at FROM bench_mechanic_roles WHERE source_report_code = ?')
+    .bind(latest.code)
+    .first<{ synced_at: number | null }>();
+  if ((syncedRow?.synced_at ?? 0) >= nowInSeconds() - BENCH_MECHANIC_ROLE_STALE_SECONDS) {
+    return { synced: false, reportCode: latest.code };
+  }
+
+  const accessToken = await requireAccessToken(db);
+  const metadata = await queryWcl<{
+    reportData?: {
+      report?: {
+        fights?: WclFightRow[];
+        masterData?: { actors?: Array<{ id?: number; name?: string; server?: string; gameID?: number }> };
+      } | null;
+    };
+  }>(
+    accessToken,
+    `
+      query BenchReportMetadata($code: String!) {
+        reportData {
+          report(code: $code) {
+            fights { id startTime endTime encounterID difficulty kill }
+            masterData { actors(type: "Player") { id name server gameID } }
+          }
+        }
+      }
+    `,
+    { code: latest.code }
+  );
+  const report = metadata?.reportData?.report;
+  if (!report) throw new Error('Unable to load Warcraft Logs report metadata.');
+
+  const ownership = await loadWclCharacterLookup(db);
+  const charIdByActorId = new Map<number, number>();
+  for (const actor of report.masterData?.actors ?? []) {
+    const actorId = Number(actor.id ?? 0);
+    const charId = actorId > 0 ? matchWclActorCharId(actor, ownership) : null;
+    if (actorId > 0 && charId) charIdByActorId.set(actorId, charId);
+  }
+
+  const fights = (report.fights ?? []).filter(
+    (fight) => Number(fight.id) > 0 && MECHANIC_ROLE_DIFFICULTIES.has(Number(fight.difficulty ?? 0))
+  );
+  if (fights.length === 0) return { synced: false, reportCode: latest.code };
+
+  const specByCharId = new Map<number, number>();
+  for (const event of await fetchCombatantInfoEvents(accessToken, latest.code, fights)) {
+    if (String(event.type ?? '').toLowerCase() !== 'combatantinfo') continue;
+    const charId = charIdByActorId.get(Number(event.sourceID ?? 0));
+    const specId = Number(event.specID ?? 0);
+    if (charId && specId > 0) specByCharId.set(charId, specId);
+  }
+
+  if (specByCharId.size > 0) {
+    await db.batch(
+      [...specByCharId.entries()].map(([charId, specId]) =>
+        db
+          .prepare(
+            `INSERT INTO bench_mechanic_roles (blizzard_char_id, spec_id, mechanic_role, source_report_code, synced_at)
+             VALUES (?, ?, ?, ?, unixepoch())
+             ON CONFLICT(blizzard_char_id) DO UPDATE SET
+               spec_id = excluded.spec_id,
+               mechanic_role = excluded.mechanic_role,
+               source_report_code = excluded.source_report_code,
+               synced_at = excluded.synced_at`
+          )
+          .bind(charId, specId, ROLE_BY_SPEC_ID.get(specId) ?? null, latest.code)
+      )
+    );
+  }
+  return { synced: true, reportCode: latest.code };
+}
+
 async function loadCharacterSlugs(
   db: D1Database,
   charIds: number[]
@@ -189,6 +381,43 @@ async function loadCharacterSlugs(
   return out;
 }
 
+async function loadMechanicRoles(db: D1Database, charIds: number[]): Promise<Map<number, MechanicRole>> {
+  const out = new Map<number, MechanicRole>();
+  for (const ids of chunk(charIds, D1_PARAM_CHUNK)) {
+    const result = await db
+      .prepare(`SELECT blizzard_char_id, mechanic_role FROM bench_mechanic_roles WHERE blizzard_char_id IN (${ids.map(() => '?').join(', ')})`)
+      .bind(...ids)
+      .all<{ blizzard_char_id: number; mechanic_role: string | null }>();
+    for (const row of result.results ?? []) {
+      const role = row.mechanic_role;
+      if (role === 'tank' || role === 'healer' || role === 'melee' || role === 'ranged') {
+        out.set(Number(row.blizzard_char_id), role);
+      }
+    }
+  }
+  return out;
+}
+
+async function loadBenchFlags(db: D1Database, charIds: number[]): Promise<Map<number, BenchFlags>> {
+  const out = new Map<number, BenchFlags>();
+  for (const ids of chunk(charIds, D1_PARAM_CHUNK)) {
+    const result = await db
+      .prepare(
+        `SELECT blizzard_char_id, melee_ranged, is_absent, is_raid_leader FROM bench_flags WHERE blizzard_char_id IN (${ids.map(() => '?').join(', ')})`
+      )
+      .bind(...ids)
+      .all<{ blizzard_char_id: number; melee_ranged: string | null; is_absent: number; is_raid_leader: number }>();
+    for (const row of result.results ?? []) {
+      out.set(Number(row.blizzard_char_id), {
+        meleeRangedOverride: row.melee_ranged === 'melee' || row.melee_ranged === 'ranged' ? row.melee_ranged : null,
+        isAbsent: Boolean(row.is_absent),
+        isRaidLeader: Boolean(row.is_raid_leader),
+      });
+    }
+  }
+  return out;
+}
+
 async function loadParseRows(db: D1Database, charIds: number[]): Promise<Map<number, ParseRow>> {
   const out = new Map<number, ParseRow>();
   for (const ids of chunk(charIds, D1_PARAM_CHUNK)) {
@@ -197,6 +426,91 @@ async function loadParseRows(db: D1Database, charIds: number[]): Promise<Map<num
       .bind(...ids)
       .all<ParseRow>();
     for (const row of result.results ?? []) out.set(Number(row.blizzard_char_id), row);
+  }
+  return out;
+}
+
+function vaultRaidSlots(label: string | null): Array<number | null> {
+  try {
+    const options = (JSON.parse(label ?? '{}') as { vaultRaid?: { options?: unknown } }).vaultRaid?.options;
+    if (!Array.isArray(options)) return [null, null, null];
+    return [0, 1, 2].map((index) => {
+      const value = Number(options[index]);
+      return Number.isFinite(value) && value > 0 ? Math.floor(value) : null;
+    });
+  } catch {
+    return [null, null, null];
+  }
+}
+
+function preparednessScore(row: BenchMetricsRow): number {
+  const socketed = row.avg_30d_socketed_gems ?? row.socketed_gems;
+  const sockets = row.avg_30d_total_sockets ?? row.total_sockets;
+  const enchanted = row.avg_30d_enchanted_slots ?? row.enchanted_slots;
+  const enchantable = row.avg_30d_enchantable_slots ?? row.enchantable_slots;
+  const total = (sockets ?? 0) + (enchantable ?? 0);
+  if (socketed === null || sockets === null || enchanted === null || enchantable === null || total <= 0) return 0;
+  return Math.max(0, Math.min(100, ((socketed + enchanted) / total) * 100));
+}
+
+async function loadWeeklyUpgradeProgress(db: D1Database, charIds: number[]): Promise<Map<number, number>> {
+  const out = new Map<number, number>();
+  const weekStart = getUsWeeklyResetTimestamp();
+  const priorWeekStart = weekStart - 7 * 24 * 60 * 60;
+  for (const ids of chunk(charIds, D1_PARAM_CHUNK)) {
+    const placeholders = ids.map(() => '?').join(', ');
+    const result = await db
+      .prepare(
+        `WITH latest_prior AS (
+           SELECT blizzard_char_id, MAX(recorded_at) AS recorded_at
+             FROM raider_progression_history
+            WHERE blizzard_char_id IN (${placeholders})
+              AND recorded_at >= ? AND recorded_at < ?
+            GROUP BY blizzard_char_id
+         )
+         SELECT h.blizzard_char_id, h.total_upgrades_missing
+           FROM raider_progression_history h
+           JOIN latest_prior p ON p.blizzard_char_id = h.blizzard_char_id AND p.recorded_at = h.recorded_at`
+      )
+      .bind(...ids, priorWeekStart, weekStart)
+      .all<{ blizzard_char_id: number; total_upgrades_missing: number | null }>();
+    for (const row of result.results ?? []) {
+      if (row.total_upgrades_missing !== null) out.set(Number(row.blizzard_char_id), Number(row.total_upgrades_missing));
+    }
+  }
+  return out;
+}
+
+async function loadBenchMetrics(db: D1Database, charIds: number[]): Promise<Map<number, { vaultScore: number; preparednessScore: number; upgradesCompleted: number }>> {
+  const priorWeekMissing = await loadWeeklyUpgradeProgress(db, charIds);
+  const out = new Map<number, { vaultScore: number; preparednessScore: number; upgradesCompleted: number }>();
+  for (const ids of chunk(charIds, D1_PARAM_CHUNK)) {
+    const result = await db
+      .prepare(
+        `SELECT blizzard_char_id, raid_progress_label,
+                mythic_plus_vault_ilvl_1, mythic_plus_vault_ilvl_2, mythic_plus_vault_ilvl_3, world_vault_weekly_objectives,
+                socketed_gems, total_sockets, enchanted_slots, enchantable_slots,
+                avg_30d_socketed_gems, avg_30d_total_sockets, avg_30d_enchanted_slots, avg_30d_enchantable_slots,
+                total_upgrades_missing
+           FROM raider_metrics_cache WHERE blizzard_char_id IN (${ids.map(() => '?').join(', ')})`
+      )
+      .bind(...ids)
+      .all<BenchMetricsRow>();
+    for (const row of result.results ?? []) {
+      const priorMissing = priorWeekMissing.get(Number(row.blizzard_char_id));
+      out.set(Number(row.blizzard_char_id), {
+        vaultScore: computeGreatVaultScore(
+          vaultRaidSlots(row.raid_progress_label),
+          [row.mythic_plus_vault_ilvl_1, row.mythic_plus_vault_ilvl_2, row.mythic_plus_vault_ilvl_3],
+          Math.max(0, row.world_vault_weekly_objectives ?? 0)
+        ),
+        preparednessScore: preparednessScore(row),
+        upgradesCompleted:
+          priorMissing === undefined || row.total_upgrades_missing === null
+            ? 0
+            : Math.max(0, priorMissing - Number(row.total_upgrades_missing)),
+      });
+    }
   }
   return out;
 }
@@ -269,6 +583,16 @@ export async function refreshBenchParses(
   result.candidates = charIds.length;
   if (charIds.length === 0) return result;
 
+  const refreshMechanicRolesBestEffort = async () => {
+    // Suggested Raid Comp's melee/ranged classification must keep refreshing
+    // even if every parse is already current.
+    try {
+      await refreshBenchMechanicRoles(db);
+    } catch (error) {
+      console.warn('[bench] failed to refresh mechanic roles', error);
+    }
+  };
+
   const [slugs, existing] = await Promise.all([loadCharacterSlugs(db, charIds), loadParseRows(db, charIds)]);
   const staleBefore = nowInSeconds() - BENCH_PARSE_STALE_SECONDS;
   // Stale rows are refetched every BENCH_PARSE_STALE_SECONDS, so a new raid
@@ -280,7 +604,10 @@ export async function refreshBenchParses(
     .sort((a, b) => (existing.get(a)?.synced_at ?? 0) - (existing.get(b)?.synced_at ?? 0))
     .map((charId) => ({ charId, ...slugs.get(charId)! }));
   result.remaining = pending.length;
-  if (pending.length === 0) return result;
+  if (pending.length === 0) {
+    await refreshMechanicRolesBestEffort();
+    return result;
+  }
 
   const accessToken = await requireAccessToken(db);
   const zoneId = await resolveZoneId(db, accessToken);
@@ -344,6 +671,9 @@ export async function refreshBenchParses(
 
   if (!result.rateLimited) await clearWclBackoff(db);
   result.remaining = Math.max(0, pending.length - result.processed);
+
+  await refreshMechanicRolesBestEffort();
+
   return result;
 }
 
@@ -352,14 +682,18 @@ export async function getBenchData(dbInput?: D1Database): Promise<BenchData> {
   const summary = await getDeathAnalysisSummary(db);
   const charIds = benchCandidates(summary).map((entry) => entry.blizzardCharId);
 
-  const [parseRows, overrideResult] = await Promise.all([
+  const [parseRows, overrideResult, mechanicRoles, benchFlags, metrics] = await Promise.all([
     loadParseRows(db, charIds),
     db.prepare('SELECT blizzard_char_id, role FROM bench_role_overrides').all<{ blizzard_char_id: number; role: string }>(),
+    loadMechanicRoles(db, charIds),
+    loadBenchFlags(db, charIds),
+    loadBenchMetrics(db, charIds),
   ]);
   const overrides = new Map<number, BenchRole>();
   for (const row of overrideResult.results ?? []) {
     if (isBenchRole(row.role)) overrides.set(Number(row.blizzard_char_id), row.role);
   }
+  const noFlags: BenchFlags = { meleeRangedOverride: null, isAbsent: false, isRaidLeader: false };
 
   const toRaider = (entry: DeathAnalysisEntry): BenchRaider => {
     const row = parseRows.get(entry.blizzardCharId);
@@ -368,6 +702,8 @@ export async function getBenchData(dbInput?: D1Database): Promise<BenchData> {
     const role = roleOverride ?? autoRole;
     const parse = row ? roleParse(row, role) : null;
     const parseStatus: BenchParseStatus = !row ? 'pending' : !row.wcl_found ? 'not-found' : parse?.median == null ? 'no-role-parse' : 'ok';
+    const flags = benchFlags.get(entry.blizzardCharId) ?? noFlags;
+    const scores = metrics.get(entry.blizzardCharId) ?? { vaultScore: 0, preparednessScore: 0, upgradesCompleted: 0 };
     return {
       blizzardCharId: entry.blizzardCharId,
       name: entry.name,
@@ -381,9 +717,16 @@ export async function getBenchData(dbInput?: D1Database): Promise<BenchData> {
       role,
       autoRole,
       roleOverride,
+      mechanicRole: mechanicRoles.get(entry.blizzardCharId) ?? null,
+      meleeRangedOverride: flags.meleeRangedOverride,
+      isAbsent: flags.isAbsent,
+      isRaidLeader: flags.isRaidLeader,
       parse: parseStatus === 'ok' ? Math.round(Number(parse?.median) * 10) / 10 : null,
       parseBosses: Number(parse?.bosses ?? 0),
       parseStatus,
+      vaultScore: scores.vaultScore,
+      preparednessScore: scores.preparednessScore,
+      upgradesCompleted: scores.upgradesCompleted,
     };
   };
 
@@ -419,5 +762,64 @@ export async function setBenchRoleOverride(
          updated_at = excluded.updated_at`
     )
     .bind(blizzardCharId, role, userId)
+    .run();
+}
+
+async function upsertBenchFlag(
+  db: D1Database,
+  blizzardCharId: number,
+  column: 'melee_ranged' | 'is_absent' | 'is_raid_leader',
+  value: string | number | null,
+  userId: number
+): Promise<void> {
+  // Only the touched column is written on conflict, so setting one flag never clobbers the others.
+  await db
+    .prepare(
+      `INSERT INTO bench_flags (blizzard_char_id, ${column}, updated_by_user_id, updated_at)
+       VALUES (?, ?, ?, unixepoch())
+       ON CONFLICT(blizzard_char_id) DO UPDATE SET
+         ${column} = excluded.${column},
+         updated_by_user_id = excluded.updated_by_user_id,
+         updated_at = excluded.updated_at`
+    )
+    .bind(blizzardCharId, value, userId)
+    .run();
+}
+
+export async function setBenchMeleeRangedOverride(
+  dbInput: D1Database | undefined,
+  blizzardCharId: number,
+  value: 'melee' | 'ranged' | null,
+  userId: number
+): Promise<void> {
+  await upsertBenchFlag(getDatabase(dbInput), blizzardCharId, 'melee_ranged', value, userId);
+}
+
+export async function setBenchAbsent(
+  dbInput: D1Database | undefined,
+  blizzardCharId: number,
+  isAbsent: boolean,
+  userId: number
+): Promise<void> {
+  await upsertBenchFlag(getDatabase(dbInput), blizzardCharId, 'is_absent', isAbsent ? 1 : 0, userId);
+}
+
+export async function setBenchRaidLeader(
+  dbInput: D1Database | undefined,
+  blizzardCharId: number,
+  isRaidLeader: boolean,
+  userId: number
+): Promise<void> {
+  await upsertBenchFlag(getDatabase(dbInput), blizzardCharId, 'is_raid_leader', isRaidLeader ? 1 : 0, userId);
+}
+
+/** Clears Absent for everyone at once (e.g. starting a fresh raid night) — RL and melee/ranged overrides are left untouched. */
+export async function clearAllAbsent(dbInput: D1Database | undefined, userId: number): Promise<void> {
+  const db = getDatabase(dbInput);
+  await db
+    .prepare(
+      `UPDATE bench_flags SET is_absent = 0, updated_by_user_id = ?, updated_at = unixepoch() WHERE is_absent = 1`
+    )
+    .bind(userId)
     .run();
 }

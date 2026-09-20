@@ -153,7 +153,8 @@ function vaultDungeonDifficultyWeight(itemLevel: number | null): number {
   return 0.7;
 }
 
-function computeGreatVaultScore(
+/** Shared 0-100 Great Vault completion score used by Raider views and Raid Comp. */
+export function computeGreatVaultScore(
   raidSlots: Array<number | null>,
   dungeonSlots: Array<number | null>,
   worldWeeklyObjectives: number,

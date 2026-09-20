@@ -16,7 +16,9 @@ import {
 import { easternWallClockToUtcSeconds } from './wow-reset';
 import { isGuildOfficer } from './auth';
 
-export const DEATH_ANALYSIS_WINDOW_DAYS = 90;
+export const DEATH_ANALYSIS_WINDOW_DAYS = 60;
+/** A raid night 30 days old contributes half as much as a raid night today. */
+export const DEATH_ANALYSIS_RECENCY_HALF_LIFE_DAYS = 30;
 export const DEATH_ANALYSIS_RAID_NAME = 'The Venomous Abyss';
 export const DEATH_ANALYSIS_MIN_PULLS = 10;
 export const DEATH_ANALYSIS_MIN_REPORTS = 2;
@@ -637,12 +639,9 @@ export async function getDeathAnalysisNights(dbInput?: D1Database): Promise<Deat
   });
 }
 
-function weightedDeathScore(entry: Pick<DeathAnalysisEntry, 'fightsPresent' | 'firstDeathCount' | 'secondDeathCount' | 'thirdDeathCount' | 'fourthDeathCount'>): number {
-  if (entry.fightsPresent <= 0) return 0;
-  return (
-    (entry.firstDeathCount * 4 + entry.secondDeathCount * 3 + entry.thirdDeathCount * 2 + entry.fourthDeathCount) /
-    entry.fightsPresent
-  );
+function recencyWeight(reportEndUtc: number, nowUtc: number): number {
+  const ageDays = Math.max(0, nowUtc - reportEndUtc) / 86_400;
+  return 0.5 ** (ageDays / DEATH_ANALYSIS_RECENCY_HALF_LIFE_DAYS);
 }
 
 /**
@@ -665,11 +664,13 @@ export const CHARACTER_IDENTITY_CTE = `WITH identities AS (
 
 export async function getDeathAnalysisSummary(dbInput?: D1Database): Promise<DeathAnalysisSummary> {
   const db = getDatabase(dbInput);
+  const scoringNowUtc = nowInSeconds();
   const nights = await getDeathAnalysisNights(db);
   const included = nights.filter((night) => night.canonical && night.canonical.bossPulls > 0);
   const canonicalCodes = included.map((night) => night.canonical!.code);
 
   const nightKeyByReportCode = new Map(included.map((night) => [night.canonical!.code, night.nightKey]));
+  const reportEndByCode = new Map(included.map((night) => [night.canonical!.code, night.canonical!.endUtc]));
 
   const rankings: DeathAnalysisEntry[] = [];
   const linksByChar = new Map<number, DeathAnalysisDeathLink[]>();
@@ -708,47 +709,101 @@ export async function getDeathAnalysisSummary(dbInput?: D1Database): Promise<Dea
         `${CHARACTER_IDENTITY_CTE}
          SELECT
            s.blizzard_char_id,
+           s.report_code,
            COALESCE(ic.name, 'Unknown') AS name,
            COALESCE(ic.realm, 'Unknown') AS realm,
            COALESCE(ic.class_name, 'Unknown') AS class_name,
-           COUNT(*) AS report_count,
-           SUM(s.fights_present) AS fights_present,
-           SUM(s.total_deaths) AS total_deaths,
-           SUM(s.first_death_count) AS first_death_count,
-           SUM(s.second_death_count) AS second_death_count,
-           SUM(s.third_death_count) AS third_death_count,
-           SUM(s.fourth_death_count) AS fourth_death_count
+           s.fights_present,
+           s.total_deaths,
+           s.first_death_count,
+           s.second_death_count,
+           s.third_death_count,
+           s.fourth_death_count
          FROM death_analysis_stats s
          LEFT JOIN identity_choice ic ON ic.blizzard_char_id = s.blizzard_char_id AND ic.rn = 1
-         WHERE s.report_code IN (${placeholders})
-         GROUP BY s.blizzard_char_id, ic.name, ic.realm, ic.class_name`
+         WHERE s.report_code IN (${placeholders})`
       )
       .bind(...canonicalCodes)
       .all<Record<string, unknown>>();
 
+    const aggregates = new Map<
+      number,
+      {
+        name: string;
+        realm: string;
+        className: string;
+        reportCodes: Set<string>;
+        fightsPresent: number;
+        totalDeaths: number;
+        firstDeathCount: number;
+        secondDeathCount: number;
+        thirdDeathCount: number;
+        fourthDeathCount: number;
+        weightedPulls: number;
+        weightedDeaths: number;
+        weightedDeathImpact: number;
+      }
+    >();
     for (const row of result.results ?? []) {
-      const entry: DeathAnalysisEntry = {
-        blizzardCharId: toPositiveInt(row.blizzard_char_id),
+      const blizzardCharId = toPositiveInt(row.blizzard_char_id);
+      if (blizzardCharId <= 0) continue;
+
+      const fightsPresent = toPositiveInt(row.fights_present);
+      const totalDeaths = toPositiveInt(row.total_deaths);
+      const firstDeathCount = toPositiveInt(row.first_death_count);
+      const secondDeathCount = toPositiveInt(row.second_death_count);
+      const thirdDeathCount = toPositiveInt(row.third_death_count);
+      const fourthDeathCount = toPositiveInt(row.fourth_death_count);
+      const reportCode = String(row.report_code);
+      const weight = recencyWeight(reportEndByCode.get(reportCode) ?? scoringNowUtc, scoringNowUtc);
+      const aggregate = aggregates.get(blizzardCharId) ?? {
         name: String(row.name),
         realm: String(row.realm),
         className: String(row.class_name),
-        reportCount: toPositiveInt(row.report_count),
-        fightsPresent: toPositiveInt(row.fights_present),
-        totalDeaths: toPositiveInt(row.total_deaths),
-        firstDeathCount: toPositiveInt(row.first_death_count),
-        secondDeathCount: toPositiveInt(row.second_death_count),
-        thirdDeathCount: toPositiveInt(row.third_death_count),
-        fourthDeathCount: toPositiveInt(row.fourth_death_count),
-        weightedScore: 0,
-        totalDeathRate: 0,
+        reportCodes: new Set<string>(),
+        fightsPresent: 0,
+        totalDeaths: 0,
+        firstDeathCount: 0,
+        secondDeathCount: 0,
+        thirdDeathCount: 0,
+        fourthDeathCount: 0,
+        weightedPulls: 0,
+        weightedDeaths: 0,
+        weightedDeathImpact: 0,
+      };
+      aggregate.reportCodes.add(reportCode);
+      aggregate.fightsPresent += fightsPresent;
+      aggregate.totalDeaths += totalDeaths;
+      aggregate.firstDeathCount += firstDeathCount;
+      aggregate.secondDeathCount += secondDeathCount;
+      aggregate.thirdDeathCount += thirdDeathCount;
+      aggregate.fourthDeathCount += fourthDeathCount;
+      aggregate.weightedPulls += fightsPresent * weight;
+      aggregate.weightedDeaths += totalDeaths * weight;
+      aggregate.weightedDeathImpact += (firstDeathCount * 4 + secondDeathCount * 3 + thirdDeathCount * 2 + fourthDeathCount) * weight;
+      aggregates.set(blizzardCharId, aggregate);
+    }
+
+    for (const [blizzardCharId, aggregate] of aggregates) {
+      if (aggregate.fightsPresent <= 0 || aggregate.weightedPulls <= 0) continue;
+      rankings.push({
+        blizzardCharId,
+        name: aggregate.name,
+        realm: aggregate.realm,
+        className: aggregate.className,
+        reportCount: aggregate.reportCodes.size,
+        fightsPresent: aggregate.fightsPresent,
+        totalDeaths: aggregate.totalDeaths,
+        firstDeathCount: aggregate.firstDeathCount,
+        secondDeathCount: aggregate.secondDeathCount,
+        thirdDeathCount: aggregate.thirdDeathCount,
+        fourthDeathCount: aggregate.fourthDeathCount,
+        weightedScore: aggregate.weightedDeathImpact / aggregate.weightedPulls,
+        totalDeathRate: aggregate.weightedDeaths / aggregate.weightedPulls,
         percentAboveAverage: null,
         isSignificantlyAboveAverage: false,
-        deathLinks: linksByChar.get(toPositiveInt(row.blizzard_char_id)) ?? [],
-      };
-      if (entry.blizzardCharId <= 0 || entry.fightsPresent <= 0) continue;
-      entry.weightedScore = weightedDeathScore(entry);
-      entry.totalDeathRate = entry.totalDeaths / entry.fightsPresent;
-      rankings.push(entry);
+        deathLinks: linksByChar.get(blizzardCharId) ?? [],
+      });
     }
   }
 

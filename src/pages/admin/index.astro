@@ -9,7 +9,7 @@ if (Astro.locals.isAdmin) {
 
 // Rank-3 officers only get the officer modules (see OFFICER_ADMIN_PATHS in middleware.ts).
 if (Astro.locals.isOfficer && FEATURE_FLAGS.deathAnalysis) {
-	return Astro.redirect('/admin/bench');
+	return Astro.redirect('/admin/log-matching');
 }
 
 return Astro.redirect('/');

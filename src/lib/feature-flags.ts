@@ -8,6 +8,8 @@ export const FEATURE_FLAGS = {
   deathAnalysis: true,
   // Reads Death Analysis's canonical reports, so it also needs deathAnalysis on.
   mechanicsAnalysis: true,
+  // Reads Bench's scoring (src/lib/bench.ts), so it also needs deathAnalysis on.
+  raidComp: true,
   applications: false,
   feedback: false,
   tools: true,

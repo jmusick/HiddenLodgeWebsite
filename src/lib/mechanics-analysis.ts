@@ -82,8 +82,9 @@ function toPositiveInt(value: unknown): number {
 export type MechanicRole = 'tank' | 'healer' | 'melee' | 'ranged';
 export const MECHANIC_ROLES: MechanicRole[] = ['tank', 'healer', 'melee', 'ranged'];
 
-// WCL CombatantInfo specID -> role. Unlisted specs are left unknown.
-const ROLE_BY_SPEC_ID = new Map<number, MechanicRole>([
+// WCL CombatantInfo specID -> role. Unlisted specs are left unknown. Exported
+// for Raid Comp (bench.ts), which needs the same melee/ranged split.
+export const ROLE_BY_SPEC_ID = new Map<number, MechanicRole>([
   // Tanks
   [73, 'tank'], [66, 'tank'], [250, 'tank'], [268, 'tank'], [104, 'tank'], [581, 'tank'],
   // Healers

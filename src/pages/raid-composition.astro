@@ -1,0 +1,2476 @@
+---
+export const prerender = false;
+
+import Layout from '../layouts/Layout.astro';
+import { env } from 'cloudflare:workers';
+import { BENCH_PARSE_DIFFICULTY, getBenchData, type BenchRaider } from '../lib/bench';
+import { getRaidCompAssignments, getRaidCompLoadouts, getRaidCompManualOverrideIds, getRaidCompSettings, getTempRaidCompCandidates, getUtilityMinimums } from '../lib/raid-comp';
+import { ALL_UTILITY } from '../lib/raid-teams';
+import { DEATH_ANALYSIS_RAID_NAME } from '../lib/death-analysis';
+import { FEATURE_FLAGS } from '../lib/feature-flags';
+import { CLASS_COLORS, classColor } from '../lib/wow';
+
+if (!FEATURE_FLAGS.tools || !FEATURE_FLAGS.deathAnalysis || !FEATURE_FLAGS.raidComp) {
+  return Astro.redirect('/');
+}
+
+if (!Astro.locals.isGuildMember) {
+  return Astro.redirect('/auth/login');
+}
+
+const isOfficer = Astro.locals.isOfficer;
+const [bench, settings, assignments, manualOverrideIds, utilityMinimums, temporaryCandidates, loadouts] = await Promise.all([
+  getBenchData(env.DB),
+  getRaidCompSettings(env.DB),
+  getRaidCompAssignments(env.DB),
+  getRaidCompManualOverrideIds(env.DB),
+  getUtilityMinimums(env.DB),
+  getTempRaidCompCandidates(env.DB),
+  getRaidCompLoadouts(env.DB),
+]);
+
+const statusParam = new URL(Astro.request.url).searchParams.get('status');
+const DIFFICULTY_LABELS: Record<number, string> = { 3: 'Normal', 4: 'Heroic', 5: 'Mythic' };
+const difficultyLabel = DIFFICULTY_LABELS[BENCH_PARSE_DIFFICULTY] ?? 'Heroic';
+const timestampLabel = (epoch: number | null) =>
+  epoch ? `${new Date(epoch * 1000).toLocaleString('en-US', { timeZone: 'America/New_York' })} ET` : 'Never';
+const savedWeightSummary = [
+  `Parse ${settings.parseWeight}%`,
+  `Deaths ${settings.deathWeight}%`,
+  `Vault ${settings.vaultWeight}%`,
+  `Preparedness ${settings.preparednessWeight}%`,
+  `Upgrades ${settings.upgradesWeight}%`,
+].join(' · ');
+const rosterColumns: ReadonlyArray<{ label: string; help: string; className?: string }> = [
+  { label: '#', help: 'Priority rank within this role group. It updates live from the configured score weights; lower is better and is what automatic Regenerate uses first.' },
+  { label: 'Raider', help: 'Character name and realm. Class color identifies the character class that supplies buffs, utility, and healer cooldowns.' },
+  { label: 'Median Parse', className: 'num', help: `Median ${difficultyLabel} Warcraft Logs parse across qualifying bosses in the raider’s effective role. This is the source value before the selected parse scale is applied.` },
+  { label: 'Parse Score', className: 'num', help: 'The parse input used by Combined. With Guild percentile it is this raider’s relative parse rank in the scored roster (0–100); with Raw WCL parse it is the WCL parse value itself.' },
+  { label: 'Death Pct', className: 'num', help: 'Guild-relative survival score from Death Analysis. Fewer deaths per counted pull produces a higher percentage and contributes according to the Deaths weight.' },
+  { label: 'Vault Pct', className: 'num', help: 'Guild-relative Great Vault completion percentile. Higher Vault scores rank higher and contribute according to the Great Vault weight.' },
+  { label: 'Prepared Pct', className: 'num', help: 'Guild-relative preparedness percentile, based on the rolling gem and enchant coverage score. Higher is better and contributes according to the Preparedness weight.' },
+  { label: 'Upgrade Pct', className: 'num', help: 'Weekly gear upgrades completed, measured from the decrease in missing upgrade ranks since reset, shown as a share of whoever upgraded the most this week. The top upgrader is 100 and nobody who upgraded nothing scores above 0, so doing twice as much reads as roughly twice the score. Contributes according to the Upgrades weight.' },
+  { label: 'Combined', className: 'num', help: 'Final live priority score: Parse, Deaths, Vault, Preparedness, and Upgrades multiplied by their configured weights. The five weights must total 100%; higher Combined ranks first.' },
+  { label: 'Role', help: 'Effective tank, healer, or DPS role. Auto-detected from ranked Warcraft Logs bosses unless an officer sets an override. It determines the quota bucket for Regenerate.' },
+  { label: 'Melee/Ranged', help: 'DPS sub-role used to balance melee and ranged selections. Derived from the latest WCL spec or class fallback, and can be overridden by an officer.' },
+  { label: 'Absent', help: 'When on, the raider is excluded from automatic Regenerate. It does not prevent an officer from manually placing them on the board.' },
+  { label: 'RL', help: 'Raid leader. When on, automatic Regenerate prioritizes this raider within their role even when that displaces a lower-priority normal selection.' },
+];
+
+const toClient = (raider: BenchRaider) => ({ ...raider, color: classColor(raider.className), isTemporary: false });
+const toTemporaryClient = (candidate: (typeof temporaryCandidates)[number]) => {
+  const role = candidate.assignedRole === 'tank' ? 'tank' : candidate.assignedRole === 'healer' ? 'healer' : 'dps';
+  const mechanicRole = candidate.assignedRole === 'melee-dps' ? 'melee' : candidate.assignedRole === 'ranged-dps' ? 'ranged' : candidate.assignedRole;
+  return {
+    blizzardCharId: -candidate.id,
+    name: candidate.name,
+    realm: 'Temporary candidate',
+    color: classColor(candidate.className),
+    className: candidate.className,
+    reportCount: 0,
+    fightsPresent: 0,
+    weightedScore: 0,
+    role,
+    autoRole: role,
+    roleOverride: role,
+    mechanicRole,
+    meleeRangedOverride: candidate.assignedRole === 'melee-dps' ? 'melee' : candidate.assignedRole === 'ranged-dps' ? 'ranged' : null,
+    isAbsent: false,
+    isRaidLeader: false,
+    parse: null,
+    parseBosses: 0,
+    parseStatus: 'pending',
+    vaultScore: 0,
+    preparednessScore: 0,
+    upgradesCompleted: 0,
+    isTemporary: true,
+  };
+};
+const clientData = {
+  ranked: bench.ranked.map(toClient),
+  belowMinimum: bench.belowMinimum.map(toClient),
+  temporaryCandidates: temporaryCandidates.map(toTemporaryClient),
+  minimumPulls: bench.summary.minimumPulls,
+  minimumReports: bench.summary.minimumReports,
+  difficultyLabel,
+  assignments: [...assignments.entries()],
+  manualOverrideIds: [...manualOverrideIds],
+  settings,
+  isOfficer,
+  utilityMinimums: ALL_UTILITY.map((utility) => [utility, utilityMinimums.get(utility) ?? 0] as [string, number]),
+};
+---
+
+<Layout title="Raid Composition | The Hidden Lodge">
+  <div class="raid-comp-page">
+    {isOfficer && statusParam === 'refresh-ok' && (
+      <div class="flash flash-ok" role="status">Parses refreshed from Warcraft Logs.</div>
+    )}
+    {isOfficer && statusParam === 'refresh-partial' && (
+      <div class="flash flash-ok" role="status">Refreshed a batch of parses. The rest will finish on the next cron run or another refresh.</div>
+    )}
+    {isOfficer && statusParam === 'refresh-rate-limited' && (
+      <div class="flash flash-error" role="alert">Warcraft Logs rate limit hit. Parses will resume refreshing automatically.</div>
+    )}
+    {isOfficer && statusParam === 'refresh-error' && (
+      <div class="flash flash-error" role="alert">Parse refresh failed. Check server logs.</div>
+    )}
+    {isOfficer && statusParam === 'role-saved' && (
+      <div class="flash flash-ok" role="status">Role saved.</div>
+    )}
+    {isOfficer && statusParam === 'flag-saved' && (
+      <div class="flash flash-ok" role="status">Saved.</div>
+    )}
+    {isOfficer && statusParam === 'temp-candidate-added' && (
+      <div class="flash flash-ok" role="status">Temporary candidate added to the Bench.</div>
+    )}
+    {isOfficer && statusParam === 'temp-candidate-removed' && (
+      <div class="flash flash-ok" role="status">Temporary candidate removed.</div>
+    )}
+    {isOfficer && statusParam === 'loadout-saved' && (
+      <div class="flash flash-ok" role="status">Raid Composition loadout saved.</div>
+    )}
+    {isOfficer && statusParam === 'loadout-loaded' && (
+      <div class="flash flash-ok" role="status">Raid Composition loadout restored.</div>
+    )}
+    {isOfficer && statusParam === 'loadout-deleted' && (
+      <div class="flash flash-ok" role="status">Raid Composition loadout deleted.</div>
+    )}
+    {isOfficer && statusParam === 'loadout-renamed' && (
+      <div class="flash flash-ok" role="status">Raid Composition loadout renamed.</div>
+    )}
+    {isOfficer && statusParam === 'loadout-error' && (
+      <div class="flash flash-error" role="alert">Could not complete that loadout action.</div>
+    )}
+    {isOfficer && statusParam === 'error' && (
+      <div class="flash flash-error" role="alert">Could not save that change. Check server logs.</div>
+    )}
+
+    <div class="page-header">
+      <div>
+        <h1>Raid Composition</h1>
+        <p class="page-desc">
+          A suggested raid comp built from Bench priority order (Death Analysis + median {difficultyLabel}{' '}
+          {DEATH_ANALYSIS_RAID_NAME} parse), balanced for raid buffs and distributed as evenly as possible across as many groups as your
+          configured quotas need.
+          {isOfficer ? ' Drag raiders between groups and the bench to adjust it — everyone sees your changes.' : ' Officers keep this up to date.'}
+        </p>
+      </div>
+    </div>
+
+    <p id="comp-counts" class="formula"></p>
+    <p id="comp-save-error" class="flash flash-error" role="alert" hidden>Failed to save that change — reload and try again.</p>
+
+    <section class="admin-section">
+      <div class="section-header">
+        <h2>Raid Groups</h2>
+        <div class="section-header-actions">
+          <button type="button" class="action-btn" id="comp-clear" disabled={!isOfficer}>Clear Comp</button>
+          <button type="button" class="action-btn comp-generate-btn" id="comp-generate-groups" disabled={!isOfficer}>Regenerate Comp</button>
+        </div>
+      </div>
+      <p class="current-roster-weights">
+        <strong>Roster generated with:</strong> {savedWeightSummary}
+        <span class="current-roster-scale">{settings.scale === 'raw' ? 'Raw WCL parse' : 'Guild percentile parse'}</span>
+      </p>
+      {isOfficer && (
+        <div class="loadout-controls" aria-label="Saved Raid Composition loadouts">
+          <form method="POST" action="/api/raid-composition/loadout" class="loadout-save-form">
+            <input type="hidden" name="action" value="save" />
+            <label>Save current loadout
+              <input name="name" maxlength="80" required placeholder="e.g. Ula'tek 10/1/26" />
+            </label>
+            <button type="submit" class="action-btn">Save loadout</button>
+          </form>
+          {loadouts.length > 0 && (
+            <form method="POST" action="/api/raid-composition/loadout" class="loadout-restore-form">
+              <label>Saved loadouts
+                <select name="loadout_id">
+                  {loadouts.map((loadout) => (
+                    <option value={loadout.id}>{loadout.name} — {loadout.assignmentCount} players · {timestampLabel(loadout.updatedAt)}</option>
+                  ))}
+                </select>
+              </label>
+              <label>Rename selected loadout
+                <input name="name" maxlength="80" required placeholder="New loadout name" />
+              </label>
+              <button type="submit" name="action" value="load" class="action-btn" formnovalidate>Load</button>
+              <button type="submit" name="action" value="rename" class="action-btn">Rename</button>
+              <button type="submit" name="action" value="delete" class="action-btn loadout-delete" formnovalidate onclick="return confirm('Delete this saved loadout?')">Delete</button>
+            </form>
+          )}
+        </div>
+      )}
+      <p id="comp-quota-warning" class="comp-quota-warning" role="status" aria-live="polite" hidden></p>
+      <div class="comp-groups" id="comp-groups"></div>
+    </section>
+
+    <section class="admin-section">
+      <div class="section-header">
+        <h2>Bench</h2>
+        <div class="section-header-actions">
+          <form method="POST" action="/api/admin/bench/reset-absent">
+            <button type="submit" class="action-btn" disabled={!isOfficer}>Reset Absent</button>
+          </form>
+          <button type="button" class="action-btn comp-generate-btn" id="comp-generate-bench" disabled={!isOfficer}>Regenerate Comp</button>
+        </div>
+      </div>
+      <p class="section-copy">
+        Available raiders not currently in the comp, grouped by role. Raiders marked <em>Not scored</em> are available for manual placement but are excluded from automatic regeneration.
+        Click the <strong>?</strong> on a raider to see why they're benched.
+        {isOfficer ? ' Officers can also click Absent to exclude someone from Regenerate — click it again to clear it.' : ''}
+      </p>
+      {isOfficer && (
+        <form method="POST" action="/api/raid-composition/temp-candidate" class="temp-candidate-form">
+          <input type="hidden" name="action" value="create" />
+          <label>Name <input name="name" maxlength="40" required placeholder="PUG or trial name" /></label>
+          <label>Class
+            <select name="class_name">
+              {Object.keys(CLASS_COLORS).map((className) => <option value={className}>{className}</option>)}
+            </select>
+          </label>
+          <label>Role
+            <select name="assigned_role">
+              <option value="tank">Tank</option>
+              <option value="healer">Healer</option>
+              <option value="melee-dps">Melee DPS</option>
+              <option value="ranged-dps">Ranged DPS</option>
+            </select>
+          </label>
+          <button type="submit" class="action-btn">Add temporary candidate</button>
+        </form>
+      )}
+      <div class="roster-pool-groups">
+        {(['tank', 'healer', 'ranged-dps', 'melee-dps'] as const).map((bucket) => (
+          <div class="roster-pool-group">
+            <h3>{{ tank: 'Tanks', healer: 'Healers', 'ranged-dps': 'Ranged DPS', 'melee-dps': 'Melee DPS' }[bucket]}</h3>
+            <ul class="comp-chip-list comp-bench" id={`comp-bench-${bucket}`} data-group="bench"></ul>
+          </div>
+        ))}
+      </div>
+      <p id="comp-bench-empty" class="empty-state" hidden>No available raiders are on the bench.</p>
+    </section>
+
+    <section class="admin-section">
+      <h2>Coverage</h2>
+      <p class="section-copy">Recomputed live from the raiders currently placed in a group.</p>
+      <div class="coverage-grid">
+        <div class="coverage-col">
+          <h3>Roles</h3>
+          <ul id="coverage-roles"></ul>
+        </div>
+        <div class="coverage-col">
+          <h3>Raid Buffs</h3>
+          <ul id="coverage-buffs"></ul>
+        </div>
+        <div class="coverage-col">
+          <h3>Healer Cooldowns</h3>
+          <ul id="coverage-healer-cds"></ul>
+          <p id="coverage-healer-cds-empty" class="empty-state" hidden>No healers placed yet.</p>
+        </div>
+        <div class="coverage-col">
+          <h3>Utility</h3>
+          <p class="section-copy coverage-utility-copy">
+            Not required by default — set a minimum for a fight that needs it (e.g. 2 Demonic Gateways) and Regenerate will try to force that many in.
+          </p>
+          <ul id="coverage-utility"></ul>
+        </div>
+      </div>
+    </section>
+
+    <details class="admin-section officer-config" id="config-settings">
+      <summary>Configuration Settings</summary>
+
+      <div class="officer-config-body">
+        {!isOfficer && (
+          <p class="section-copy">View only — officers can edit these settings and overrides.</p>
+        )}
+        <div class="header-actions">
+          <form method="POST" action="/api/admin/bench/refresh">
+            <button type="submit" class="action-btn" disabled={!isOfficer}>Refresh Parses</button>
+          </form>
+        </div>
+        <p class="page-meta">
+          Parses updated: {timestampLabel(bench.lastParseSyncAt)} · Deaths updated: {timestampLabel(bench.summary.lastSyncedAt)}
+        </p>
+
+        <section class="admin-section comp-controls" aria-label="Comp generation controls">
+          <div class="control">
+            <label for="comp-tanks" class="control-label">Tanks</label>
+            <input id="comp-tanks" type="number" min="0" max="8" value={settings.tankQuota} disabled={!isOfficer} />
+          </div>
+          <div class="control">
+            <label for="comp-healers" class="control-label">Healers</label>
+            <input id="comp-healers" type="number" min="0" max="10" value={settings.healerQuota} disabled={!isOfficer} />
+          </div>
+          <div class="control">
+            <label for="comp-melee-dps" class="control-label">Melee DPS</label>
+            <input id="comp-melee-dps" type="number" min="0" max="20" value={settings.meleeDpsQuota} disabled={!isOfficer} />
+          </div>
+          <div class="control">
+            <label for="comp-ranged-dps" class="control-label">Ranged DPS</label>
+            <input id="comp-ranged-dps" type="number" min="0" max="20" value={settings.rangedDpsQuota} disabled={!isOfficer} />
+          </div>
+          <div class="control comp-generate-control">
+            <span class="control-label">&nbsp;</span>
+            <button type="button" id="comp-generate" class="action-btn" disabled={!isOfficer}>Regenerate Comp</button>
+          </div>
+        </section>
+        <p id="comp-target-summary" class="comp-target-summary"></p>
+
+        <section class="admin-section controls" aria-label="Scoring controls">
+          <div class="control weight-control">
+            <span class="control-label">Score weights</span>
+            <div class="score-weight-grid">
+              <label>Parse <input id="bench-parse-weight" type="number" min="0" max="100" step="1" value={settings.parseWeight} disabled={!isOfficer} />%</label>
+              <label>Deaths <input id="bench-death-weight" type="number" min="0" max="100" step="1" value={settings.deathWeight} disabled={!isOfficer} />%</label>
+              <label>Great Vault <input id="bench-vault-weight" type="number" min="0" max="100" step="1" value={settings.vaultWeight} disabled={!isOfficer} />%</label>
+              <label>Preparedness <input id="bench-preparedness-weight" type="number" min="0" max="100" step="1" value={settings.preparednessWeight} disabled={!isOfficer} />%</label>
+              <label>Upgrades <input id="bench-upgrades-weight" type="number" min="0" max="100" step="1" value={settings.upgradesWeight} disabled={!isOfficer} />%</label>
+            </div>
+            <output id="bench-weight-label" class="weight-readout"></output>
+          </div>
+
+          <fieldset class="control">
+            <legend class="control-label">Parse scale</legend>
+            <div class="segmented">
+              <label><input type="radio" name="bench-scale" value="percentile" checked={settings.scale === 'percentile'} disabled={!isOfficer} /> Guild percentile</label>
+              <label><input type="radio" name="bench-scale" value="raw" checked={settings.scale === 'raw'} disabled={!isOfficer} /> Raw WCL parse</label>
+            </div>
+          </fieldset>
+
+          <p id="bench-formula" class="formula"></p>
+        </section>
+
+        <section class="admin-section">
+          <h3>Roster</h3>
+          <p class="section-copy">
+            Raiders with {bench.summary.minimumPulls}+ boss pulls across {bench.summary.minimumReports}+ reports and a parse in their role,
+            grouped by role (best first). This ordering (not saved until an officer clicks Regenerate) is what feeds the comp above.
+            {isOfficer
+              ? ' Override Role or Melee/Ranged when auto-detection is wrong; check Absent to exclude someone from Regenerate, or RL to always include them.'
+              : ''}
+          </p>
+            {(['tank', 'healer', 'ranged-dps', 'melee-dps'] as const).map((bucket) => (
+              <div class="roster-group">
+                <h4>{{ tank: 'Tanks', healer: 'Healers', 'ranged-dps': 'Ranged DPS', 'melee-dps': 'Melee DPS' }[bucket]}</h4>
+                <div class="table-wrap">
+                  <table class="review-table roster-table">
+                    <colgroup>
+                      <col class="col-rank" />
+                      <col class="col-raider" />
+                      <col class="col-median" />
+                      <col class="col-parse-score" />
+                      <col class="col-death" />
+                      <col class="col-vault" />
+                      <col class="col-prepared" />
+                      <col class="col-upgrades" />
+                      <col class="col-combined" />
+                      <col class="col-role" />
+                      <col class="col-melee-ranged" />
+                      <col class="col-absent" />
+                      <col class="col-rl" />
+                    </colgroup>
+                    <thead>
+                      <tr>
+                        {rosterColumns.map((column) => (
+                          <th class={column.className}>
+                            <button type="button" class="column-help" data-column-tooltip={column.help}>{column.label}</button>
+                          </th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody id={`roster-${bucket}-body`}></tbody>
+                  </table>
+                </div>
+              </div>
+            ))}
+            <p id="roster-empty" class="empty-state" hidden>No raiders to rank yet.</p>
+          </section>
+
+          <section class="admin-section">
+            <h3>Not Scored</h3>
+            <p class="section-copy">
+              Not enough death data (under {bench.summary.minimumPulls} pulls or {bench.summary.minimumReports} reports), or no parse in
+              their role. They are not ranked or auto-selected by Regenerate, but remain available on the Bench for officers to place manually.
+            </p>
+            <div class="table-wrap">
+              <table class="review-table">
+                <thead>
+                  <tr>
+                    <th>Raider</th>
+                    <th>Role</th>
+                    <th class="num">Median Parse</th>
+                    <th class="num">Bosses</th>
+                    <th class="num">Pulls</th>
+                    <th class="num">Reports</th>
+                    <th>Reason</th>
+                  </tr>
+                </thead>
+                <tbody id="bench-unscored-body"></tbody>
+              </table>
+            </div>
+            <p id="bench-unscored-empty" class="empty-state" hidden>Everyone has enough data.</p>
+        </section>
+      </div>
+    </details>
+  </div>
+</Layout>
+
+<script is:inline type="application/json" id="raid-comp-data" set:html={JSON.stringify(clientData).replace(/</g, '\\u003c')}></script>
+
+<script>
+  import { computeTeamSummary, classRaidData, ALL_RAID_BUFFS, ALL_UTILITY, type AssignedRole } from '../lib/raid-teams';
+
+  type Role = 'dps' | 'healer' | 'tank';
+  type MechanicRole = 'tank' | 'healer' | 'melee' | 'ranged';
+  interface Raider {
+    blizzardCharId: number;
+    name: string;
+    realm: string;
+    color: string;
+    className: string;
+    reportCount: number;
+    fightsPresent: number;
+    weightedScore: number;
+    role: Role;
+    autoRole: Role;
+    roleOverride: Role | null;
+    mechanicRole: MechanicRole | null;
+    meleeRangedOverride: 'melee' | 'ranged' | null;
+    isAbsent: boolean;
+    isRaidLeader: boolean;
+    parse: number | null;
+    parseBosses: number;
+    parseStatus: 'ok' | 'no-role-parse' | 'not-found' | 'pending';
+    vaultScore: number;
+    preparednessScore: number;
+    upgradesCompleted: number;
+    isTemporary: boolean;
+  }
+  interface RaidCompClientData {
+    ranked: Raider[];
+    belowMinimum: Raider[];
+    temporaryCandidates: Raider[];
+    minimumPulls: number;
+    minimumReports: number;
+    difficultyLabel: string;
+    assignments: Array<[number, number]>;
+    manualOverrideIds: number[];
+    settings: {
+      tankQuota: number;
+      healerQuota: number;
+      meleeDpsQuota: number;
+      rangedDpsQuota: number;
+      parseWeight: number;
+      deathWeight: number;
+      vaultWeight: number;
+      preparednessWeight: number;
+      upgradesWeight: number;
+      scale: 'percentile' | 'raw';
+    };
+    isOfficer: boolean;
+    utilityMinimums: Array<[string, number]>;
+  }
+
+  const ROLE_LABELS: Record<Role, string> = { dps: 'DPS', healer: 'Healer', tank: 'Tank' };
+  /** A WoW raid group is a fixed 5 slots. */
+  const MAX_GROUP_SIZE = 5;
+
+  const data = JSON.parse(document.getElementById('raid-comp-data')?.textContent ?? '{}') as RaidCompClientData;
+
+  // Configuration Settings stays open across reloads (e.g. after a per-row
+  // override form submits) once expanded, until Regenerate is clicked —
+  // regenerateComp() below clears this key right before its own reload.
+  const CONFIG_SETTINGS_OPEN_KEY = 'hl-raid-comp-config-open';
+  const configSettings = document.getElementById('config-settings') as HTMLDetailsElement | null;
+  if (configSettings) {
+    try {
+      if (localStorage.getItem(CONFIG_SETTINGS_OPEN_KEY) === 'true') configSettings.open = true;
+    } catch {
+      // Per-viewer convenience only.
+    }
+    configSettings.addEventListener('toggle', () => {
+      try {
+        localStorage.setItem(CONFIG_SETTINGS_OPEN_KEY, String(configSettings.open));
+      } catch {
+        // Per-viewer convenience only.
+      }
+    });
+  }
+
+  // One shared HTML tooltip keeps the repeated role tables lightweight while
+  // making every Configuration Roster column understandable on hover/focus.
+  const columnTooltip = document.createElement('div');
+  columnTooltip.className = 'column-tooltip';
+  columnTooltip.id = 'roster-column-tooltip';
+  columnTooltip.role = 'tooltip';
+  columnTooltip.hidden = true;
+  document.body.append(columnTooltip);
+
+  const hideColumnTooltip = (button?: HTMLButtonElement) => {
+    columnTooltip.hidden = true;
+    if (button) button.setAttribute('aria-expanded', 'false');
+  };
+  const showColumnTooltip = (button: HTMLButtonElement) => {
+    columnTooltip.textContent = button.dataset.columnTooltip ?? '';
+    columnTooltip.hidden = false;
+    button.setAttribute('aria-describedby', columnTooltip.id);
+    button.setAttribute('aria-expanded', 'true');
+    const rect = button.getBoundingClientRect();
+    const tooltipRect = columnTooltip.getBoundingClientRect();
+    const horizontal = Math.max(10, Math.min(rect.left, window.innerWidth - tooltipRect.width - 10));
+    const vertical = rect.bottom + tooltipRect.height + 10 <= window.innerHeight ? rect.bottom + 8 : Math.max(10, rect.top - tooltipRect.height - 8);
+    columnTooltip.style.left = `${horizontal}px`;
+    columnTooltip.style.top = `${vertical}px`;
+  };
+  for (const button of document.querySelectorAll<HTMLButtonElement>('.column-help')) {
+    button.setAttribute('aria-expanded', 'false');
+    button.addEventListener('mouseenter', () => showColumnTooltip(button));
+    button.addEventListener('focus', () => showColumnTooltip(button));
+    button.addEventListener('mouseleave', () => hideColumnTooltip(button));
+    button.addEventListener('blur', () => hideColumnTooltip(button));
+    button.addEventListener('click', () => {
+      if (columnTooltip.hidden) showColumnTooltip(button);
+      else hideColumnTooltip(button);
+    });
+  }
+
+  const scored = data.ranked.filter((raider) => raider.parseStatus === 'ok');
+  const unscored = [...data.ranked.filter((raider) => raider.parseStatus !== 'ok'), ...data.belowMinimum];
+  const temporary = data.temporaryCandidates;
+  const scoredIds = new Set(scored.map((raider) => raider.blizzardCharId));
+  const temporaryIds = new Set(temporary.map((raider) => raider.blizzardCharId));
+  const candidates = [...scored, ...unscored, ...temporary].filter(
+    (raider, index, all) => all.findIndex((entry) => entry.blizzardCharId === raider.blizzardCharId) === index
+  );
+  const raiderById = new Map(candidates.map((raider) => [raider.blizzardCharId, raider]));
+
+  // --- Shared scoring (used by both the Roster table and the Bench "why" popover) ---
+
+  const deathPool = scored.map((raider) => raider.weightedScore);
+  const parsePool = scored.map((raider) => raider.parse ?? 0);
+  const vaultPool = scored.map((raider) => raider.vaultScore);
+  const preparednessPool = scored.map((raider) => raider.preparednessScore);
+  const upgradesPool = scored.map((raider) => raider.upgradesCompleted);
+
+  /** Tie-aware percentile for higher-is-better scores: every tied highest value receives 1 (100%). */
+  function percentRank(pool: number[], value: number): number {
+    if (pool.length <= 1) return 1;
+    return (pool.filter((entry) => entry <= value).length - 1) / (pool.length - 1);
+  }
+
+  /** Tie-aware percentile for lower-is-better scores: every tied lowest value receives 1 (100%). */
+  function inversePercentRank(pool: number[], value: number): number {
+    if (pool.length <= 1) return 1;
+    return (pool.filter((entry) => entry >= value).length - 1) / (pool.length - 1);
+  }
+
+  /*
+   * Mirrors relativeToMax/hasVariance/combineScores in src/lib/raid-comp.ts.
+   * Keep the two copies in sync or the Roster preview and Regenerate disagree.
+   */
+
+  /** Share of the best value in the pool, 0–100 — for raw counts where 0 should read as 0 and twice the work should read as twice the score. */
+  function relativeToMax(pool: number[], value: number): number {
+    const max = Math.max(0, ...pool);
+    return max > 0 ? (value / max) * 100 : 0;
+  }
+
+  function hasVariance(pool: number[]): boolean {
+    return pool.length > 1 && pool.some((entry) => entry !== pool[0]);
+  }
+
+  function combineScores(components: ReadonlyArray<{ weight: number; value: number; varies: boolean }>): number {
+    let weighted = 0;
+    let activeWeight = 0;
+    for (const component of components) {
+      if (!component.varies) continue;
+      weighted += component.weight * component.value;
+      activeWeight += component.weight;
+    }
+    return activeWeight > 0 ? weighted / activeWeight : 0;
+  }
+
+  const poolVaries = {
+    parse: hasVariance(parsePool),
+    death: hasVariance(deathPool),
+    vault: hasVariance(vaultPool),
+    preparedness: hasVariance(preparednessPool),
+    upgrades: hasVariance(upgradesPool),
+  };
+
+  /** Reads the live weights/scale from Configuration Settings (present for every visitor, editable only by officers). */
+  function currentSettings(): Pick<RaidCompClientData['settings'], 'parseWeight' | 'deathWeight' | 'vaultWeight' | 'preparednessWeight' | 'upgradesWeight' | 'scale'> {
+    const readWeight = (id: string, fallback: number): number => {
+      const value = Number((document.getElementById(id) as HTMLInputElement | null)?.value ?? fallback);
+      return Number.isFinite(value) ? value : fallback;
+    };
+    const scaleInput = document.querySelector('input[name="bench-scale"]:checked') as HTMLInputElement | null;
+    return {
+      parseWeight: readWeight('bench-parse-weight', data.settings.parseWeight),
+      deathWeight: readWeight('bench-death-weight', data.settings.deathWeight),
+      vaultWeight: readWeight('bench-vault-weight', data.settings.vaultWeight),
+      preparednessWeight: readWeight('bench-preparedness-weight', data.settings.preparednessWeight),
+      upgradesWeight: readWeight('bench-upgrades-weight', data.settings.upgradesWeight),
+      scale: scaleInput?.value === 'raw' ? 'raw' : 'percentile',
+    };
+  }
+
+  interface ScoredRow {
+    raider: Raider;
+    parseScore: number;
+    deathPct: number;
+    vaultPct: number;
+    preparednessPct: number;
+    upgradesPct: number;
+    combined: number;
+  }
+
+  function computeScoredRows(): ScoredRow[] {
+    const settings = currentSettings();
+    return scored.map((raider) => {
+      const parse = raider.parse ?? 0;
+      const parseScore = settings.scale === 'raw' ? parse : 100 * percentRank(parsePool, parse);
+      const deathPct = 100 * inversePercentRank(deathPool, raider.weightedScore);
+      const vaultPct = 100 * percentRank(vaultPool, raider.vaultScore);
+      const preparednessPct = 100 * percentRank(preparednessPool, raider.preparednessScore);
+      const upgradesPct = relativeToMax(upgradesPool, raider.upgradesCompleted);
+      const combined = combineScores([
+        { weight: settings.parseWeight, value: parseScore, varies: poolVaries.parse },
+        { weight: settings.deathWeight, value: deathPct, varies: poolVaries.death },
+        { weight: settings.vaultWeight, value: vaultPct, varies: poolVaries.vault },
+        { weight: settings.preparednessWeight, value: preparednessPct, varies: poolVaries.preparedness },
+        { weight: settings.upgradesWeight, value: upgradesPct, varies: poolVaries.upgrades },
+      ]);
+      return { raider, parseScore, deathPct, vaultPct, preparednessPct, upgradesPct, combined };
+    });
+  }
+
+  // --- Melee/ranged + natural role -------------------------------------------
+
+  const MELEE_CLASSES = new Set(['Death Knight', 'Demon Hunter', 'Monk', 'Paladin', 'Rogue', 'Warrior']);
+  const RANGED_CLASSES = new Set(['Evoker', 'Hunter', 'Mage', 'Priest', 'Warlock']);
+
+  /** Druid and Shaman have both a melee and a ranged DPS spec, so without a synced WCL spec they default to ranged. */
+  function autoMeleeOrRanged(raider: Raider): 'melee' | 'ranged' {
+    if (raider.mechanicRole === 'melee') return 'melee';
+    if (raider.mechanicRole === 'ranged') return 'ranged';
+    if (MELEE_CLASSES.has(raider.className)) return 'melee';
+    if (RANGED_CLASSES.has(raider.className)) return 'ranged';
+    return 'ranged';
+  }
+
+  function meleeOrRanged(raider: Raider): 'melee' | 'ranged' {
+    return raider.meleeRangedOverride ?? autoMeleeOrRanged(raider);
+  }
+
+  function naturalRole(raider: Raider): AssignedRole {
+    if (raider.role === 'tank') return 'tank';
+    if (raider.role === 'healer') return 'healer';
+    return meleeOrRanged(raider) === 'melee' ? 'melee-dps' : 'ranged-dps';
+  }
+
+  const ROLE_TAG_LABELS: Record<AssignedRole, string> = {
+    tank: 'Tank',
+    healer: 'Healer',
+    'melee-dps': 'Melee',
+    'ranged-dps': 'Ranged',
+  };
+  const ROLE_ORDER: AssignedRole[] = ['tank', 'healer', 'melee-dps', 'ranged-dps'];
+
+  // --- Board (shared, server-persisted) ---------------------------------------
+
+  const compCounts = document.getElementById('comp-counts') as HTMLParagraphElement;
+  const compSaveError = document.getElementById('comp-save-error') as HTMLParagraphElement;
+  const compQuotaWarning = document.getElementById('comp-quota-warning') as HTMLParagraphElement;
+  const compGroupsEl = document.getElementById('comp-groups') as HTMLDivElement;
+  const compBenchEls: Record<AssignedRole, HTMLUListElement> = {
+    tank: document.getElementById('comp-bench-tank') as HTMLUListElement,
+    healer: document.getElementById('comp-bench-healer') as HTMLUListElement,
+    'ranged-dps': document.getElementById('comp-bench-ranged-dps') as HTMLUListElement,
+    'melee-dps': document.getElementById('comp-bench-melee-dps') as HTMLUListElement,
+  };
+  const compBenchEmpty = document.getElementById('comp-bench-empty') as HTMLParagraphElement;
+  // These 4 lists are static (unlike the group lists, which are rebuilt every render), so they're
+  // wired up once here rather than in renderComp — re-registering on every render would stack duplicate listeners.
+  for (const el of Object.values(compBenchEls)) registerDropZone(el, 'bench');
+  const coverageRolesEl = document.getElementById('coverage-roles') as HTMLUListElement;
+  const coverageBuffsEl = document.getElementById('coverage-buffs') as HTMLUListElement;
+  const coverageHealerCdsEl = document.getElementById('coverage-healer-cds') as HTMLUListElement;
+  const coverageHealerCdsEmpty = document.getElementById('coverage-healer-cds-empty') as HTMLParagraphElement;
+  const coverageUtilityEl = document.getElementById('coverage-utility') as HTMLUListElement;
+
+  const utilityMinimums = new Map<string, number>(data.utilityMinimums);
+
+  async function saveUtilityMinimum(utility: string, minimum: number): Promise<boolean> {
+    try {
+      const response = await fetch('/api/raid-composition/utility-minimum', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ utility, minimum }),
+      });
+      return response.ok;
+    } catch (error) {
+      console.error('Failed to save utility minimum', error);
+      return false;
+    }
+  }
+
+  const assignments = new Map<number, number>(
+    data.assignments.filter(([charId]) => raiderById.has(charId)) as Array<[number, number]>
+  );
+  const manualOverrideIds = new Set(data.manualOverrideIds.filter((charId) => raiderById.has(charId)));
+  let draggedCharId: number | null = null;
+
+  /** Set by the Configuration Settings block below once its Roster table exists, so a chip's Absent toggle can keep that table's checkboxes in sync too. */
+  let refreshRoster: () => void = () => {};
+
+  /** Show the four primary groups plus only overflow groups that currently have a raider. */
+  function boardGroupCount(): number {
+    const highestAssignedGroup = Math.max(0, ...assignments.values());
+    return Math.max(4, highestAssignedGroup);
+  }
+
+  function groupCount(group: number, excludingCharId?: number): number {
+    let count = 0;
+    for (const [charId, g] of assignments) {
+      if (g === group && charId !== excludingCharId) count += 1;
+    }
+    return count;
+  }
+
+  function showSaveError(message: string): void {
+    compSaveError.textContent = message;
+    compSaveError.hidden = false;
+  }
+
+  /** Returns whether the save landed; a 409 means another officer filled that group first. */
+  async function saveAssignment(charId: number, group: number | null): Promise<boolean> {
+    try {
+      const response = await fetch('/api/raid-composition/assignment', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ blizzardCharId: charId, group }),
+      });
+      if (response.status === 409) {
+        showSaveError('That group filled up before your change saved — it was put back.');
+        return false;
+      }
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      compSaveError.hidden = true;
+      return true;
+    } catch (error) {
+      console.error('Failed to save raid comp assignment', error);
+      showSaveError('Failed to save that change — reload and try again.');
+      return false;
+    }
+  }
+
+  function moveRaider(charId: number, group: number | null): void {
+    const previous = assignments.get(charId) ?? null;
+    const wasManualOverride = manualOverrideIds.has(charId);
+    if (group) assignments.set(charId, group);
+    else assignments.delete(charId);
+    manualOverrideIds.add(charId);
+    renderComp();
+    void saveAssignment(charId, group).then((ok) => {
+      if (ok) return;
+      // Roll back to wherever the raider actually was before this attempt.
+      if (previous) assignments.set(charId, previous);
+      else assignments.delete(charId);
+      if (!wasManualOverride) manualOverrideIds.delete(charId);
+      renderComp();
+    });
+  }
+
+  async function saveSwap(firstCharId: number, secondCharId: number): Promise<boolean> {
+    try {
+      const response = await fetch('/api/raid-composition/swap', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ firstCharId, secondCharId }),
+      });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      compSaveError.hidden = true;
+      return true;
+    } catch (error) {
+      console.error('Failed to swap raid comp raiders', error);
+      showSaveError('Failed to swap those raiders — reload and try again.');
+      return false;
+    }
+  }
+
+  function swapRaiders(firstCharId: number, secondCharId: number): void {
+    if (firstCharId === secondCharId) return;
+    const firstGroup = assignments.get(firstCharId) ?? null;
+    const secondGroup = assignments.get(secondCharId) ?? null;
+    const firstWasManualOverride = manualOverrideIds.has(firstCharId);
+    const secondWasManualOverride = manualOverrideIds.has(secondCharId);
+    if (firstGroup === secondGroup) return;
+
+    if (secondGroup) assignments.set(firstCharId, secondGroup);
+    else assignments.delete(firstCharId);
+    if (firstGroup) assignments.set(secondCharId, firstGroup);
+    else assignments.delete(secondCharId);
+    manualOverrideIds.add(firstCharId);
+    manualOverrideIds.add(secondCharId);
+    renderComp();
+
+    void saveSwap(firstCharId, secondCharId).then((ok) => {
+      if (ok) return;
+      if (firstGroup) assignments.set(firstCharId, firstGroup);
+      else assignments.delete(firstCharId);
+      if (secondGroup) assignments.set(secondCharId, secondGroup);
+      else assignments.delete(secondCharId);
+      if (!firstWasManualOverride) manualOverrideIds.delete(firstCharId);
+      if (!secondWasManualOverride) manualOverrideIds.delete(secondCharId);
+      renderComp();
+    });
+  }
+
+  /** Best-effort explanation for why a benched raider isn't currently in the comp. */
+  function benchReasons(raider: Raider): string[] {
+    const reasons: string[] = [];
+    if (temporaryIds.has(raider.blizzardCharId)) {
+      reasons.push('Temporary PUG/trial candidate — available for manual placement only and never selected by automatic Regenerate.');
+    } else if (!scoredIds.has(raider.blizzardCharId)) {
+      reasons.push('Not scored — available for manual placement, but excluded from automatic Regenerate until enough raid data and a role parse are available.');
+    }
+    if (raider.isAbsent) reasons.push('Marked absent — excluded from Regenerate regardless of priority.');
+
+    const bucket = naturalRole(raider);
+    const bucketRows = computeScoredRows()
+      .filter((row) => naturalRole(row.raider) === bucket)
+      .sort((a, b) => b.combined - a.combined || b.deathPct - a.deathPct || a.raider.name.localeCompare(b.raider.name));
+    const rank = bucketRows.findIndex((row) => row.raider.blizzardCharId === raider.blizzardCharId) + 1;
+    const pickedInBucket = bucketRows.filter((row) => assignments.has(row.raider.blizzardCharId)).length;
+    if (rank > 0) {
+      reasons.push(
+        `Ranked #${rank} of ${bucketRows.length} ${ROLE_TAG_LABELS[bucket]} by current priority (Configuration Settings' weight/scale); ${pickedInBucket} of them are currently in the comp.`
+      );
+    }
+    const scoreRow = computeScoredRows().find((row) => row.raider.blizzardCharId === raider.blizzardCharId);
+    if (scoreRow) {
+      const settings = currentSettings();
+      reasons.push(
+        `Great Vault ${raider.vaultScore}/100 (${scoreRow.vaultPct.toFixed(1)} guild percentile) · Preparedness ${raider.preparednessScore.toFixed(1)}% (${scoreRow.preparednessPct.toFixed(1)} guild percentile).`
+      );
+      reasons.push(`Upgrades completed since reset: ${raider.upgradesCompleted} (${scoreRow.upgradesPct.toFixed(1)} guild percentile).`);
+      reasons.push(
+        `Current weighted contributions: Parse ${(settings.parseWeight * scoreRow.parseScore / 100).toFixed(1)} · Deaths ${(settings.deathWeight * scoreRow.deathPct / 100).toFixed(1)} · Vault ${(settings.vaultWeight * scoreRow.vaultPct / 100).toFixed(1)} · Preparedness ${(settings.preparednessWeight * scoreRow.preparednessPct / 100).toFixed(1)} · Upgrades ${(settings.upgradesWeight * scoreRow.upgradesPct / 100).toFixed(1)}.`
+      );
+    }
+
+    const inComp = candidates.filter((r) => assignments.has(r.blizzardCharId));
+    const raiderBuffs = classRaidData(raider.className).buffs;
+    if (raiderBuffs.length === 0) {
+      reasons.push(`${raider.className} doesn't provide a raid buff, so buff coverage wasn't a factor.`);
+    } else {
+      const covered = raiderBuffs.filter((buff) => inComp.some((r) => classRaidData(r.className).buffs.includes(buff)));
+      const uncovered = raiderBuffs.filter((buff) => !covered.includes(buff));
+      if (covered.length > 0) reasons.push(`Provides ${covered.join(', ')} — already covered by someone in the comp (buff-redundant).`);
+      if (uncovered.length > 0) reasons.push(`Would add ${uncovered.join(', ')}, which nobody in the comp currently provides.`);
+    }
+
+    const raiderUtility = classRaidData(raider.className).utility;
+    const requiredUtility = raiderUtility.filter((utility) => (utilityMinimums.get(utility) ?? 0) > 0);
+    if (requiredUtility.length > 0) {
+      for (const utility of requiredUtility) {
+        const min = utilityMinimums.get(utility) ?? 0;
+        const count = inComp.filter((r) => classRaidData(r.className).utility.includes(utility)).length;
+        reasons.push(
+          count >= min
+            ? `Provides ${utility} (minimum ${min}), which the comp already has enough of (${count}).`
+            : `Would add ${utility} — the comp only has ${count} of the required ${min}.`
+        );
+      }
+    }
+    return reasons;
+  }
+
+  function reasonToggle(raider: Raider): HTMLElement {
+    const wrap = document.createElement('div');
+    wrap.className = 'comp-chip-reason-wrap';
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'comp-chip-reason-toggle';
+    button.textContent = '?';
+    button.setAttribute('aria-label', `Why is ${raider.name} on the bench?`);
+    const panel = document.createElement('div');
+    panel.className = 'comp-chip-reason-panel';
+    panel.hidden = true;
+    button.addEventListener('click', (event) => {
+      event.stopPropagation();
+      panel.hidden = !panel.hidden;
+      if (panel.hidden) return;
+      panel.replaceChildren(
+        ...benchReasons(raider).map((text) => {
+          const p = document.createElement('p');
+          p.textContent = text;
+          return p;
+        })
+      );
+    });
+    wrap.append(button, panel);
+    return wrap;
+  }
+
+  async function saveAbsentFlag(charId: number, isAbsent: boolean): Promise<boolean> {
+    try {
+      const response = await fetch('/api/admin/bench/set-flag', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({ blizzard_char_id: String(charId), field: 'absent', value: isAbsent ? 'true' : 'false' }),
+      });
+      return response.ok;
+    } catch (error) {
+      console.error('Failed to toggle absent', error);
+      return false;
+    }
+  }
+
+  function toggleAbsent(raider: Raider): void {
+    const next = !raider.isAbsent;
+    raider.isAbsent = next;
+    renderComp();
+    refreshRoster();
+    void saveAbsentFlag(raider.blizzardCharId, next).then((ok) => {
+      if (ok) return;
+      raider.isAbsent = !next;
+      renderComp();
+      refreshRoster();
+      showSaveError('Failed to update Absent — reload and try again.');
+    });
+  }
+
+  function chipElement(raider: Raider, location: number | 'bench'): HTMLLIElement {
+    const li = document.createElement('li');
+    li.className = 'comp-chip';
+    li.dataset.charId = String(raider.blizzardCharId);
+
+    const row = document.createElement('div');
+    row.className = 'comp-chip-row';
+    const name = document.createElement('span');
+    name.textContent = raider.name;
+    if (raider.isRaidLeader) name.textContent += ' (RL)';
+    if (raider.isAbsent) name.textContent += ' (Absent)';
+    if (manualOverrideIds.has(raider.blizzardCharId)) {
+      name.textContent += ' *';
+      li.title = 'An officer manually changed this raider\'s board or Bench placement after Regenerate.';
+    }
+    name.style.color = raider.color;
+    const tag = document.createElement('small');
+    tag.textContent = temporaryIds.has(raider.blizzardCharId)
+      ? `${ROLE_TAG_LABELS[naturalRole(raider)]} · Temporary`
+      : scoredIds.has(raider.blizzardCharId)
+        ? ROLE_TAG_LABELS[naturalRole(raider)]
+        : `${ROLE_TAG_LABELS[naturalRole(raider)]} · Not scored`;
+    if (temporaryIds.has(raider.blizzardCharId)) li.classList.add('is-temporary');
+    else if (!scoredIds.has(raider.blizzardCharId)) li.classList.add('is-unscored');
+    row.append(name, tag);
+    li.append(row);
+
+    if (location === 'bench') li.append(reasonToggle(raider));
+
+    if (!data.isOfficer) return li;
+
+    li.draggable = true;
+    li.addEventListener('dragstart', (event) => {
+      draggedCharId = raider.blizzardCharId;
+      event.dataTransfer?.setData('text/plain', String(raider.blizzardCharId));
+      if (event.dataTransfer) event.dataTransfer.effectAllowed = 'move';
+      li.classList.add('is-dragging');
+      li.setAttribute('aria-grabbed', 'true');
+      li.closest('.comp-group')?.classList.add('has-dragged-member');
+    });
+    li.addEventListener('dragend', () => {
+      draggedCharId = null;
+      document.querySelectorAll('.comp-chip.is-dragging, .comp-chip.is-drop-target').forEach((element) => {
+        element.classList.remove('is-dragging', 'is-drop-target');
+        element.setAttribute('aria-grabbed', 'false');
+      });
+      document.querySelectorAll('.comp-group.has-dragged-member').forEach((element) => element.classList.remove('has-dragged-member'));
+    });
+    li.addEventListener('dragover', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      const sourceId = draggedCharId ?? Number(event.dataTransfer?.getData('text/plain'));
+      if (sourceId && sourceId !== raider.blizzardCharId) li.classList.add('is-drop-target');
+      if (event.dataTransfer) event.dataTransfer.dropEffect = 'move';
+    });
+    li.addEventListener('dragleave', () => li.classList.remove('is-drop-target'));
+    li.addEventListener('drop', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      li.classList.remove('is-drop-target');
+      const sourceId = draggedCharId ?? Number(event.dataTransfer?.getData('text/plain'));
+      if (!sourceId || !raiderById.has(sourceId)) return;
+      swapRaiders(sourceId, raider.blizzardCharId);
+    });
+
+    if (!raider.isTemporary) {
+      const absentToggle = document.createElement('button');
+      absentToggle.type = 'button';
+      absentToggle.className = raider.isAbsent ? 'comp-chip-absent active' : 'comp-chip-absent';
+      absentToggle.textContent = 'Absent';
+      absentToggle.setAttribute('aria-pressed', String(raider.isAbsent));
+      absentToggle.title = raider.isAbsent
+        ? 'Marked absent — click to clear (they can be picked by Regenerate again)'
+        : 'Mark absent — excludes them from Regenerate';
+      absentToggle.addEventListener('click', (event) => {
+        event.stopPropagation();
+        toggleAbsent(raider);
+      });
+      row.append(absentToggle);
+    }
+
+    if (raider.isTemporary) {
+      const deleteForm = document.createElement('form');
+      deleteForm.method = 'POST';
+      deleteForm.action = '/api/raid-composition/temp-candidate';
+      const action = document.createElement('input');
+      action.type = 'hidden'; action.name = 'action'; action.value = 'delete';
+      const id = document.createElement('input');
+      id.type = 'hidden'; id.name = 'candidate_id'; id.value = String(-raider.blizzardCharId);
+      const removeCandidate = document.createElement('button');
+      removeCandidate.type = 'submit'; removeCandidate.className = 'comp-chip-remove';
+      removeCandidate.textContent = '×'; removeCandidate.title = `Remove temporary candidate ${raider.name}`;
+      removeCandidate.addEventListener('click', (event) => event.stopPropagation());
+      deleteForm.append(action, id, removeCandidate);
+      row.append(deleteForm);
+    }
+
+    if (location === 'bench') {
+      li.title = `${li.title ? `${li.title} ` : ''}Click to add to the least-full group, drag onto a group to move, or drop another raider here to swap placements.`;
+      li.addEventListener('click', () => {
+        const target = Array.from({ length: boardGroupCount() }, (_, index) => index + 1)
+          .map((group) => ({ group, count: groupCount(group) }))
+          .filter((entry) => entry.count < MAX_GROUP_SIZE)
+          .sort((a, b) => a.count - b.count)[0];
+        if (!target) {
+          showSaveError(`All ${boardGroupCount()} groups are full (${MAX_GROUP_SIZE}/${MAX_GROUP_SIZE}) — remove someone first.`);
+          return;
+        }
+        moveRaider(raider.blizzardCharId, target.group);
+      });
+    } else {
+      const remove = document.createElement('button');
+      remove.type = 'button';
+      remove.className = 'comp-chip-remove';
+      remove.setAttribute('aria-label', `Remove ${raider.name} from the comp`);
+      remove.textContent = '×';
+      remove.addEventListener('click', (event) => {
+        event.stopPropagation();
+        moveRaider(raider.blizzardCharId, null);
+      });
+      row.append(remove);
+    }
+    return li;
+  }
+
+  function registerDropZone(el: HTMLElement, group: number | 'bench'): void {
+    if (!data.isOfficer) return;
+    el.addEventListener('dragover', (event) => {
+      event.preventDefault();
+      if (event.dataTransfer) event.dataTransfer.dropEffect = 'move';
+    });
+    el.addEventListener('drop', (event) => {
+      event.preventDefault();
+      const charId = draggedCharId ?? Number(event.dataTransfer?.getData('text/plain'));
+      if (!raiderById.has(charId)) return;
+      if (group !== 'bench' && groupCount(group, charId) >= MAX_GROUP_SIZE) {
+        showSaveError(`Group ${group} is already full (${MAX_GROUP_SIZE}/${MAX_GROUP_SIZE}).`);
+        return;
+      }
+      moveRaider(charId, group === 'bench' ? null : group);
+    });
+  }
+
+  function renderCompGroup(groupNumber: number, members: Raider[]): HTMLElement {
+    const card = document.createElement('div');
+    card.className = 'comp-group';
+    const heading = document.createElement('h3');
+    heading.textContent = `Group ${groupNumber}`;
+    const counts: Record<AssignedRole, number> = { tank: 0, healer: 0, 'melee-dps': 0, 'ranged-dps': 0 };
+    for (const raider of members) counts[naturalRole(raider)] += 1;
+    const countsLine = document.createElement('p');
+    countsLine.className = 'comp-group-counts';
+    countsLine.textContent = `${counts.tank}T · ${counts.healer}H · ${counts['melee-dps']}M · ${counts['ranged-dps']}R`;
+    const list = document.createElement('ul');
+    list.className = 'comp-chip-list';
+    registerDropZone(list, groupNumber);
+    const sorted = [...members].sort(
+      (a, b) => ROLE_ORDER.indexOf(naturalRole(a)) - ROLE_ORDER.indexOf(naturalRole(b)) || a.name.localeCompare(b.name)
+    );
+    list.append(...sorted.map((raider) => chipElement(raider, groupNumber)));
+    card.append(heading, countsLine, list);
+    return card;
+  }
+
+  function renderComp(): void {
+    const quotas = data.settings;
+
+    const groupTotal = boardGroupCount();
+    const groups: Raider[][] = Array.from({ length: groupTotal }, () => []);
+    const bench: Raider[] = [];
+    for (const raider of candidates) {
+      const group = assignments.get(raider.blizzardCharId);
+      if (group && group >= 1 && group <= groupTotal) groups[group - 1].push(raider);
+      else bench.push(raider);
+    }
+
+    const currentCounts = { tank: 0, healer: 0, 'melee-dps': 0, 'ranged-dps': 0 } as Record<AssignedRole, number>;
+    for (const raider of groups.flat()) currentCounts[naturalRole(raider)] += 1;
+    compCounts.textContent = `In comp: ${currentCounts.tank}/${quotas.tankQuota} tanks · ${currentCounts.healer}/${quotas.healerQuota} healers · ${currentCounts['melee-dps']}/${quotas.meleeDpsQuota} melee DPS · ${currentCounts['ranged-dps']}/${quotas.rangedDpsQuota} ranged DPS · ${groups.flat().length} total`;
+
+    const quotaWarnings = [
+      ['Tanks', currentCounts.tank, quotas.tankQuota],
+      ['Healers', currentCounts.healer, quotas.healerQuota],
+      ['Melee DPS', currentCounts['melee-dps'], quotas.meleeDpsQuota],
+      ['Ranged DPS', currentCounts['ranged-dps'], quotas.rangedDpsQuota],
+    ]
+      .filter(([, selected, requested]) => Number(selected) < Number(requested))
+      .map(([label, selected, requested]) => `${label}: requested ${requested}, selected ${selected} (short ${Number(requested) - Number(selected)})`);
+    compQuotaWarning.hidden = quotaWarnings.length === 0;
+    compQuotaWarning.textContent = quotaWarnings.length > 0 ? `Quota warning — ${quotaWarnings.join(' · ')}` : '';
+
+    compGroupsEl.replaceChildren(...groups.map((members, index) => renderCompGroup(index + 1, members)));
+
+    for (const role of ROLE_ORDER) {
+      const members = bench.filter((raider) => naturalRole(raider) === role);
+      compBenchEls[role].replaceChildren(...members.map((raider) => chipElement(raider, 'bench')));
+    }
+    compBenchEmpty.hidden = bench.length > 0;
+
+    const allEntries = groups.flat();
+    const summary = computeTeamSummary(allEntries.map((raider) => ({ className: raider.className, assignedRole: naturalRole(raider) })));
+
+    coverageRolesEl.replaceChildren(
+      ...ROLE_ORDER.map((role) => {
+        const li = document.createElement('li');
+        li.textContent = `${ROLE_TAG_LABELS[role]}: ${summary.roleCounts[role]}`;
+        return li;
+      })
+    );
+
+    coverageBuffsEl.replaceChildren(
+      ...ALL_RAID_BUFFS.map((buff) => {
+        const li = document.createElement('li');
+        const count = summary.raidBuffCounts.find((entry) => entry.buff === buff)?.count ?? 0;
+        li.textContent = count > 0 ? `${buff} (${count})` : `${buff} — missing`;
+        li.className = count > 0 ? 'coverage-ok' : 'coverage-missing';
+        return li;
+      })
+    );
+
+    const healers = allEntries.filter((raider) => naturalRole(raider) === 'healer');
+    const healerCooldowns = [...new Set(healers.flatMap((raider) => classRaidData(raider.className).healerCooldowns))].sort((a, b) =>
+      a.localeCompare(b)
+    );
+    coverageHealerCdsEl.replaceChildren(
+      ...healerCooldowns.map((cooldown) => {
+        const li = document.createElement('li');
+        li.textContent = cooldown;
+        return li;
+      })
+    );
+    coverageHealerCdsEmpty.hidden = healers.length > 0;
+
+    coverageUtilityEl.replaceChildren(
+      ...ALL_UTILITY.map((utility) => {
+        const li = document.createElement('li');
+        li.className = 'coverage-utility-row';
+        const count = summary.utilityCounts.find((entry) => entry.utility === utility)?.count ?? 0;
+        const minimum = utilityMinimums.get(utility) ?? 0;
+        const label = document.createElement('span');
+        label.textContent = `${utility}: ${count}`;
+        if (minimum > 0 && count < minimum) label.className = 'coverage-missing';
+        const minInput = document.createElement('input');
+        minInput.type = 'number';
+        minInput.min = '0';
+        minInput.max = '8';
+        minInput.value = String(minimum);
+        minInput.className = 'coverage-utility-min';
+        minInput.disabled = !data.isOfficer;
+        minInput.setAttribute('aria-label', `Minimum ${utility} providers`);
+        minInput.title = 'Minimum providers Regenerate will try to guarantee (0 = no requirement)';
+        minInput.addEventListener('change', () => {
+          const next = Math.max(0, Math.floor(Number(minInput.value) || 0));
+          minInput.value = String(next);
+          utilityMinimums.set(utility, next);
+          renderComp();
+          void saveUtilityMinimum(utility, next).then((ok) => {
+            if (ok) return;
+            showSaveError('Failed to save that minimum — reload and try again.');
+          });
+        });
+        li.append(label, minInput);
+        return li;
+      })
+    );
+  }
+
+  renderComp();
+
+  // --- Configuration Settings (Roster / Not Scored / Regenerate) --------------
+  // Visible to everyone; every mutating control in here is server-rendered
+  // `disabled` for non-officers, and the mutation endpoints themselves also
+  // reject non-officers, so this block is safe to run for all visitors.
+  {
+    const weightInputs = [
+      document.getElementById('bench-parse-weight') as HTMLInputElement,
+      document.getElementById('bench-death-weight') as HTMLInputElement,
+      document.getElementById('bench-vault-weight') as HTMLInputElement,
+      document.getElementById('bench-preparedness-weight') as HTMLInputElement,
+      document.getElementById('bench-upgrades-weight') as HTMLInputElement,
+    ];
+    const weightLabel = document.getElementById('bench-weight-label') as HTMLOutputElement;
+    const formula = document.getElementById('bench-formula') as HTMLParagraphElement;
+    const rosterBodies: Record<AssignedRole, HTMLTableSectionElement> = {
+      tank: document.getElementById('roster-tank-body') as HTMLTableSectionElement,
+      healer: document.getElementById('roster-healer-body') as HTMLTableSectionElement,
+      'ranged-dps': document.getElementById('roster-ranged-dps-body') as HTMLTableSectionElement,
+      'melee-dps': document.getElementById('roster-melee-dps-body') as HTMLTableSectionElement,
+    };
+    const rosterEmpty = document.getElementById('roster-empty') as HTMLParagraphElement;
+    const unscoredBody = document.getElementById('bench-unscored-body') as HTMLTableSectionElement;
+    const compTanksInput = document.getElementById('comp-tanks') as HTMLInputElement;
+    const compHealersInput = document.getElementById('comp-healers') as HTMLInputElement;
+    const compMeleeDpsInput = document.getElementById('comp-melee-dps') as HTMLInputElement;
+    const compRangedDpsInput = document.getElementById('comp-ranged-dps') as HTMLInputElement;
+    const compGenerateButton = document.getElementById('comp-generate') as HTMLButtonElement;
+    const compTargetSummary = document.getElementById('comp-target-summary') as HTMLParagraphElement;
+
+    function renderTargetSummary(): void {
+      const readQuota = (input: HTMLInputElement, fallback: number) => {
+        const value = Number(input.value);
+        return Number.isFinite(value) ? Math.max(0, Math.floor(value)) : fallback;
+      };
+      const tanks = readQuota(compTanksInput, data.settings.tankQuota);
+      const healers = readQuota(compHealersInput, data.settings.healerQuota);
+      const meleeDps = readQuota(compMeleeDpsInput, data.settings.meleeDpsQuota);
+      const rangedDps = readQuota(compRangedDpsInput, data.settings.rangedDpsQuota);
+      const total = tanks + healers + meleeDps + rangedDps;
+      const groups = 4 + Math.max(0, total - 4 * MAX_GROUP_SIZE);
+      compTargetSummary.textContent = `Target raid size: ${total} players · ${groups} groups (up to ${MAX_GROUP_SIZE} each) · Target DPS: ${meleeDps} melee / ${rangedDps} ranged`;
+    }
+
+    function cell(text: string, className?: string): HTMLTableCellElement {
+      const td = document.createElement('td');
+      td.textContent = text;
+      if (className) td.className = className;
+      return td;
+    }
+
+    function raiderCell(raider: Raider): HTMLTableCellElement {
+      const td = document.createElement('td');
+      const stack = document.createElement('div');
+      stack.className = 'cell-stack';
+      const name = document.createElement('strong');
+      name.textContent = raider.name;
+      name.style.color = raider.color;
+      const realm = document.createElement('small');
+      realm.textContent = raider.realm;
+      stack.append(name, realm);
+      td.append(stack);
+      return td;
+    }
+
+    /** Posts to the role-override endpoint on change; "Auto" clears the override. */
+    function roleCell(raider: Raider): HTMLTableCellElement {
+      const td = document.createElement('td');
+      const form = document.createElement('form');
+      form.method = 'POST';
+      form.action = '/api/admin/bench/role-override';
+      form.className = 'role-form';
+      const id = document.createElement('input');
+      id.type = 'hidden';
+      id.name = 'blizzard_char_id';
+      id.value = String(raider.blizzardCharId);
+      const select = document.createElement('select');
+      select.name = 'role';
+      select.className = 'role-select';
+      select.disabled = !data.isOfficer;
+      select.setAttribute('aria-label', `Role for ${raider.name}`);
+      const options: Array<[string, string]> = [
+        ['', `Auto (${ROLE_LABELS[raider.autoRole]})`],
+        ['dps', 'DPS'],
+        ['healer', 'Healer'],
+        ['tank', 'Tank'],
+      ];
+      for (const [value, label] of options) {
+        const option = document.createElement('option');
+        option.value = value;
+        option.textContent = label;
+        option.selected = (raider.roleOverride ?? '') === value;
+        select.append(option);
+      }
+      select.addEventListener('change', () => form.requestSubmit());
+      form.append(id, select);
+      td.append(form);
+      return td;
+    }
+
+    /** A hidden-field form posting to /api/admin/bench/set-flag; `value` is set live before each submit by `getValue`. */
+    function flagForm(raider: Raider, field: string, getValue: () => string): HTMLFormElement {
+      const form = document.createElement('form');
+      form.method = 'POST';
+      form.action = '/api/admin/bench/set-flag';
+      const id = document.createElement('input');
+      id.type = 'hidden';
+      id.name = 'blizzard_char_id';
+      id.value = String(raider.blizzardCharId);
+      const fieldInput = document.createElement('input');
+      fieldInput.type = 'hidden';
+      fieldInput.name = 'field';
+      fieldInput.value = field;
+      const value = document.createElement('input');
+      value.type = 'hidden';
+      value.name = 'value';
+      form.append(id, fieldInput, value);
+      form.addEventListener('submit', () => {
+        value.value = getValue();
+      });
+      return form;
+    }
+
+    /** Posts to set-flag on change; "Auto" clears the override. Only meaningful for DPS rows. */
+    function meleeRangedCell(raider: Raider): HTMLTableCellElement {
+      const td = document.createElement('td');
+      const select = document.createElement('select');
+      select.className = 'role-select';
+      select.disabled = !data.isOfficer;
+      select.setAttribute('aria-label', `Melee or ranged for ${raider.name}`);
+      const options: Array<[string, string]> = [
+        ['', `Auto (${ROLE_TAG_LABELS[autoMeleeOrRanged(raider) === 'melee' ? 'melee-dps' : 'ranged-dps']})`],
+        ['melee', 'Melee'],
+        ['ranged', 'Ranged'],
+      ];
+      for (const [value, label] of options) {
+        const option = document.createElement('option');
+        option.value = value;
+        option.textContent = label;
+        option.selected = (raider.meleeRangedOverride ?? '') === value;
+        select.append(option);
+      }
+      const form = flagForm(raider, 'melee_ranged', () => select.value);
+      select.addEventListener('change', () => form.requestSubmit());
+      form.append(select);
+      td.append(form);
+      return td;
+    }
+
+    function checkboxCell(raider: Raider, field: 'absent' | 'raid_leader', checked: boolean, label: string): HTMLTableCellElement {
+      const td = document.createElement('td');
+      td.className = 'checkbox-cell';
+      const toggle = document.createElement('label');
+      toggle.className = 'roster-toggle';
+      toggle.title = `${label}: ${checked ? 'on' : 'off'}`;
+      const checkbox = document.createElement('input');
+      checkbox.type = 'checkbox';
+      checkbox.checked = checked;
+      checkbox.disabled = !data.isOfficer;
+      checkbox.setAttribute('aria-label', `${label} for ${raider.name}`);
+      const track = document.createElement('span');
+      track.setAttribute('aria-hidden', 'true');
+      const form = flagForm(raider, field, () => (checkbox.checked ? 'true' : 'false'));
+      checkbox.addEventListener('change', () => form.requestSubmit());
+      toggle.append(checkbox, track);
+      form.append(toggle);
+      td.append(form);
+      return td;
+    }
+
+    function unscoredReason(raider: Raider): string {
+      const reasons: string[] = [];
+      if (raider.fightsPresent < data.minimumPulls || raider.reportCount < data.minimumReports) {
+        reasons.push(`Under ${data.minimumPulls} pulls / ${data.minimumReports} reports`);
+      }
+      if (raider.parseStatus === 'pending') reasons.push('Parse not fetched yet');
+      else if (raider.parseStatus === 'not-found') reasons.push('Not found on Warcraft Logs');
+      else if (raider.parseStatus === 'no-role-parse') reasons.push(`No ${data.difficultyLabel} ${ROLE_LABELS[raider.role]} parse`);
+      return reasons.join(' · ');
+    }
+
+    function renderRoster(): void {
+      renderTargetSummary();
+      const settings = currentSettings();
+      const weightTotal = settings.parseWeight + settings.deathWeight + settings.vaultWeight + settings.preparednessWeight + settings.upgradesWeight;
+      const validWeights = [settings.parseWeight, settings.deathWeight, settings.vaultWeight, settings.preparednessWeight, settings.upgradesWeight]
+        .every((weight) => Number.isInteger(weight) && weight >= 0 && weight <= 100) && weightTotal === 100;
+
+      weightLabel.value = `Parse ${settings.parseWeight}% · Deaths ${settings.deathWeight}% · Vault ${settings.vaultWeight}% · Preparedness ${settings.preparednessWeight}% · Upgrades ${settings.upgradesWeight}% = ${weightTotal}%${validWeights ? '' : ' — must equal 100%'}`;
+      formula.textContent =
+        settings.scale === 'raw'
+          ? `Combined uses the five configured weights. Vault, Preparedness, and weekly Upgrades are always guild-relative percentiles; raw parses retain their WCL scale.`
+          : `Combined uses the five configured weights. Parse, deaths, Vault, Preparedness, and weekly Upgrades are each ranked within the scored guild roster (0–100).`;
+
+      // Best first within each role group — this is a roster view, not a bench-priority list.
+      const sorted = computeScoredRows().sort(
+        (a, b) => b.combined - a.combined || b.deathPct - a.deathPct || a.raider.name.localeCompare(b.raider.name)
+      );
+
+      let anyRows = false;
+      for (const bucket of ROLE_ORDER) {
+        const rows = sorted.filter((row) => naturalRole(row.raider) === bucket);
+        anyRows = anyRows || rows.length > 0;
+        const isDps = bucket === 'melee-dps' || bucket === 'ranged-dps';
+        rosterBodies[bucket].replaceChildren(
+          ...rows.map((row, index) => {
+            const tr = document.createElement('tr');
+            tr.append(
+              cell(String(index + 1), 'rank'),
+              raiderCell(row.raider),
+              cell((row.raider.parse ?? 0).toFixed(1), 'num'),
+              cell(row.parseScore.toFixed(1), 'num'),
+              cell(row.deathPct.toFixed(1), 'num'),
+              cell(row.vaultPct.toFixed(1), 'num'),
+              cell(row.preparednessPct.toFixed(1), 'num'),
+              cell(row.upgradesPct.toFixed(1), 'num'),
+              cell(row.combined.toFixed(1), 'num combined'),
+              roleCell(row.raider)
+            );
+            tr.append(isDps ? meleeRangedCell(row.raider) : cell('—', 'num'));
+            tr.append(
+              checkboxCell(row.raider, 'absent', row.raider.isAbsent, 'Absent'),
+              checkboxCell(row.raider, 'raid_leader', row.raider.isRaidLeader, 'Raid leader')
+            );
+            return tr;
+          })
+        );
+      }
+      rosterEmpty.hidden = anyRows;
+
+      unscoredBody.replaceChildren(
+        ...unscored.map((raider) => {
+          const tr = document.createElement('tr');
+          tr.append(
+            raiderCell(raider),
+            roleCell(raider),
+            cell(raider.parse === null ? '—' : raider.parse.toFixed(1), 'num'),
+            cell(String(raider.parseBosses), 'num'),
+            cell(String(raider.fightsPresent), 'num'),
+            cell(String(raider.reportCount), 'num'),
+            cell(unscoredReason(raider), 'reason')
+          );
+          return tr;
+        })
+      );
+      document.getElementById('bench-unscored-empty')!.hidden = unscored.length > 0;
+    }
+
+    for (const input of weightInputs) input.addEventListener('input', renderRoster);
+    for (const input of [compTanksInput, compHealersInput, compMeleeDpsInput, compRangedDpsInput]) input.addEventListener('input', renderTargetSummary);
+    for (const input of document.querySelectorAll('input[name="bench-scale"]')) {
+      input.addEventListener('change', renderRoster);
+    }
+    refreshRoster = renderRoster;
+    renderRoster();
+
+    const generateButtons = [
+      compGenerateButton,
+      document.getElementById('comp-generate-groups') as HTMLButtonElement | null,
+      document.getElementById('comp-generate-bench') as HTMLButtonElement | null,
+    ].filter((button): button is HTMLButtonElement => button !== null);
+
+    async function regenerateComp(): Promise<void> {
+      if (assignments.size > 0 && !confirm('Replace the current shared comp with a fresh one generated from the Roster, for everyone?')) {
+        return;
+      }
+      const body = {
+        tankQuota: Math.max(0, Math.floor(Number(compTanksInput.value) || 0)),
+        healerQuota: Math.max(0, Math.floor(Number(compHealersInput.value) || 0)),
+        meleeDpsQuota: Math.max(0, Math.floor(Number(compMeleeDpsInput.value) || 0)),
+        rangedDpsQuota: Math.max(0, Math.floor(Number(compRangedDpsInput.value) || 0)),
+        parseWeight: currentSettings().parseWeight,
+        deathWeight: currentSettings().deathWeight,
+        vaultWeight: currentSettings().vaultWeight,
+        preparednessWeight: currentSettings().preparednessWeight,
+        upgradesWeight: currentSettings().upgradesWeight,
+        scale: currentSettings().scale,
+      };
+      if (
+        ![body.parseWeight, body.deathWeight, body.vaultWeight, body.preparednessWeight, body.upgradesWeight].every(
+          (weight) => Number.isInteger(weight) && weight >= 0 && weight <= 100
+        ) ||
+        body.parseWeight + body.deathWeight + body.vaultWeight + body.preparednessWeight + body.upgradesWeight !== 100
+      ) {
+        compSaveError.hidden = false;
+        return;
+      }
+      for (const button of generateButtons) button.disabled = true;
+      try {
+        const response = await fetch('/api/raid-composition/regenerate', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        try {
+          localStorage.removeItem(CONFIG_SETTINGS_OPEN_KEY);
+        } catch {
+          // Per-viewer convenience only.
+        }
+        location.reload();
+      } catch (error) {
+        console.error('Failed to regenerate raid comp', error);
+        compSaveError.hidden = false;
+        for (const button of generateButtons) button.disabled = false;
+      }
+    }
+
+    for (const button of generateButtons) button.addEventListener('click', () => void regenerateComp());
+
+    const clearButton = document.getElementById('comp-clear') as HTMLButtonElement | null;
+    clearButton?.addEventListener('click', async () => {
+      if (assignments.size > 0 && !confirm('Clear every raid group, sending everyone back to the bench? This empties the board for everyone.')) {
+        return;
+      }
+      // Unlike Regenerate, this leaves CONFIG_SETTINGS_OPEN_KEY alone so the settings panel stays expanded.
+      clearButton.disabled = true;
+      for (const button of generateButtons) button.disabled = true;
+      try {
+        const response = await fetch('/api/raid-composition/clear', { method: 'POST' });
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        location.reload();
+      } catch (error) {
+        console.error('Failed to clear raid comp', error);
+        compSaveError.hidden = false;
+        clearButton.disabled = false;
+        for (const button of generateButtons) button.disabled = false;
+      }
+    });
+  }
+</script>
+
+<style>
+  .raid-comp-page {
+    display: flex;
+    flex-direction: column;
+    gap: 2rem;
+  }
+
+  .page-header {
+    display: flex;
+    justify-content: space-between;
+    gap: 1rem;
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
+
+  .section-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 1rem;
+    flex-wrap: wrap;
+    margin-bottom: 0.75rem;
+  }
+
+  .section-header h2 {
+    margin: 0;
+  }
+
+  .section-header-actions {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    flex-wrap: wrap;
+  }
+
+  .comp-generate-btn {
+    flex-shrink: 0;
+  }
+
+  .current-roster-weights {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 0.35rem 0.6rem;
+    margin: -0.25rem 0 0.85rem;
+    color: #c7c2b8;
+    font-size: 0.85rem;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .current-roster-weights strong {
+    color: #f2dfb5;
+  }
+
+  .current-roster-scale {
+    border: 1px solid rgba(214, 176, 106, 0.28);
+    border-radius: 999px;
+    padding: 0.12rem 0.45rem;
+    color: #f7efe0;
+    font-size: 0.78rem;
+  }
+
+  .loadout-controls {
+    display: flex;
+    align-items: end;
+    flex-wrap: nowrap;
+    gap: 0.65rem;
+    margin: 0 0 0.9rem;
+    padding: 0.7rem 0.8rem;
+    border: 1px solid rgba(96, 157, 208, 0.34);
+    border-radius: 0.55rem;
+    background: rgba(15, 35, 52, 0.5);
+  }
+
+  .loadout-save-form,
+  .loadout-restore-form {
+    display: flex;
+    align-items: end;
+    flex-wrap: nowrap;
+    gap: 0.45rem;
+    min-width: 0;
+  }
+
+  .loadout-controls label {
+    display: grid;
+    gap: 0.25rem;
+    color: #b7d6ef;
+    font-size: 0.76rem;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+  }
+
+  .loadout-controls input,
+  .loadout-controls select {
+    box-sizing: border-box;
+    width: 12rem;
+    min-width: 0;
+    height: 2.4rem;
+    border: 1px solid rgba(214, 176, 106, 0.35);
+    border-radius: 0.4rem;
+    background: rgba(12, 8, 2, 0.78);
+    color: #f7efe0;
+    padding: 0.4rem 0.5rem;
+    font: inherit;
+    text-transform: none;
+    letter-spacing: normal;
+  }
+
+  .loadout-controls select { width: min(22rem, 28vw); }
+
+  .loadout-controls .action-btn {
+    box-sizing: border-box;
+    height: 2.4rem;
+    padding: 0.35rem 0.7rem;
+  }
+
+  .loadout-delete { border-color: rgba(212, 82, 82, 0.6); color: #ffd6d6; }
+
+  @media (max-width: 1100px) {
+    .loadout-controls,
+    .loadout-save-form,
+    .loadout-restore-form { flex-wrap: wrap; }
+
+    .loadout-controls select { width: min(22rem, 75vw); }
+  }
+
+  .coverage-utility-copy {
+    margin: 0.1rem 0 0.6rem;
+    font-size: 0.8rem;
+  }
+
+  .page-desc {
+    margin: 0.35rem 0 0;
+    color: #c7c2b8;
+    max-width: 70ch;
+  }
+
+  .page-meta {
+    margin: 0.4rem 0 0;
+    color: #aea99f;
+    font-size: 0.85rem;
+  }
+
+  .header-actions {
+    flex-shrink: 0;
+  }
+
+  .score-weight-grid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(11rem, 1fr));
+    gap: 0.55rem 0.9rem;
+  }
+
+  .score-weight-grid label {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 4.5rem auto;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.4rem 0.5rem;
+    border: 1px solid rgba(214, 176, 106, 0.22);
+    border-radius: 0.45rem;
+    background: rgba(12, 8, 2, 0.5);
+    color: #c7c2b8;
+  }
+
+  .score-weight-grid input {
+    width: 4.5rem;
+    box-sizing: border-box;
+    border: 1px solid rgba(214, 176, 106, 0.35);
+    border-radius: 0.35rem;
+    background: rgba(12, 8, 2, 0.85);
+    color: #f7efe0;
+    padding: 0.3rem 0.4rem;
+    font: inherit;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .action-btn {
+    border: 1px solid rgba(214, 176, 106, 0.55);
+    border-radius: 0.45rem;
+    background: rgba(214, 176, 106, 0.12);
+    color: #f3e2be;
+    padding: 0.45rem 0.8rem;
+    font-size: 0.9rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: border-color 160ms ease, background 160ms ease;
+    white-space: nowrap;
+  }
+
+  .action-btn:hover,
+  .action-btn:focus-visible {
+    border-color: rgba(214, 176, 106, 0.8);
+    background: rgba(214, 176, 106, 0.2);
+  }
+
+  .action-btn:disabled {
+    opacity: 0.6;
+    cursor: default;
+  }
+
+  .admin-section {
+    border: 1px solid rgba(214, 176, 106, 0.2);
+    border-radius: 0.7rem;
+    padding: 1rem;
+    background: rgba(11, 7, 2, 0.45);
+  }
+
+  .admin-section h2,
+  .admin-section h3 {
+    margin: 0;
+    color: #f2dfb5;
+    font-size: 1.15rem;
+  }
+
+  .admin-section h3 {
+    font-size: 1.05rem;
+  }
+
+  .officer-config summary {
+    cursor: pointer;
+    color: #f2dfb5;
+    font-weight: 700;
+    font-size: 1.05rem;
+  }
+
+  .officer-config-body {
+    display: flex;
+    flex-direction: column;
+    gap: 1.25rem;
+    margin-top: 1rem;
+  }
+
+  .roster-group {
+    margin-top: 1.25rem;
+  }
+
+  .roster-group:first-of-type {
+    margin-top: 0.75rem;
+  }
+
+  .roster-group h4 {
+    margin: 0 0 0.4rem;
+    color: #f2dfb5;
+    font-size: 0.95rem;
+  }
+
+  .review-table :global(td.checkbox-cell) {
+    text-align: center;
+    padding: 0.4rem 0.2rem;
+    white-space: nowrap;
+  }
+
+  .review-table :global(.roster-toggle) {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    box-sizing: border-box;
+    width: 2.35rem;
+    height: 1.3rem;
+    padding: 0;
+    cursor: pointer;
+  }
+
+  .review-table :global(.roster-toggle input) {
+    position: absolute;
+    opacity: 0;
+    width: 1px;
+    height: 1px;
+    margin: 0;
+    padding: 0;
+    appearance: none;
+  }
+
+  .review-table :global(.roster-toggle span) {
+    display: block;
+    box-sizing: border-box;
+    width: 100%;
+    height: 100%;
+    border: 1px solid rgba(214, 176, 106, 0.35);
+    border-radius: 999px;
+    background: rgba(12, 8, 2, 0.75);
+    transition: background 160ms ease, border-color 160ms ease;
+  }
+
+  .review-table :global(.roster-toggle span::after) {
+    content: '';
+    position: absolute;
+    top: 0.17rem;
+    left: 0.18rem;
+    width: 0.82rem;
+    height: 0.82rem;
+    border-radius: 50%;
+    background: #aea99f;
+    transition: transform 160ms ease, background 160ms ease;
+  }
+
+  .review-table :global(.roster-toggle input:checked + span) {
+    border-color: rgba(214, 176, 106, 0.85);
+    background: rgba(214, 176, 106, 0.28);
+  }
+
+  .review-table :global(.roster-toggle input:checked + span::after) {
+    transform: translateX(1.12rem);
+    background: #f2dfb5;
+  }
+
+  .review-table :global(.roster-toggle input:focus-visible + span) {
+    outline: 2px solid #d6b06a;
+    outline-offset: 2px;
+  }
+
+  .review-table :global(.roster-toggle input:disabled + span) {
+    opacity: 0.55;
+  }
+
+  .review-table :global(.roster-toggle:has(input:disabled)) {
+    cursor: not-allowed;
+  }
+
+  .section-copy {
+    margin: 0.25rem 0 0.75rem;
+    color: #c7c2b8;
+  }
+
+  .controls,
+  .comp-controls {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 1rem 2rem;
+    align-items: flex-start;
+  }
+
+  .control {
+    display: flex;
+    flex-direction: column;
+    gap: 0.45rem;
+    margin: 0;
+    padding: 0;
+    border: 0;
+    min-width: 0;
+  }
+
+  .weight-control {
+    flex: 1 1 42rem;
+  }
+
+  .control-label {
+    padding: 0;
+    color: #f2dfb5;
+    font-weight: 700;
+    font-size: 0.9rem;
+  }
+
+  .comp-controls input[type='number'] {
+    width: 5rem;
+    border: 1px solid rgba(214, 176, 106, 0.3);
+    border-radius: 0.45rem;
+    background: rgba(12, 8, 2, 0.75);
+    color: #f7efe0;
+    padding: 0.35rem 0.5rem;
+  }
+
+  .comp-target-summary {
+    margin: -0.45rem 0 0;
+    color: #c7c2b8;
+    font-size: 0.88rem;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .slider-row {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+  }
+
+  .slider-row input[type='range'] {
+    flex: 1;
+    min-width: 0;
+    accent-color: #d6b06a;
+  }
+
+  .slider-end {
+    color: #aea99f;
+    font-size: 0.85rem;
+  }
+
+  .weight-readout {
+    color: #f7efe0;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .segmented {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.35rem;
+  }
+
+  .segmented label {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    border: 1px solid rgba(214, 176, 106, 0.3);
+    border-radius: 0.45rem;
+    padding: 0.3rem 0.6rem;
+    color: #e8dcc4;
+    font-size: 0.88rem;
+    cursor: pointer;
+  }
+
+  .segmented label:has(input:checked) {
+    border-color: rgba(214, 176, 106, 0.8);
+    background: rgba(214, 176, 106, 0.18);
+    color: #fff3da;
+  }
+
+  .segmented input {
+    accent-color: #d6b06a;
+    margin: 0;
+  }
+
+  .formula {
+    flex-basis: 100%;
+    margin: 0;
+    color: #aea99f;
+    font-size: 0.85rem;
+  }
+
+  .table-wrap {
+    overflow-x: auto;
+  }
+
+  .roster-group .table-wrap {
+    overflow-x: hidden;
+  }
+
+  .review-table {
+    width: 100%;
+    border-collapse: collapse;
+  }
+
+  /* Fixed, shared column widths so Tanks/Healers/Ranged DPS/Melee DPS line up as if they were one table. */
+  .roster-table {
+    width: 100%;
+    table-layout: fixed;
+  }
+
+  /*
+   * Every header stays on one line, so each column is sized to its own label
+   * plus padding. The Raider column has the most slack — its cells only hold a
+   * name over a realm — so the wider score headers borrow from it.
+   */
+  .roster-table .col-rank { width: 2.6%; }
+  .roster-table .col-raider { width: 17%; }
+  .roster-table .col-median { width: 8.4%; }
+  .roster-table .col-parse-score { width: 8%; }
+  .roster-table .col-death { width: 7%; }
+  .roster-table .col-vault { width: 6.6%; }
+  .roster-table .col-prepared { width: 8.4%; }
+  .roster-table .col-upgrades { width: 8.4%; }
+  .roster-table .col-combined { width: 7%; }
+  .roster-table .col-role { width: 8.2%; }
+  .roster-table .col-melee-ranged { width: 9.2%; }
+  .roster-table .col-absent { width: 5.6%; }
+  .roster-table .col-rl { width: 3.6%; }
+
+  .roster-table th,
+  .roster-table :global(td) { padding-inline: 0.4rem; }
+
+  .roster-table th {
+    font-size: 0.82rem;
+    vertical-align: bottom;
+  }
+
+  .review-table th,
+  .review-table :global(td) {
+    padding: 0.55rem 0.4rem;
+    border-bottom: 1px solid rgba(214, 176, 106, 0.15);
+    vertical-align: middle;
+  }
+
+  .review-table th {
+    text-align: left;
+    color: #f2dfb5;
+    font-weight: 700;
+    white-space: nowrap;
+  }
+
+  /*
+   * The header label is itself the tooltip trigger — a real button so it stays
+   * keyboard reachable, styled as plain header text with a dotted underline as
+   * the "there's an explanation here" affordance. Cheaper on width than a
+   * separate icon, which mattered with 13 columns.
+   */
+  .column-help {
+    display: inline;
+    padding: 0;
+    border: 0;
+    background: none;
+    color: inherit;
+    font: inherit;
+    text-align: inherit;
+    text-decoration: underline dotted rgba(214, 176, 106, 0.55);
+    text-underline-offset: 0.25em;
+    cursor: help;
+  }
+
+  .column-help:hover, .column-help:focus-visible {
+    color: #fff3da;
+    text-decoration-color: #f2dfb5;
+    outline: none;
+  }
+
+  :global(.column-tooltip) {
+    position: fixed;
+    z-index: 50;
+    box-sizing: border-box;
+    width: min(21rem, calc(100vw - 1.25rem));
+    padding: 0.65rem 0.75rem;
+    border: 1px solid rgba(214, 176, 106, 0.65);
+    border-radius: 0.45rem;
+    background: #15100a;
+    box-shadow: 0 0.65rem 1.5rem rgba(0, 0, 0, 0.42);
+    color: #f2dfb5;
+    font-size: 0.82rem;
+    font-weight: 400;
+    line-height: 1.35;
+    pointer-events: none;
+  }
+
+  .review-table th.num,
+  .review-table :global(td.num) {
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .review-table :global(td.rank) {
+    color: #aea99f;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .review-table :global(td.combined) {
+    color: #f7efe0;
+    font-weight: 700;
+  }
+
+  .review-table :global(td.reason) {
+    color: #aea99f;
+    font-size: 0.85rem;
+  }
+
+  .review-table :global(.cell-stack) {
+    display: flex;
+    flex-direction: column;
+    gap: 0.15rem;
+  }
+
+  .review-table :global(.cell-stack small) {
+    color: #aea99f;
+    font-size: 0.8rem;
+  }
+
+  .review-table :global(.role-select) {
+    box-sizing: border-box;
+    width: 100%;
+    min-width: 0;
+    border: 1px solid rgba(214, 176, 106, 0.3);
+    border-radius: 0.45rem;
+    background: rgba(12, 8, 2, 0.75);
+    color: #f7efe0;
+    padding: 0.3rem 0.4rem;
+  }
+
+  .empty-state {
+    margin: 0.75rem 0 0;
+    color: #aea99f;
+  }
+
+  .flash {
+    border-radius: 0.6rem;
+    padding: 0.65rem 0.8rem;
+    border: 1px solid transparent;
+  }
+
+  .flash-ok {
+    background: rgba(36, 86, 42, 0.25);
+    border-color: rgba(102, 191, 114, 0.55);
+    color: #d5f2da;
+  }
+
+  .flash-error {
+    background: rgba(101, 28, 28, 0.24);
+    border-color: rgba(212, 82, 82, 0.55);
+    color: #ffd6d6;
+  }
+
+  .comp-quota-warning {
+    margin: 0 0 0.9rem;
+    border: 1px solid rgba(212, 82, 82, 0.55);
+    border-radius: 0.55rem;
+    padding: 0.55rem 0.75rem;
+    background: rgba(101, 28, 28, 0.24);
+    color: #ffd6d6;
+    font-weight: 700;
+  }
+
+  .comp-groups {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 1rem;
+  }
+
+  /*
+   * The group cards, chips, and their contents below are built with
+   * document.createElement in the client script, so they never receive
+   * Astro's scoped-style attribute (only elements written directly in this
+   * file's template do). Every selector reaching one of those elements has
+   * to be :global(), same as .review-table's :global(td) etc. above.
+   */
+  :global(.comp-group) {
+    border: 1px solid rgba(214, 176, 106, 0.2);
+    border-radius: 0.6rem;
+    padding: 0.75rem;
+    background: rgba(12, 8, 2, 0.5);
+  }
+
+  :global(.comp-group h3) {
+    margin: 0;
+    color: #f2dfb5;
+    font-size: 1rem;
+  }
+
+  :global(.comp-group-counts) {
+    margin: 0.2rem 0 0.6rem;
+    color: #aea99f;
+    font-size: 0.8rem;
+    font-variant-numeric: tabular-nums;
+  }
+
+  :global(.comp-chip-list) {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.3rem;
+    min-height: 1.5rem;
+  }
+
+  .roster-pool-groups {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr));
+    gap: 1rem;
+  }
+
+  .roster-pool-group h3 {
+    margin: 0 0 0.4rem;
+    color: #f2dfb5;
+    font-size: 0.95rem;
+  }
+
+  .comp-bench {
+    min-height: 2.5rem;
+    padding: 0.5rem;
+    border: 1px dashed rgba(214, 176, 106, 0.25);
+    border-radius: 0.5rem;
+  }
+
+  .temp-candidate-form {
+    display: grid;
+    grid-template-columns: minmax(12rem, 1.5fr) repeat(2, minmax(9rem, 1fr)) auto;
+    align-items: end;
+    gap: 0.65rem;
+    margin: 0.9rem 0;
+    padding: 0.7rem;
+    border: 1px solid rgba(113, 161, 206, 0.35);
+    border-radius: 0.5rem;
+    background: rgba(20, 37, 56, 0.35);
+  }
+
+  .temp-candidate-form label {
+    display: grid;
+    gap: 0.3rem;
+    color: #b9cbe0;
+    font-size: 0.76rem;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+  }
+
+  .temp-candidate-form input:not([type='hidden']), .temp-candidate-form select {
+    box-sizing: border-box;
+    width: 100%;
+    min-height: 2.35rem;
+    border: 1px solid rgba(214, 176, 106, 0.42);
+    border-radius: 0.35rem;
+    background: rgba(12, 8, 2, 0.78);
+    color: #f2dfb5;
+    color-scheme: dark;
+    font: inherit;
+    letter-spacing: normal;
+    padding: 0.4rem 0.55rem;
+    text-transform: none;
+  }
+
+  .temp-candidate-form input::placeholder { color: #81796d; opacity: 1; }
+  .temp-candidate-form select option { background: #120d06; color: #f2dfb5; }
+  .temp-candidate-form input:focus, .temp-candidate-form select:focus {
+    outline: none;
+    border-color: #d6b06a;
+    box-shadow: 0 0 0 2px rgba(214, 176, 106, 0.16);
+  }
+
+  /*
+   * Groups have 3 children (name, role, remove button) while bench chips have
+   * 2 (no remove button). justify-content: space-between only pins the first
+   * and last child to the edges — with 3 children the middle one (role) would
+   * drift left/right depending on name length. Instead, the name grows to
+   * fill the space and the role gets a fixed width, so role text lines up in
+   * a column regardless of how long each name is.
+   */
+  :global(.comp-chip) {
+    display: flex;
+    flex-direction: column;
+    gap: 0.3rem;
+    font-size: 0.9rem;
+    border: 1px solid rgba(214, 176, 106, 0.2);
+    border-radius: 0.4rem;
+    padding: 0.25rem 0.5rem;
+    background: rgba(20, 14, 4, 0.5);
+  }
+
+  :global(.comp-chip.is-unscored) {
+    border-color: rgba(113, 161, 206, 0.5);
+    background: rgba(20, 37, 56, 0.45);
+  }
+
+  :global(.comp-chip.is-temporary) {
+    border-color: rgba(168, 122, 212, 0.6);
+    background: rgba(55, 30, 77, 0.45);
+  }
+
+  :global(.comp-chip.is-dragging) {
+    opacity: 0.08;
+    border-style: dashed;
+    cursor: grabbing;
+  }
+
+  :global(.comp-group.has-dragged-member) {
+    border-color: rgba(214, 176, 106, 0.08);
+  }
+
+  :global(.comp-chip.is-drop-target) {
+    border-color: rgba(102, 191, 114, 0.92);
+    background: rgba(36, 86, 42, 0.4);
+    box-shadow: 0 0 0 2px rgba(102, 191, 114, 0.22);
+  }
+
+  :global(.comp-chip-row) {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+
+  .comp-bench :global(.comp-chip) {
+    cursor: pointer;
+  }
+
+  :global(.comp-chip span) {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  :global(.comp-chip small) {
+    flex: 0 0 auto;
+    min-width: 3.5rem;
+    text-align: right;
+    color: #aea99f;
+    white-space: nowrap;
+  }
+
+  :global(.comp-chip.is-unscored small) {
+    color: #8dbce8;
+  }
+
+  :global(.comp-chip.is-temporary small) { color: #d1a6f0; }
+
+  :global(.comp-chip-remove) {
+    border: none;
+    background: transparent;
+    color: #d98a8a;
+    font-size: 1rem;
+    line-height: 1;
+    cursor: pointer;
+    padding: 0 0.15rem;
+  }
+
+  :global(.comp-chip-absent) {
+    flex: 0 0 auto;
+    border: 1px solid rgba(212, 82, 82, 0.4);
+    border-radius: 0.35rem;
+    background: transparent;
+    color: #d98a8a;
+    font-size: 0.72rem;
+    padding: 0.1rem 0.35rem;
+    cursor: pointer;
+    white-space: nowrap;
+  }
+
+  :global(.comp-chip-absent.active) {
+    background: rgba(212, 82, 82, 0.28);
+    color: #ffd6d6;
+    border-color: rgba(212, 82, 82, 0.7);
+  }
+
+  :global(.comp-chip-reason-wrap) {
+    align-self: flex-start;
+  }
+
+  :global(.comp-chip-reason-toggle) {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border: 1px solid rgba(214, 176, 106, 0.35);
+    border-radius: 999px;
+    background: transparent;
+    color: #d6b06a;
+    width: 1.15rem;
+    height: 1.15rem;
+    line-height: 1;
+    font-size: 0.7rem;
+    font-weight: 700;
+    cursor: pointer;
+    padding: 0;
+  }
+
+  :global(.comp-chip-reason-toggle:hover) {
+    border-color: rgba(214, 176, 106, 0.7);
+    color: #f2dfb5;
+  }
+
+  :global(.comp-chip-reason-panel) {
+    margin-top: 0.3rem;
+    padding: 0.4rem 0.55rem;
+    border: 1px solid rgba(214, 176, 106, 0.2);
+    border-radius: 0.4rem;
+    background: rgba(12, 8, 2, 0.65);
+    font-size: 0.78rem;
+    color: #e8dcc4;
+    max-width: 20rem;
+    white-space: normal;
+  }
+
+  :global(.comp-chip-reason-panel p) {
+    margin: 0.2rem 0;
+  }
+
+  .coverage-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr));
+    gap: 1.25rem;
+  }
+
+  .coverage-col h3 {
+    margin: 0 0 0.4rem;
+    color: #f2dfb5;
+    font-size: 0.95rem;
+  }
+
+  .coverage-col ul {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.2rem;
+    font-size: 0.88rem;
+    color: #e8dcc4;
+  }
+
+  .coverage-col :global(.coverage-missing) {
+    color: #d98a8a;
+  }
+
+  .coverage-col :global(.coverage-utility-row) {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+  }
+
+  .coverage-col :global(.coverage-utility-min) {
+    width: 3rem;
+    border: 1px solid rgba(214, 176, 106, 0.3);
+    border-radius: 0.35rem;
+    background: rgba(12, 8, 2, 0.75);
+    color: #f7efe0;
+    padding: 0.15rem 0.3rem;
+    font-size: 0.85rem;
+  }
+
+  @media (max-width: 62rem) {
+    .comp-groups {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .score-weight-grid {
+      grid-template-columns: repeat(2, minmax(11rem, 1fr));
+    }
+
+    .temp-candidate-form { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  }
+
+  @media (max-width: 36rem) {
+    .comp-groups {
+      grid-template-columns: minmax(0, 1fr);
+    }
+
+    .score-weight-grid {
+      grid-template-columns: minmax(0, 1fr);
+    }
+
+    .temp-candidate-form { grid-template-columns: minmax(0, 1fr); }
+  }
+</style>

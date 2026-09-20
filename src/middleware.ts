@@ -6,7 +6,7 @@ const MEMBER_ONLY_PATHS = new Set(['/raiders', '/signup', '/feedback', '/trinket
 
 // Admin pages open to officers (rank 0–3) as well as admins. Everything else
 // under /admin stays admin-only (rank 0–2).
-const OFFICER_ADMIN_PATHS = new Set(['/admin', '/admin/bench', '/admin/log-matching']);
+const OFFICER_ADMIN_PATHS = new Set(['/admin', '/admin/log-matching']);
 
 // Guild is on hiatus between seasons — redirect raider/tool features to the hiatus page.
 const HIATUS_PATHS = new Set(['/signup', '/trinkets', '/loot-history', '/upgrades']);

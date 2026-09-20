@@ -21,5 +21,5 @@ export async function POST(context: APIContext): Promise<Response> {
     console.error('Bench parse refresh failed', error);
     status = 'refresh-error';
   }
-  return new Response(null, { status: 302, headers: { Location: `/admin/bench?status=${status}` } });
+  return new Response(null, { status: 302, headers: { Location: `/raid-composition?status=${status}` } });
 }

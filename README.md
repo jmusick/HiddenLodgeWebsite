@@ -34,9 +34,10 @@ Currently `true`:
 
 - `deathAnalysis` — `/death-analysis` (raider-facing, in the Tools menu), `/admin/log-matching`, `/api/admin/death-analysis/*`, and the death-analysis leg of `/api/cron/refresh-logs`. See [Death Analysis](#death-analysis).
 - `mechanicsAnalysis` — `/mechanics-analysis` (Tools menu, guild members) and the mechanics leg of `/api/cron/refresh-logs`. Also requires `deathAnalysis`, since it reads that feature's canonical reports. See [Mechanics Analysis](#mechanics-analysis).
+- `raidComp` — `/raid-composition` (Tools menu, guild members; officers edit) and its `/api/raid-composition/*` routes. Also requires `deathAnalysis`, since it's built on Bench's scoring. See [Raid Composition](#raid-composition).
 - `tools` — `/professions` (live, in the Tools menu) plus `/trinkets`, `/loot-history`, `/upgrades` (still redirected to `/hiatus` and not in the Tools menu).
 
-The "Tools" nav dropdown isn't gated as a whole; each entry checks its own flag. It currently holds Gear Summary (`/raiders/gear-summary`, guild members), Professions (logged-in users, `tools`), Death Analysis (guild members, `deathAnalysis`), and Mechanics Analysis (guild members, `deathAnalysis` + `mechanicsAnalysis`).
+The "Tools" nav dropdown isn't gated as a whole; each entry checks its own flag. It currently holds Gear Summary (`/raiders/gear-summary`, guild members), Professions (logged-in users, `tools`), Death Analysis (guild members, `deathAnalysis`), Mechanics Analysis (guild members, `deathAnalysis` + `mechanicsAnalysis`), and Raid Composition (guild members, `deathAnalysis` + `raidComp`).
 
 Separately, `/signup`, `/trinkets`, `/loot-history`, and `/upgrades` are also redirected to `/hiatus` by `src/middleware.ts` (`HIATUS_PATHS`). `/raiders` and `/professions` were removed from that set so they stay live.
 
@@ -59,6 +60,7 @@ Separately, `/signup`, `/trinkets`, `/loot-history`, and `/upgrades` are also re
 - Authenticated profile with Battle.net login, character sync, main selection, and timezone preferences
 - Death Analysis (`/death-analysis`, Tools menu, guild members) — excessive-death rankings for Season 2 raid nights; see [Death Analysis](#death-analysis)
 - Mechanics Analysis (`/mechanics-analysis`, Tools menu, guild members) — per-boss mechanic leaderboards (first: Coiled Altar orb carries); see [Mechanics Analysis](#mechanics-analysis)
+- Raid Composition (`/raid-composition`, Tools menu, guild members; officers edit) — shared suggested raid composition built from Bench priority, with drag-and-drop groups and live raid-buff coverage; see [Raid Composition](#raid-composition)
 - *Disabled during guild hiatus (code/data preserved, see Feature Flags):* guild-member raid signup calendar, Trinkets/Loot History/Upgrades tools, guild feedback form, application form, interactive Sim Tools panel and Attendance history on raider profiles
 
 ### Admin Features
@@ -92,6 +94,19 @@ Per-boss leaderboards of who handles a boss mechanic, built on the same canonica
 - **Roles** come from the `specID` on WCL CombatantInfo events, so they reflect the spec actually played. Each player's role is the one they played in the most counted pulls.
 - **Sync**: runs in `/api/cron/refresh-logs` right after death analysis (only if that finished within 16s), handling up to 3 reports per run with a 6s budget, and re-syncing a mechanic when Death Analysis re-synced its report after it (`?mechanicsReportBatchSize=` to change). Log Matching's "Sync Now" button also runs a batch. Rows for reports that Death Analysis prunes are dropped.
 - **Tables**: `mechanics_analysis_reports` (per report + mechanic sync cursor) and `mechanics_analysis_stats` (per report + mechanic + character: role, pulls present, pulls hit, count, best pull) in `migrations/0075_mechanics_analysis.sql`.
+
+### Raid Composition
+
+A shared, officer-maintained suggested 20-man raid comp, built on top of Bench (`src/lib/bench.ts`), which ranks Death Analysis's qualified raiders by a combined score of median WCL parse and death percentile. Bench has no page of its own — it's the scoring engine behind Raid Comp's Configuration Settings.
+
+- **Board**: 4 raid groups plus a "Bench" list of scored raiders not currently placed, both grouped into Tanks / Healers / Ranged DPS / Melee DPS, visible to every guild member. A coverage panel (roles, raid buffs, utility, healer cooldowns — armor tokens are intentionally left out of this view) recomputes live from whoever is currently placed, using `computeTeamSummary`/`ALL_RAID_BUFFS`/`ALL_UTILITY`/`classRaidData` from `src/lib/raid-teams.ts`.
+- **Buffs vs Utility**: buffs (stat buffs, Bloodlust, and the Chaos Brand/Mystic Touch boss debuffs) always want at least one provider. Utility (Battle Resurrection, Healthstones, Summoning Gateway, Demonic Gateway — the point-to-point teleport gate, distinct from Summoning Gateway) is fight-specific: it has no default requirement, but the Utility column has a per-item minimum-count input (officers only, `POST /api/raid-composition/utility-minimum` → `raid_comp_utility_minimums`) — e.g. set Demonic Gateway to 2 for a fight that needs two, and the next Regenerate tries to guarantee that many Warlocks.
+- **Editing**: officers only (`Astro.locals.isOfficer`) — drag a raider onto a group or the bench, or click a benched raider to drop them into the least-full group. Every move saves immediately (`POST /api/raid-composition/assignment`, 409s if the target group is already full) so all viewers see the same board right away. Officers also get an "Absent" toggle directly on every chip, plus a "Reset Absent" button (next to the Bench section's Regenerate button) that clears everyone's Absent flag at once for a fresh raid night. "Regenerate Comp" is available from the Raid Groups and Bench section headers as well as Configuration Settings, so an officer doesn't have to open the settings panel just to rebuild the comp. "Clear Comp" (Raid Groups header) empties every group back to the bench without touching quotas, weights, flags, or saved loadouts.
+- **"Why are they benched?"**: every chip on the Bench (visible to everyone, not just officers) has a "?" that expands a short explanation — their rank within their role by the live weight/scale, whether their raid buffs are already covered elsewhere in the comp or would add something nobody currently provides, and the same for any utility item they provide that currently has a minimum set.
+- **Configuration Settings panel**: visible to every guild member, view-only for non-officers (every input, select, checkbox, and button in it is disabled unless you're an officer). It has a weight/deaths slider, parse-scale toggle, a Refresh Parses button, quota inputs, and Roster / Not Scored tables — the same scoring `/admin/bench` used to expose — showing Bench's priority order grouped into Tanks / Healers / Ranged DPS / Melee DPS (best first in each), all 4 sharing one fixed `<colgroup>` (`.roster-table`) so their columns line up like one table. Officers get, per raider: a Role override (tank/healer/dps), a Melee/Ranged override for DPS rows (corrects cases like an Enhancement Shaman that WCL hasn't seen yet and so defaults to ranged), an Absent checkbox (excludes them from "Regenerate" entirely), and an RL checkbox (always includes them, bumping a lower-priority same-role pick if the quota is otherwise full).
+- **Generating**: "Save & Regenerate Comp" (officers only) fills tank/healer/DPS quotas (default 2/5/13) from the Roster's order — absent raiders excluded, raid leaders force-included — interleaving melee/ranged DPS by priority so both fill evenly. It then makes one pass trying to satisfy every requirement that isn't yet met — every raid buff (minimum 1) plus any utility item with an officer-set minimum — swapping in the best available provider for the worst current same-role pick, repeating per item up to its own minimum (skipping raid leaders and anyone needed to keep some *other* requirement's minimum) — best-effort, not guaranteed; the coverage panel reports whatever's still missing or short. Group placement isn't a plain round-robin: tanks alternate strictly between groups 1 and 2 only, healers get one per group before doubling up, and DPS (melee/ranged still interleaved) round-robins across all 4 groups to fill whatever room is left. Every group is capped at 5.
+- **Melee/ranged**: derived from WCL `CombatantInfo` (spec) on the latest canonical raid night (`bench_mechanic_roles`, refreshed alongside Bench parses), falling back to an officer override, then a static per-class default for a raider WCL hasn't seen yet (Druid/Shaman, which have both a melee and ranged DPS spec, default to ranged).
+- **Tables**: `bench_parses`, `bench_role_overrides`, `bench_mechanic_roles` (`migrations/0077_bench_analysis.sql`, `migrations/0090_bench_mechanic_roles.sql`), `bench_flags` (melee/ranged override, Absent, RL — `migrations/0092_bench_flags.sql`) for scoring; `raid_comp_settings` (singleton quotas/weight/scale), `raid_comp_assignments` (one row per placed raider) in `migrations/0091_raid_comp.sql`, and `raid_comp_utility_minimums` (`migrations/0093_raid_comp_utility_minimums.sql`) for the shared board.
 
 ## Quick Start
 
@@ -146,6 +161,7 @@ http://localhost:4321
 | `/upgrades` | Yes + Guild Member | **Disabled** (redirects to `/hiatus`) — gear upgrade comparison tool |
 | `/death-analysis` | Yes + Guild Member | Season 2 excessive-death rankings and the counted report per raid night (see [Death Analysis](#death-analysis)) |
 | `/mechanics-analysis` | Yes + Guild Member | Per-boss mechanic leaderboards with boss, range, and role filters (see [Mechanics Analysis](#mechanics-analysis)) |
+| `/raid-composition` | Yes + Guild Member | Shared suggested raid composition (view-only); officers additionally get drag-and-drop editing and a Configuration Settings panel (see [Raid Composition](#raid-composition)) |
 | `/feedback` | Yes + Guild Member | **Disabled** — anonymous guild feedback form |
 
 ### Authenticated / Admin Pages
@@ -204,6 +220,10 @@ http://localhost:4321
 | `/api/admin/loot-history/exclude` | POST | Mark a loot history entry excluded with a required admin note |
 | `/api/admin/death-analysis/refresh` | POST | Admin: run a death-analysis sync batch now; redirects to `/admin/log-matching` |
 | `/api/admin/death-analysis/log-override` | POST | Admin/officer: set or clear the counted report for a raid night (`night_key`, `report_code` or pasted `report_code_manual`); always re-pulls the report from WCL so saving also refreshes stale pull counts |
+| `/api/admin/bench/refresh` | POST | Officer: run a Bench parse (and mechanic-role) refresh now; redirects to `/raid-composition` |
+| `/api/admin/bench/role-override` | POST | Officer: set or clear a raider's Bench role override; redirects to `/raid-composition` |
+| `/api/admin/bench/set-flag` | POST | Officer: set one `bench_flags` column (`field=melee_ranged\|absent\|raid_leader`) for a raider; redirects to `/raid-composition` |
+| `/api/admin/bench/reset-absent` | POST | Officer: clear the Absent flag for every raider at once; redirects to `/raid-composition` |
 | `/api/admin/attendance/log-candidates` | GET | **Disabled** — candidate Warcraft Logs reports for an attendance occurrence (old pipeline) |
 | `/api/admin/attendance/log-matching` | POST, GET | **Disabled** — link/rematch a WCL report to an attendance occurrence (old pipeline) |
 | `/api/admin/attendance/toggle-bench` | POST, GET | **Disabled** — toggle a member's bench status for a raid occurrence |
@@ -228,6 +248,20 @@ http://localhost:4321
 | `/api/admin/applications/[id]/delete-note` | POST | **Disabled** — delete an officer note from an application |
 | `/api/admin/applications/[id]/delete` | POST | **Disabled** — permanently delete an application and all associated data |
 | `/api/admin/feedback/update-status` | POST | **Disabled** — update a feedback item's reviewed status |
+
+### Raid Composition API
+
+Not under `/admin` — `/raid-composition` is a Tools-menu page, so these routes self-check `Astro.locals.isOfficer` directly instead of relying on the `/admin` middleware gate.
+
+| Endpoint | Method | Description |
+|---|---|---|
+| `/api/raid-composition/assignment` | POST | Officer: move one raider to a group or back to the bench; saved immediately so every viewer sees it |
+| `/api/raid-composition/regenerate` | POST | Officer: save the quota/weight/scale settings and replace the whole composition, built fresh from Bench's current priority order |
+| `/api/raid-composition/clear` | POST | Officer: empty every raid group, sending all raiders back to the bench; settings and saved loadouts are untouched |
+| `/api/raid-composition/swap` | POST | Officer: swap the positions of two raiders, including swaps between a group and the Bench |
+| `/api/raid-composition/loadout` | POST | Officer: save, load, rename, or delete a named composition loadout |
+| `/api/raid-composition/temp-candidate` | POST | Officer: add or remove a temporary PUG/trial candidate |
+| `/api/raid-composition/utility-minimum` | POST | Officer: set the minimum provider count for one utility item, used by the next Regenerate |
 
 ### Sim Runner API
 
@@ -429,6 +463,8 @@ These handlers remain in the codebase as retired stubs and currently return HTTP
 | `raid_attendance_reports` and related attendance tables (from `migrations/0045`–`0048`, `0050`, `0064`) | Season 1 Warcraft Logs attendance/kill-presence/death data *(feature disabled; superseded by the `death_analysis_*` tables for Season 2)* |
 | `death_analysis_reports` / `death_analysis_stats` / `death_analysis_night_overrides` | Season 2 death analysis: in-window Venomous Abyss reports, per-character death stats per report, and officer-chosen report per night (last 90 days) |
 | `mechanics_analysis_reports` / `mechanics_analysis_stats` | Mechanics analysis: per report + mechanic sync cursor, and per-character mechanic counts/role for each canonical report |
+| `bench_parses` / `bench_role_overrides` / `bench_mechanic_roles` / `bench_flags` | Bench scoring: cached per-role WCL median parse, officer role overrides, WCL-spec-derived melee/ranged/tank/healer per character, and officer melee/ranged override + Absent/RL toggles (see [Raid Comp](#raid-comp)) |
+| `raid_comp_settings` / `raid_comp_assignments` / `raid_comp_utility_minimums` | Raid Comp: singleton tank/healer/DPS quotas + weight/scale, the shared board's current group assignments, and officer-set minimum provider counts per utility item |
 
 `links` and `link_categories` were dropped by `migrations/0072_drop_links_tables.sql` — `/links` now reads from Tagstash instead (see [Notes](#notes)). Articles similarly have no local table; `/articles` reads from a public Orboro.net API.
 

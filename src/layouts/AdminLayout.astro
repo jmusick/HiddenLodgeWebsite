@@ -18,7 +18,6 @@ const allAdminModules = [
 	...(FEATURE_FLAGS.rosterTeams ? [{ href: '/admin/roster-teams', label: 'Roster Teams', icon: 'lucide:users-round' }] : []),
 	...(FEATURE_FLAGS.raidSignups ? [{ href: '/admin/raid-signups', label: 'Raid Signups', icon: 'lucide:calendar-plus' }] : []),
 	...(FEATURE_FLAGS.deathAnalysis ? [{ href: '/admin/log-matching', label: 'Log Matching', icon: 'lucide:scan-search', officer: true }] : []),
-	...(FEATURE_FLAGS.deathAnalysis ? [{ href: '/admin/bench', label: 'Bench', icon: 'lucide:armchair', officer: true }] : []),
 	...(FEATURE_FLAGS.applications ? [{ href: '/admin/applications', label: 'Applications', icon: 'lucide:clipboard-list' }] : []),
 	...(FEATURE_FLAGS.feedback ? [{ href: '/admin/feedback', label: 'Feedback', icon: 'lucide:message-square-warning' }] : []),
 	{ href: '/admin/raiding', label: 'Raiding Content', icon: 'lucide:swords' },

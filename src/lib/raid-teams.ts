@@ -4,6 +4,8 @@ export type TokenGroup = 'Cloth' | 'Leather' | 'Mail' | 'Plate' | 'Unknown';
 
 export interface ClassRaidData {
   buffs: string[];
+  /** Non-stat raid utility (battle rez, summons/gateways, healthstones) — tracked separately since, unlike buffs, coverage is fight-specific rather than "always want at least one". */
+  utility: string[];
   healerCooldowns: string[];
   token: TokenGroup;
 }
@@ -20,94 +22,118 @@ export interface TeamSummary {
   raidBuffs: string[];
   raidBuffCounts: Array<{ buff: string; count: number }>;
   missingRaidBuffs: string[];
+  /** Unlike buffs, utility has no fixed "should always have one" list — coverage is fight-specific, so this is just counts. */
+  utilityCounts: Array<{ utility: string; count: number }>;
 }
 
 export const ASSIGNED_ROLES: AssignedRole[] = ['tank', 'healer', 'melee-dps', 'ranged-dps'];
 
 const CLASS_RAID_DATA: Record<string, ClassRaidData> = {
   'Death Knight': {
-    buffs: ['Battle Resurrection'],
+    buffs: [],
+    utility: ['Battle Resurrection'],
     healerCooldowns: [],
     token: 'Plate',
   },
   'Demon Hunter': {
     buffs: ['Chaos Brand'],
+    utility: [],
     healerCooldowns: [],
     token: 'Leather',
   },
   Druid: {
-    buffs: ['Mark of the Wild', 'Battle Resurrection'],
+    buffs: ['Mark of the Wild'],
+    utility: ['Battle Resurrection'],
     healerCooldowns: ['Tranquility'],
     token: 'Leather',
   },
   Evoker: {
     buffs: ['Blessing of the Bronze', 'Bloodlust/Heroism'],
+    utility: [],
     healerCooldowns: ['Rewind'],
     token: 'Mail',
   },
   Hunter: {
     buffs: ['Bloodlust/Heroism'],
+    utility: [],
     healerCooldowns: [],
     token: 'Mail',
   },
   Mage: {
     buffs: ['Arcane Intellect', 'Bloodlust/Heroism'],
+    utility: [],
     healerCooldowns: [],
     token: 'Cloth',
   },
   Monk: {
     buffs: ['Mystic Touch'],
+    utility: [],
     healerCooldowns: ['Revival'],
     token: 'Leather',
   },
   Paladin: {
     buffs: [],
+    utility: [],
     healerCooldowns: ['Aura Mastery'],
     token: 'Plate',
   },
   Priest: {
     buffs: ['Power Word: Fortitude'],
+    utility: [],
     healerCooldowns: ['Power Word: Barrier', 'Divine Hymn'],
     token: 'Cloth',
   },
   Rogue: {
-    buffs: [],
+    buffs: ['Atrophic Poison'],
+    utility: [],
     healerCooldowns: [],
     token: 'Leather',
   },
   Shaman: {
     buffs: ['Bloodlust/Heroism'],
+    utility: [],
     healerCooldowns: ['Spirit Link Totem', 'Healing Tide Totem'],
     token: 'Mail',
   },
   Warlock: {
-    buffs: ['Healthstones', 'Summoning Gateway', 'Battle Resurrection'],
+    buffs: [],
+    utility: ['Healthstones', 'Summoning Gateway', 'Demonic Gateway', 'Battle Resurrection'],
     healerCooldowns: [],
     token: 'Cloth',
   },
   Warrior: {
     buffs: ['Battle Shout'],
+    utility: [],
     healerCooldowns: ['Rallying Cry'],
     token: 'Plate',
   },
 };
 
-const ALL_RAID_BUFFS = [...new Set(Object.values(CLASS_RAID_DATA).flatMap((data) => data.buffs))].sort((a, b) =>
+export const ALL_RAID_BUFFS = [...new Set(Object.values(CLASS_RAID_DATA).flatMap((data) => data.buffs))].sort((a, b) =>
+  a.localeCompare(b)
+);
+
+export const ALL_UTILITY = [...new Set(Object.values(CLASS_RAID_DATA).flatMap((data) => data.utility))].sort((a, b) =>
   a.localeCompare(b)
 );
 
 const RAID_BUFF_DESCRIPTIONS: Record<string, string> = {
   'Arcane Intellect': 'Increases Intellect for all raid members.',
-  'Battle Resurrection': 'Allows an ally to be resurrected while in combat.',
+  'Atrophic Poison': 'Reduces enemies\' physical damage dealt while the poison is active.',
   'Battle Shout': 'Increases Attack Power for all raid members.',
   'Blessing of the Bronze': 'Increases movement speed and extends major movement cooldowns.',
   'Bloodlust/Heroism': 'Provides a temporary haste increase for the group.',
   'Chaos Brand': 'Increases magic damage taken by targets hit by the raid.',
-  Healthstones: 'Provides personal emergency healing consumables.',
   'Mark of the Wild': 'Increases Versatility for all raid members.',
   'Mystic Touch': 'Increases physical damage taken by targets hit by the raid.',
   'Power Word: Fortitude': 'Increases Stamina for all raid members.',
-  'Summoning Gateway': 'Adds a movement utility gateway for raid positioning.',
+};
+
+const UTILITY_DESCRIPTIONS: Record<string, string> = {
+  'Battle Resurrection': 'Allows an ally to be resurrected while in combat.',
+  'Demonic Gateway': 'A two-way portal that teleports anyone who uses it between its two ends.',
+  Healthstones: 'Provides personal emergency healing consumables.',
+  'Summoning Gateway': 'Summons an absent or dead player to the caster.',
 };
 
 export function normalizeTeamMode(value: string | null | undefined): TeamMode | null {
@@ -125,7 +151,7 @@ export function normalizeAssignedRole(value: string | null | undefined): Assigne
 }
 
 export function classRaidData(className: string): ClassRaidData {
-  return CLASS_RAID_DATA[className] ?? { buffs: [], healerCooldowns: [], token: 'Unknown' };
+  return CLASS_RAID_DATA[className] ?? { buffs: [], utility: [], healerCooldowns: [], token: 'Unknown' };
 }
 
 export function tokenArmorType(token: TokenGroup): string {
@@ -145,8 +171,16 @@ export function allRaidBuffs(className: string): string[] {
   return classRaidData(className).buffs;
 }
 
+export function allUtility(className: string): string[] {
+  return classRaidData(className).utility;
+}
+
 export function raidBuffDescription(buffName: string): string {
   return RAID_BUFF_DESCRIPTIONS[buffName] ?? 'Provides raid utility or throughput support.';
+}
+
+export function utilityDescription(utilityName: string): string {
+  return UTILITY_DESCRIPTIONS[utilityName] ?? 'Provides raid utility.';
 }
 
 export function computeTeamSummary(members: TeamSummaryMember[]): TeamSummary {
@@ -160,6 +194,7 @@ export function computeTeamSummary(members: TeamSummaryMember[]): TeamSummary {
   const tokenCounts = new Map<TokenGroup, number>();
   const buffCounts = new Map<string, number>();
   const buffs = new Set<string>();
+  const utilityCounts = new Map<string, number>();
 
   for (const member of members) {
     roleCounts[member.assignedRole] += 1;
@@ -171,6 +206,9 @@ export function computeTeamSummary(members: TeamSummaryMember[]): TeamSummary {
     for (const buff of data.buffs) {
       buffs.add(buff);
       buffCounts.set(buff, (buffCounts.get(buff) ?? 0) + 1);
+    }
+    for (const utility of data.utility) {
+      utilityCounts.set(utility, (utilityCounts.get(utility) ?? 0) + 1);
     }
   }
 
@@ -186,12 +224,17 @@ export function computeTeamSummary(members: TeamSummaryMember[]): TeamSummary {
     .map(([buff, count]) => ({ buff, count }))
     .sort((a, b) => a.buff.localeCompare(b.buff));
 
+  const utilityCountsList = [...utilityCounts.entries()]
+    .map(([utility, count]) => ({ utility, count }))
+    .sort((a, b) => a.utility.localeCompare(b.utility));
+
   return {
     roleCounts,
     classDistribution,
     tokenDistribution,
     raidBuffs: [...buffs].sort((a, b) => a.localeCompare(b)),
     raidBuffCounts,
+    utilityCounts: utilityCountsList,
     missingRaidBuffs: ALL_RAID_BUFFS.filter((buff) => !buffs.has(buff)),
   };
 }
