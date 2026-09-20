@@ -9,7 +9,7 @@ const MEMBER_ONLY_PATHS = new Set(['/raiders', '/signup', '/feedback', '/trinket
 const OFFICER_ADMIN_PATHS = new Set(['/admin', '/admin/log-matching']);
 
 // Guild is on hiatus between seasons — redirect raider/tool features to the hiatus page.
-const HIATUS_PATHS = new Set(['/signup', '/trinkets', '/loot-history', '/upgrades']);
+const HIATUS_PATHS = new Set(['/signup', '/trinkets', '/upgrades']);
 
 function requireAuthenticatedGuildMember(
 	path: string,

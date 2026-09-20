@@ -35,11 +35,11 @@ Currently `true`:
 - `deathAnalysis` — `/death-analysis` (raider-facing, in the Tools menu), `/admin/log-matching`, `/api/admin/death-analysis/*`, and the death-analysis leg of `/api/cron/refresh-logs`. See [Death Analysis](#death-analysis).
 - `mechanicsAnalysis` — `/mechanics-analysis` (Tools menu, guild members) and the mechanics leg of `/api/cron/refresh-logs`. Also requires `deathAnalysis`, since it reads that feature's canonical reports. See [Mechanics Analysis](#mechanics-analysis).
 - `raidComp` — `/raid-composition` (Tools menu, guild members; officers edit) and its `/api/raid-composition/*` routes. Also requires `deathAnalysis`, since it's built on Bench's scoring. See [Raid Composition](#raid-composition).
-- `tools` — `/professions` (live, in the Tools menu) plus `/trinkets`, `/loot-history`, `/upgrades` (still redirected to `/hiatus` and not in the Tools menu).
+- `tools` — `/professions` and `/loot-history` (live, in the Tools menu) plus `/trinkets`, `/upgrades` (still redirected to `/hiatus` and not in the Tools menu).
 
-The "Tools" nav dropdown isn't gated as a whole; each entry checks its own flag. It currently holds Gear Summary (`/raiders/gear-summary`, guild members), Professions (logged-in users, `tools`), Death Analysis (guild members, `deathAnalysis`), Mechanics Analysis (guild members, `deathAnalysis` + `mechanicsAnalysis`), and Raid Composition (guild members, `deathAnalysis` + `raidComp`).
+The "Tools" nav dropdown isn't gated as a whole; each entry checks its own flag. It currently holds Gear Summary (`/raiders/gear-summary`, guild members), Professions (logged-in users, `tools`), Loot History (logged-in users, `tools`), Death Analysis (guild members, `deathAnalysis`), Mechanics Analysis (guild members, `deathAnalysis` + `mechanicsAnalysis`), and Raid Composition (guild members, `deathAnalysis` + `raidComp`).
 
-Separately, `/signup`, `/trinkets`, `/loot-history`, and `/upgrades` are also redirected to `/hiatus` by `src/middleware.ts` (`HIATUS_PATHS`). `/raiders` and `/professions` were removed from that set so they stay live.
+Separately, `/signup`, `/trinkets`, and `/upgrades` are also redirected to `/hiatus` by `src/middleware.ts` (`HIATUS_PATHS`). `/raiders`, `/professions`, and `/loot-history` were removed from that set so they stay live.
 
 `/raiders` additionally won't record any new tracking data (gear/ilvl, M+ score, crests, keystones, Great Vault, history snapshots) until Season 2 actually starts — see `SEASON_2_START_TIMESTAMP` in `src/lib/wow-reset.ts`.
 
@@ -61,7 +61,8 @@ Separately, `/signup`, `/trinkets`, `/loot-history`, and `/upgrades` are also re
 - Death Analysis (`/death-analysis`, Tools menu, guild members) — excessive-death rankings for Season 2 raid nights; see [Death Analysis](#death-analysis)
 - Mechanics Analysis (`/mechanics-analysis`, Tools menu, guild members) — per-boss mechanic leaderboards (first: Coiled Altar orb carries); see [Mechanics Analysis](#mechanics-analysis)
 - Raid Composition (`/raid-composition`, Tools menu, guild members; officers edit) — shared suggested raid composition built from Bench priority, with drag-and-drop groups and live raid-buff coverage; see [Raid Composition](#raid-composition)
-- *Disabled during guild hiatus (code/data preserved, see Feature Flags):* guild-member raid signup calendar, Trinkets/Loot History/Upgrades tools, guild feedback form, application form, interactive Sim Tools panel and Attendance history on raider profiles
+- Loot History (`/loot-history`, Tools menu, logged-in users) — RCLootCouncil award log synced from desktop clients, with search/filter, a raider comparison view, and officer exclude/note support
+- *Disabled during guild hiatus (code/data preserved, see Feature Flags):* guild-member raid signup calendar, Trinkets/Upgrades tools, guild feedback form, application form, interactive Sim Tools panel and Attendance history on raider profiles
 
 ### Admin Features
 
@@ -157,7 +158,7 @@ http://localhost:4321
 | `/raiders/:charId` | Yes + Guild Member | Raider detail page with media, stats, and raid progress matrix |
 | `/trinkets` | Yes + Guild Member | **Disabled** (redirects to `/hiatus`) — trinket tier comparison tool |
 | `/professions` | Yes | Profession recipe browser (Tools menu) |
-| `/loot-history` | Yes | **Disabled** (redirects to `/hiatus`) — guild loot history log |
+| `/loot-history` | Yes | Guild loot history log (Tools menu) — search/filter, raider comparison, officer exclude |
 | `/upgrades` | Yes + Guild Member | **Disabled** (redirects to `/hiatus`) — gear upgrade comparison tool |
 | `/death-analysis` | Yes + Guild Member | Season 2 excessive-death rankings and the counted report per raid night (see [Death Analysis](#death-analysis)) |
 | `/mechanics-analysis` | Yes + Guild Member | Per-boss mechanic leaderboards with boss, range, and role filters (see [Mechanics Analysis](#mechanics-analysis)) |
@@ -440,7 +441,7 @@ These handlers remain in the codebase as retired stubs and currently return HTTP
 | `raider_keystones` | Every observed Mythic+ keystone completion per character; backs weekly/season run counts and vault key levels |
 | `raider_gear_cache` | Cached equipped-gear snapshots backing `/raiders/gear-summary` and the desktop droptimizer-upgrades endpoint |
 | `raid_log_reports_seen` / `raider_log_activity` | Warcraft Logs report cursor and recent-raider activity synced independently of the (disabled) attendance pipeline — see `AGENTS.md` |
-| `loot_history` | Guild loot history entries synced from the desktop app, with admin exclude/note support *(feature disabled — see Feature Flags)* |
+| `loot_history` | Guild loot history entries synced from the desktop app, with admin exclude/note support |
 | `raider_notes` | Officer notes per raider character, shown on `/admin/mains` |
 | `sim_item_scores` | Per-item sim scoring data |
 | `sim_raidbots_reports` / `sim_raidbots_item_scores` | Linked Raidbots droptimizer reports and their item scores, backing `/api/raiders/[charId]/raidbots-*` |

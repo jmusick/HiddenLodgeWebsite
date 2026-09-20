@@ -35,6 +35,7 @@ const guildNavItems = [
 const toolsNavItems = [
 	...(isGuildMember ? [{ href: '/raiders/gear-summary', label: 'Gear Summary' }] : []),
 	...(user && FEATURE_FLAGS.tools ? [{ href: '/professions', label: 'Professions' }] : []),
+	...(user && FEATURE_FLAGS.tools ? [{ href: '/loot-history', label: 'Loot History' }] : []),
 	...(isGuildMember && FEATURE_FLAGS.deathAnalysis ? [{ href: '/death-analysis', label: 'Death Analysis' }] : []),
 	...(isGuildMember && FEATURE_FLAGS.deathAnalysis && FEATURE_FLAGS.mechanicsAnalysis
 		? [{ href: '/mechanics-analysis', label: 'Mechanics Analysis' }]
