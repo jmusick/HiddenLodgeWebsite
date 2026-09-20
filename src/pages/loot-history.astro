@@ -6,6 +6,7 @@ import { env } from 'cloudflare:workers';
 import { resolveUserTimeZone } from '../lib/time-zones';
 import { MIDNIGHT_TRACKED_NORMALIZED_RAID_NAMES } from '../lib/midnight-tracked-raids';
 import { fetchItemIconUrls } from '../lib/upgrades';
+import { SEASON_2_START_TIMESTAMP } from '../lib/wow-reset';
 import { FEATURE_FLAGS } from '../lib/feature-flags';
 
 if (!FEATURE_FLAGS.tools) {
@@ -93,12 +94,15 @@ function midnightTrackedRaidScopeBinds(): string[] {
 	return MIDNIGHT_TRACKED_NORMALIZED_RAID_NAMES.flatMap((name) => [name, `${name}-%`]);
 }
 
+const SEASON_2_FILTER_SQL = 'COALESCE(awarded_at_epoch, 0) >= ?';
+
 const whereParts: string[] = [
 	'owner_blizzard_char_id IN (SELECT blizzard_char_id FROM roster_members_cache)',
 	'is_excluded = 0',
 	`(${midnightTrackedRaidScopeSql()})`,
+	SEASON_2_FILTER_SQL,
 ];
-const binds: (string | number)[] = [...midnightTrackedRaidScopeBinds()];
+const binds: (string | number)[] = [...midnightTrackedRaidScopeBinds(), SEASON_2_START_TIMESTAMP];
 
 if (rawQuery) {
 	whereParts.push(`(
@@ -161,9 +165,10 @@ const responseOptionsStmt = env.DB.prepare(
 	 FROM loot_history
 	 WHERE is_excluded = 0
 		AND (${midnightTrackedRaidScopeSql()})
+		AND ${SEASON_2_FILTER_SQL}
 		AND response_text IS NOT NULL AND TRIM(response_text) != ''
 	 ORDER BY response_text COLLATE NOCASE ASC`
-).bind(...midnightTrackedRaidScopeBinds());
+).bind(...midnightTrackedRaidScopeBinds(), SEASON_2_START_TIMESTAMP);
 
 const userSettingsStmt = env.DB.prepare(
 	`SELECT time_zone, time_zone_set
@@ -183,10 +188,11 @@ const raiderOptionsStmt = env.DB.prepare(
 	 WHERE lh.owner_blizzard_char_id IS NOT NULL
 		AND lh.is_excluded = 0
 		AND (${midnightTrackedRaidScopeSql('lh')})
+		AND COALESCE(lh.awarded_at_epoch, 0) >= ?
 	 GROUP BY lh.owner_blizzard_char_id
 	 HAVING TRIM(name) != ''
 	 ORDER BY LOWER(name) ASC, LOWER(realm) ASC`
-).bind(...midnightTrackedRaidScopeBinds());
+).bind(...midnightTrackedRaidScopeBinds(), SEASON_2_START_TIMESTAMP);
 
 const [countResult, rowsResult, responseOptionsResult, userSettingsResult, raiderOptionsResult] = await env.DB.batch([
 	countStmt,
@@ -236,6 +242,7 @@ if (selectedMemberIds.length > 0) {
 	const comparisonBinds: (string | number)[] = [
 		...selectedMemberIds,
 		...midnightTrackedRaidScopeBinds(),
+		SEASON_2_START_TIMESTAMP,
 	];
 	let comparisonDifficultySql = '';
 	if (hasDifficultyFilter) {
@@ -250,7 +257,8 @@ if (selectedMemberIds.length > 0) {
 		 FROM loot_history
 		 WHERE owner_blizzard_char_id IN (${placeholders})
 			AND is_excluded = 0
-			AND (${midnightTrackedRaidScopeSql()})${comparisonDifficultySql}
+			AND (${midnightTrackedRaidScopeSql()})
+			AND ${SEASON_2_FILTER_SQL}${comparisonDifficultySql}
 		 GROUP BY owner_blizzard_char_id, COALESCE(NULLIF(TRIM(response_text), ''), 'Unspecified')`
 	).bind(...comparisonBinds);
 
