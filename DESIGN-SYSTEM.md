@@ -652,7 +652,7 @@ Tick as tranches land.
 
 - [x] **1** — Tokens into `Layout.astro:287` + admin override (§1). *S, zero risk*
 - [x] **2** — `src/styles/base.css`, type scale, global focus (§2). *M*
-- [ ] **3** — `src/styles/components.css`, `PageHeader.astro` (§5). *M, nothing references it yet*
+- [x] **3** — `src/styles/components.css`, `PageHeader.astro` (§5). *M, nothing references it yet*
 - [ ] **4** — Page migrations (§6–§9). *L — the bulk of the work*
   - [ ] Group A  - [ ] Group B  - [ ] Group C  - [ ] Group D  - [ ] Group E  - [ ] Group F
 - [ ] **5** — Space/radius snap across remaining files (§3, §4). *M*

@@ -1,0 +1,188 @@
+/* ═══ Tables ═══════════════════════════════════════════════════════
+   Resolved from 4 implementations. Base shape is roster/raiders (the
+   copy-paste pair, and the two biggest tables). Divider is
+   border-bottom (3 of 4 agreed). death-analysis's border-top loses. */
+
+.table-wrap {
+	overflow-x: auto;
+}
+
+.data-table {
+	width: 100%;
+	border-collapse: collapse;
+	min-width: var(--table-min, 0);
+}
+
+.data-table th,
+.data-table td {
+	padding: var(--space-4) var(--space-5);
+	border-bottom: 1px solid var(--border-subtle);
+	text-align: left;
+	font-size: var(--text-base);
+	color: var(--text);
+}
+
+.data-table thead th {
+	position: sticky;
+	top: 0;
+	z-index: 1;
+	background: var(--surface-raised);
+	font-size: var(--text-sm);
+	text-transform: uppercase;
+	letter-spacing: 0.06em;
+	color: var(--muted);
+	white-space: nowrap;
+}
+
+.data-table tbody tr:hover {
+	background: var(--surface-hover);
+}
+
+.data-table--zebra tbody tr:nth-child(even) {
+	background: var(--surface-zebra);
+}
+
+.data-table--compact th,
+.data-table--compact td {
+	padding: var(--space-3) var(--space-4);
+	font-size: var(--text-sm);
+}
+
+.data-table--top th,
+.data-table--top td {
+	vertical-align: top;
+}
+
+/* Sort button — resolved to the loot-history / death-analysis variant.
+   The roster variant loses: it gives no indication a column is sortable. */
+.sort-btn {
+	display: inline-flex;
+	align-items: center;
+	gap: var(--space-2);
+	padding: 0;
+	margin: 0;
+	border: 0;
+	background: transparent;
+	color: inherit;
+	font: inherit;
+	text-transform: inherit;
+	letter-spacing: inherit;
+	cursor: pointer;
+}
+
+.sort-btn::after { content: '\2195'; opacity: 0.5; font-size: var(--text-xs); }
+.sort-btn.is-asc::after { content: '\2191'; opacity: 1; }
+.sort-btn.is-desc::after { content: '\2193'; opacity: 1; }
+
+/* ═══ Buttons ══════════════════════════════════════════════════════
+   Resolved from 5 implementations. Radius from roster-teams (0.45rem
+   is also the most common radius in the codebase, 58 uses).
+   Case: NORMAL — 3 of 5 agreed. The two uppercase variants lose. */
+
+.btn {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	gap: var(--space-2);
+	padding: var(--space-3) var(--space-5);
+	border: 1px solid transparent;
+	border-radius: var(--radius-md);
+	font-family: var(--font-body);
+	font-size: var(--text-sm);
+	font-weight: 600;
+	line-height: 1;
+	white-space: nowrap;
+	cursor: pointer;
+	background: transparent;
+	color: var(--text);
+	transition: background var(--transition-fast), border-color var(--transition-fast),
+		color var(--transition-fast);
+}
+
+.btn:disabled,
+.btn[aria-disabled='true'] {
+	opacity: 0.5;
+	cursor: not-allowed;
+}
+
+.btn--primary {
+	background: var(--surface-active);
+	border-color: var(--border-strong);
+	color: var(--gold-bright);
+}
+.btn--primary:hover:not(:disabled) { background: rgb(var(--gold-rgb) / 0.22); }
+
+.btn--secondary { border-color: var(--border-soft); color: var(--muted); }
+.btn--secondary:hover:not(:disabled) { border-color: var(--border); color: var(--text); }
+
+.btn--danger { background: var(--danger-bg); border-color: var(--danger); color: var(--danger); }
+.btn--subtle { color: var(--muted); }
+.btn--subtle:hover:not(:disabled) { background: var(--surface-hover); color: var(--text); }
+
+.btn--sm { padding: var(--space-2) var(--space-3); font-size: var(--text-xs); }
+.btn--lg { padding: var(--space-4) var(--space-6); font-size: var(--text-base); }
+
+/* Kept modifiers — encode signup state, driven off the state tokens
+   rather than hardcoded greens/reds (TODO.md D5, DESIGN-SYSTEM.md §6). */
+.btn--sign { background: var(--success-bg); border-color: var(--success); color: var(--success); }
+.btn--tentative { background: var(--warning-bg); border-color: var(--warning); color: var(--warning); }
+.btn--late { background: var(--danger-bg); border-color: var(--danger); color: var(--danger); }
+
+/* ═══ Surfaces ═════════════════════════════════════════════════════ */
+
+.card {
+	background: var(--surface-raised);
+	border: 1px solid var(--border-soft);
+	border-radius: var(--radius-lg);
+	padding: var(--space-6);
+	box-shadow: var(--shadow-sm);
+}
+
+.card--interactive { transition: border-color var(--transition-fast), background var(--transition-fast); }
+.card--interactive:hover { border-color: var(--border); background: var(--surface-hover); }
+.card--flush { padding: 0; overflow: hidden; }
+
+/* Gold top edge: OPT-IN, not the house style. It is currently a
+   one-page flourish (SectionCard) and making it the default would
+   change ~30 cards. */
+.card--accent { position: relative; overflow: hidden; }
+.card--accent::before {
+	content: '';
+	position: absolute;
+	inset: 0 0 auto 0;
+	height: 0.18rem;
+	background: linear-gradient(90deg, rgb(var(--gold-rgb) / 0.1),
+		rgb(var(--gold-rgb) / 0.8), rgb(var(--gold-rgb) / 0.1));
+}
+
+/* ═══ Page chrome ══════════════════════════════════════════════════ */
+
+.page-header {
+	display: flex;
+	justify-content: space-between;
+	align-items: flex-start;
+	flex-wrap: wrap;
+	gap: var(--space-6);
+	margin-bottom: var(--space-7);
+}
+
+.page-header h1 { margin: 0 0 var(--space-2); }
+.page-desc { margin: 0; color: var(--muted); font-size: var(--text-base); }
+
+.empty-state {
+	margin: 0;
+	color: var(--muted);
+	font-style: italic;
+	font-size: var(--text-base);
+}
+
+.pill {
+	display: inline-flex;
+	align-items: center;
+	gap: var(--space-2);
+	padding: var(--space-1) var(--space-3);
+	border: 1px solid var(--border-soft);
+	border-radius: var(--radius-pill);
+	font-size: var(--text-xs);
+	white-space: nowrap;
+}

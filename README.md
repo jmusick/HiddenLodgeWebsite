@@ -495,6 +495,7 @@ These handlers remain in the codebase as retired stubs and currently return HTTP
 - **`src/layouts/`** — Layout templates for page rendering
 - **`src/lib/`** — Core modules for auth, Blizzard API integration, roster caching, WoW data
 - **`src/pages/`** — Route definitions (public pages, admin section, API endpoints, auth flow)
+- **`src/styles/`** — Global CSS: design tokens live in `Layout.astro`'s `:root`, but `base.css` (type scale, focus ring) and `components.css` (shared `.data-table`/`.btn`/`.card`/`.page-header` primitives) live here. See `DESIGN-SYSTEM.md` for the migration plan — most pages still carry their own local styles.
 
 See the repository structure for complete file listings.
 
