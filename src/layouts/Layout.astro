@@ -8,6 +8,7 @@ import { externalLinks } from '../data/externalLinks';
 import { Icon } from 'astro-icon/components';
 import packageJson from '../../package.json';
 import { FEATURE_FLAGS } from '../lib/feature-flags';
+import '../styles/base.css';
 
 const {
 	title = 'The Hidden Lodge | WoW Guild',
@@ -286,15 +287,104 @@ const isIndexable = !NOINDEX_PREFIXES.some(
 <style>
 	:root {
 		color-scheme: dark;
-		--bg: #050b12;
-		--bg-soft: #101a25;
-		--bg-panel: rgba(13, 23, 34, 0.78);
+
+		/* ── Brand ──────────────────────────────────────────────────── */
+		--gold-rgb: 214 176 106;          /* #d6b06a as channels, so alphas derive */
 		--gold: #d6b06a;
 		--gold-bright: #e9c987;
 		--steel: #8ca7bb;
+
+		/* ── Text ───────────────────────────────────────────────────── */
 		--text: #ebf1f5;
 		--muted: #afc1cd;
-		--border: rgba(214, 176, 106, 0.4);
+		--text-faint: rgb(175 193 205 / 0.62);
+
+		/* ── Base backgrounds (unchanged) ───────────────────────────── */
+		--bg: #050b12;
+		--bg-soft: #101a25;
+		--bg-panel: rgba(13, 23, 34, 0.78);
+
+		/* ── Surfaces — replaces the 186 one-off dark fills ─────────── */
+		--surface: rgb(7 14 22 / 0.85);
+		--surface-raised: rgb(15 28 43 / 0.88);
+		--surface-sunken: rgb(5 10 16 / 0.55);
+		--surface-hover: rgb(var(--gold-rgb) / 0.08);
+		--surface-active: rgb(var(--gold-rgb) / 0.14);
+		--surface-zebra: rgb(var(--gold-rgb) / 0.03);
+
+		/* ── Borders — --border keeps its current 0.4, so this is safe ─ */
+		--border-subtle: rgb(var(--gold-rgb) / 0.12);
+		--border-soft: rgb(var(--gold-rgb) / 0.2);
+		--border: rgb(var(--gold-rgb) / 0.4);
+		--border-strong: rgb(var(--gold-rgb) / 0.55);
+
+		/* ── State ──────────────────────────────────────────────────── */
+		--success: #6ec26e;
+		--success-bg: rgb(0 180 80 / 0.12);
+		--warning: #e0b155;
+		--warning-bg: rgb(224 177 85 / 0.12);
+		--danger: #f47e7e;
+		--danger-bg: rgb(244 126 126 / 0.12);
+		--info: var(--steel);
+		--info-bg: rgb(140 167 187 / 0.12);
+
+		/* ── WoW item quality — Blizzard's values. Never change. ─────── */
+		--quality-poor: #9d9d9d;
+		--quality-common: #ffffff;
+		--quality-uncommon: #1eff00;
+		--quality-rare: #0070dd;
+		--quality-epic: #a335ee;
+		--quality-legendary: #ff8000;
+		--quality-artifact: #e6cc80;
+
+		/* ── Focus ──────────────────────────────────────────────────── */
+		--focus-ring: 0 0 0 2px rgb(var(--gold-rgb) / 0.75);
+		--focus-ring-offset: 1px;
+
+		/* ── Type scale — see DESIGN-SYSTEM.md §2 for the mapping ─────── */
+		--text-2xs: 0.65rem;              /* 11.7px */
+		--text-xs: 0.72rem;               /* 13.0px */
+		--text-sm: 0.8rem;                /* 14.4px */
+		--text-base: 0.9rem;              /* 16.2px — default body */
+		--text-lg: 1.05rem;               /* 18.9px */
+		--text-xl: 1.25rem;               /* 22.5px */
+		--text-2xl: 1.6rem;               /* 28.8px */
+		--text-3xl: 2.2rem;               /* 39.6px */
+		--text-display: clamp(2rem, 3.1vw, 2.95rem);
+
+		--leading-tight: 1.2;
+		--leading-normal: 1.45;
+		--leading-loose: 1.65;
+
+		/* ── Space scale — see DESIGN-SYSTEM.md §3 for the mapping ────── */
+		--space-1: 0.15rem;               /* 2.7px */
+		--space-2: 0.25rem;               /* 4.5px */
+		--space-3: 0.4rem;                /* 7.2px */
+		--space-4: 0.5rem;                /* 9.0px */
+		--space-5: 0.75rem;               /* 13.5px */
+		--space-6: 1rem;                  /* 18px */
+		--space-7: 1.5rem;                /* 27px */
+		--space-8: 2.5rem;                /* 45px */
+
+		/* ── Radius — see DESIGN-SYSTEM.md §4 ──────────────────────────── */
+		--radius-xs: 0.25rem;
+		--radius-sm: 0.35rem;
+		--radius-md: 0.45rem;
+		--radius-lg: 0.6rem;
+		--radius-xl: 0.8rem;
+		--radius-pill: 999px;
+		--radius-circle: 50%;
+
+		/* ── Elevation ──────────────────────────────────────────────── */
+		--shadow-sm: 0 4px 12px rgb(0 0 0 / 0.2);
+		--shadow-md: 0 10px 28px rgb(0 0 0 / 0.28);
+		--shadow-lg: 0 14px 30px rgb(0 0 0 / 0.35);
+
+		/* ── Motion ─────────────────────────────────────────────────── */
+		--transition-fast: 140ms ease;
+		--transition-base: 200ms ease;
+
+		/* ── Fonts (unchanged) ──────────────────────────────────────── */
 		--font-display: 'Cinzel', Georgia, 'Times New Roman', serif;
 		--font-body: 'Barlow Condensed', 'Trebuchet MS', sans-serif;
 	}
@@ -319,13 +409,6 @@ const isIndexable = !NOINDEX_PREFIXES.some(
 
 	html {
 		font-size: 18px;
-	}
-
-	:global(h1),
-	:global(h2),
-	:global(h3) {
-		font-family: var(--font-display);
-		letter-spacing: 0.04em;
 	}
 
 	a {
