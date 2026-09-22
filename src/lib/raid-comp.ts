@@ -139,14 +139,14 @@ export function combineScores(components: ReadonlyArray<{ weight: number; value:
 
 /** Same combined-score formula as Bench Order, best raider first. */
 function rankByPriority(raiders: BenchRaider[], settings: RaidCompSettings): BenchRaider[] {
-  const scored = raiders.filter((raider) => raider.parseStatus === 'ok');
+  const scored = raiders.filter((raider) => raider.pullScoreStatus === 'ok');
   const deathPool = scored.map((raider) => raider.weightedScore);
-  const parsePool = scored.map((raider) => raider.parse ?? 0);
+  const pullScorePool = scored.map((raider) => raider.pullScore ?? 0);
   const vaultPool = scored.map((raider) => raider.vaultScore);
   const preparednessPool = scored.map((raider) => raider.preparednessScore);
   const upgradesPool = scored.map((raider) => raider.upgradesCompleted);
   const varies = {
-    parse: hasVariance(parsePool),
+    pullScore: hasVariance(pullScorePool),
     death: hasVariance(deathPool),
     vault: hasVariance(vaultPool),
     preparedness: hasVariance(preparednessPool),
@@ -155,14 +155,14 @@ function rankByPriority(raiders: BenchRaider[], settings: RaidCompSettings): Ben
 
   return scored
     .map((raider) => {
-      const parse = raider.parse ?? 0;
-      const parseScore = settings.scale === 'raw' ? parse : 100 * percentRank(parsePool, parse);
+      const pullScore = raider.pullScore ?? 0;
+      const pullScoreValue = settings.scale === 'raw' ? pullScore : 100 * percentRank(pullScorePool, pullScore);
       const deathPct = 100 * inversePercentRank(deathPool, raider.weightedScore);
       const vaultPct = 100 * percentRank(vaultPool, raider.vaultScore);
       const preparednessPct = 100 * percentRank(preparednessPool, raider.preparednessScore);
       const upgradesPct = relativeToMax(upgradesPool, raider.upgradesCompleted);
       const combined = combineScores([
-        { weight: settings.parseWeight, value: parseScore, varies: varies.parse },
+        { weight: settings.parseWeight, value: pullScoreValue, varies: varies.pullScore },
         { weight: settings.deathWeight, value: deathPct, varies: varies.death },
         { weight: settings.vaultWeight, value: vaultPct, varies: varies.vault },
         { weight: settings.preparednessWeight, value: preparednessPct, varies: varies.preparedness },
@@ -274,12 +274,12 @@ function coverageRequirements(utilityMinimums: UtilityMinimums, buffMinimums: Bu
  *
  * Group placement isn't a plain round-robin: tanks only ever go in groups 1
  * and 2 (alternating), healers get one per group before doubling up, and DPS
- * are placed to keep the summed median parse of tanks + DPS as even as
+ * are placed to keep the summed Pull Score of tanks + DPS as even as
  * possible between odd- and even-numbered groups, with melee/ranged role
  * balance and then the least-loaded eligible group only breaking ties.
- * Healers use the same parse-parity preference once they'd otherwise tie on
- * headcount, so both halves of the raid end up roughly equal in total
- * Coverage-panel-style parse. Once the four primary groups are full, every
+ * Healers use the same Pull-Score-parity preference once they'd otherwise tie
+ * on headcount, so both halves of the raid end up roughly equal in total
+ * Coverage-panel-style Pull Score. Once the four primary groups are full, every
  * player beyond the 20-player standard gets their own overflow group. This
  * keeps the odd/even group split balanced (21 is 5/5/5/5/1; 22 is
  * 5/5/5/5/1/1), while no group can exceed five players.
@@ -328,8 +328,8 @@ export function buildAssignments(
   groupCapacities.fill(MAX_GROUP_SIZE, 0, MIN_GROUP_COUNT);
 
   // Tanks alternate strictly between groups 1 and 2 — never 3 or 4. Their
-  // parse still counts toward nonHealerParitySum below, since tank/DPS parse
-  // balance is judged across the whole odd/even split, not DPS alone.
+  // Pull Score still counts toward nonHealerParitySum below, since tank/DPS
+  // Pull Score balance is judged across the whole odd/even split, not DPS alone.
   const nonHealerParitySum: [number, number] = [0, 0];
   let tankCursor = 0;
   for (const raider of picks.tank) {
@@ -342,14 +342,14 @@ export function buildAssignments(
     if (skipped >= 2) break; // both groups 1 and 2 are full
     assignments.set(raider.blizzardCharId, tankCursor + 1);
     groupCounts[tankCursor] += 1;
-    nonHealerParitySum[tankCursor % 2] += raider.parse ?? 0;
+    nonHealerParitySum[tankCursor % 2] += raider.pullScore ?? 0;
     tankCursor = tankCursor === 0 ? 1 : 0;
   }
 
   // Healers spread across the four primary groups before any group gets a
   // second (tracked via healerCounts), same as the old plain round-robin, but
   // when several groups are tied on healer count it now prefers whichever
-  // parity has the lower cumulative healer parse so healer strength stays
+  // parity has the lower cumulative healer Pull Score so healer strength stays
   // balanced between odd and even groups too. Overflow groups are still one
   // player each once the primary groups are full.
   const healerCounts = new Array(groupCount).fill(0);
@@ -376,16 +376,16 @@ export function buildAssignments(
       assignments.set(raider.blizzardCharId, group + 1);
       groupCounts[group] += 1;
       healerCounts[group] += 1;
-      healerParitySum[group % 2] += raider.parse ?? 0;
+      healerParitySum[group % 2] += raider.pullScore ?? 0;
     }
   };
   placeHealers(picks.healer);
 
   // Melee and ranged DPS are placed to prioritize keeping the whole
-  // tank/DPS parse total even between odd- and even-numbered groups
+  // tank/DPS Pull Score total even between odd- and even-numbered groups
   // (nonHealerParitySum, seeded above by the already-placed tanks); melee
   // vs. ranged role balance within a group (dpsRoleCounts) and then total
-  // group size only break ties once parse is even. A group that is already
+  // group size only break ties once Pull Score is even. A group that is already
   // full (often due to tanks or healers) is skipped, so this is
   // deliberately best-effort rather than a hard guarantee.
   const dpsRoleCounts = new Map<number, Record<'melee-dps' | 'ranged-dps', number>>();
@@ -413,7 +413,7 @@ export function buildAssignments(
       const group = candidates[0];
       assignments.set(raider.blizzardCharId, group + 1);
       groupCounts[group] += 1;
-      nonHealerParitySum[group % 2] += raider.parse ?? 0;
+      nonHealerParitySum[group % 2] += raider.pullScore ?? 0;
       const counts = dpsRoleCounts.get(group) ?? { 'melee-dps': 0, 'ranged-dps': 0 };
       counts[role] += 1;
       dpsRoleCounts.set(group, counts);

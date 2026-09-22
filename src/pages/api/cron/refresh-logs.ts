@@ -4,6 +4,7 @@ import { refreshRaidLogActivity } from '../../../lib/raid-log-activity';
 import { refreshDeathAnalysis } from '../../../lib/death-analysis';
 import { refreshMechanicsAnalysis } from '../../../lib/mechanics-analysis';
 import { refreshBenchParses } from '../../../lib/bench';
+import { refreshPullScores } from '../../../lib/pull-scores';
 import { FEATURE_FLAGS } from '../../../lib/feature-flags';
 
 export const prerender = false;
@@ -22,6 +23,14 @@ const MECHANICS_START_CUTOFF_MS = 16_000;
  */
 const BENCH_PARSES_START_CUTOFF_MS = 8_000;
 const BENCH_PARSES_BUDGET_MS = 4_000;
+
+/**
+ * Pull Scores run after bench parses in the same leg. Per-pull `table`
+ * queries are the heaviest WCL load in this cron, so the cutoff is later and
+ * the budget smaller than bench parses' — see pull-scores.ts.
+ */
+const PULL_SCORES_START_CUTOFF_MS = 14_000;
+const PULL_SCORES_BUDGET_MS = 4_000;
 
 /**
  * Warcraft Logs refresh: raid-log activity (then bench parses) + death analysis
@@ -55,6 +64,7 @@ export const GET: APIRoute = async ({ request }) => {
   const runDeathAnalysis = FEATURE_FLAGS.deathAnalysis;
   const runMechanicsAnalysis = FEATURE_FLAGS.deathAnalysis && FEATURE_FLAGS.mechanicsAnalysis;
   const runBenchParses = FEATURE_FLAGS.deathAnalysis;
+  const runPullScores = FEATURE_FLAGS.deathAnalysis;
 
   const timings: Record<string, number> = {};
   const timed = <T>(label: string, work: Promise<T>): Promise<T> => {
@@ -91,10 +101,16 @@ export const GET: APIRoute = async ({ request }) => {
         ? Promise.resolve(null)
         : timed('benchParses', refreshBenchParses(undefined, { budgetMs: BENCH_PARSES_BUDGET_MS })),
     ]);
-    return { logActivity, bench, benchSkipped };
+    const pullScoresSkipped = !runPullScores || Date.now() - startedAt > PULL_SCORES_START_CUTOFF_MS;
+    const [pullScores] = await Promise.allSettled([
+      pullScoresSkipped
+        ? Promise.resolve(null)
+        : timed('pullScores', refreshPullScores(undefined, { budgetMs: PULL_SCORES_BUDGET_MS })),
+    ]);
+    return { logActivity, bench, benchSkipped, pullScores, pullScoresSkipped };
   };
   const [
-    { logActivity: logActivityResult, bench: benchParsesResult, benchSkipped },
+    { logActivity: logActivityResult, bench: benchParsesResult, benchSkipped, pullScores: pullScoresResult, pullScoresSkipped },
     { death: deathAnalysisResult, mechanics: mechanicsAnalysisResult, mechanicsSkipped },
   ] = await Promise.all([logActivityThenBench(), deathThenMechanics()]);
   timings.total = Date.now() - startedAt;
@@ -117,6 +133,10 @@ export const GET: APIRoute = async ({ request }) => {
     console.error('Cron bench parses refresh failed', benchParsesResult.reason);
     failures.push('benchParses');
   }
+  if (pullScoresResult.status === 'rejected') {
+    console.error('Cron pull scores refresh failed', pullScoresResult.reason);
+    failures.push('pullScores');
+  }
 
   return Response.json({
     success: failures.length === 0,
@@ -126,8 +146,14 @@ export const GET: APIRoute = async ({ request }) => {
     deathAnalysis: deathAnalysisResult.status === 'fulfilled' ? deathAnalysisResult.value : null,
     mechanicsAnalysis: mechanicsAnalysisResult.status === 'fulfilled' ? mechanicsAnalysisResult.value : null,
     benchParses: benchParsesResult.status === 'fulfilled' ? benchParsesResult.value : null,
+    pullScores: pullScoresResult.status === 'fulfilled' ? pullScoresResult.value : null,
     timingsMs: timings,
-    skipped: { deathAnalysis: !runDeathAnalysis, mechanicsAnalysis: mechanicsSkipped, benchParses: benchSkipped },
+    skipped: {
+      deathAnalysis: !runDeathAnalysis,
+      mechanicsAnalysis: mechanicsSkipped,
+      benchParses: benchSkipped,
+      pullScores: pullScoresSkipped,
+    },
     requestedLogReportBatchSize: logReportBatchSize,
     requestedDeathReportBatchSize: deathReportBatchSize,
     requestedMechanicsReportBatchSize: mechanicsReportBatchSize,

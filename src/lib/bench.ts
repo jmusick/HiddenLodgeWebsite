@@ -19,6 +19,7 @@ import {
 import { ROLE_BY_SPEC_ID, type MechanicRole } from './mechanics-analysis';
 import { computeGreatVaultScore } from './raiders';
 import { getUsWeeklyResetTimestamp } from './wow-reset';
+import { aggregatePullScoreRows, getPullScoreRows, type PullScoreRow } from './pull-scores';
 
 // Bench analysis: Death Analysis + each raider's median WCL parse. Backs the
 // officer-only scoring section of /raid-composition (Tools menu). Parses are cached
@@ -67,10 +68,22 @@ export interface BenchRaider {
   isAbsent: boolean;
   /** Always included by "Regenerate", bumping a lower-priority same-role pick if needed. */
   isRaidLeader: boolean;
-  /** Median parse for `role` (WCL medianPerformanceAverage), null unless parseStatus is 'ok'. */
-  parse: number | null;
-  parseBosses: number;
-  parseStatus: BenchParseStatus;
+  /**
+   * Raid Comp's scoring input: recency-weighted score from our own per-pull
+   * WCL data (see pull-scores.ts), over the raider's pulls in `role`. Null
+   * unless pullScoreStatus is 'ok' — never falls back to wclParseMedian,
+   * different scale.
+   */
+  pullScore: number | null;
+  pullScorePulls: number;
+  pullScoreKills: number;
+  pullScoreStatus: 'ok' | 'too-few-pulls';
+  /** Median WCL parse for `role` (WCL medianPerformanceAverage) — reference only, never feeds scoring. Null unless wclParseStatus is 'ok'. */
+  wclParseMedian: number | null;
+  wclParseBosses: number;
+  wclParseStatus: BenchParseStatus;
+  /** Decay-weighted mean of WCL bracketPercent across the raider's counted kills — reference only, null with no kills yet. */
+  wclParseKillAvg: number | null;
   /** Current 0-100 Great Vault completion score, before guild-relative ranking. */
   vaultScore: number;
   /** Two-week rolling gem/enchant coverage percentage (current snapshot fallback), before guild-relative ranking. */
@@ -682,18 +695,25 @@ export async function getBenchData(dbInput?: D1Database): Promise<BenchData> {
   const summary = await getDeathAnalysisSummary(db);
   const charIds = benchCandidates(summary).map((entry) => entry.blizzardCharId);
 
-  const [parseRows, overrideResult, mechanicRoles, benchFlags, metrics] = await Promise.all([
+  const [parseRows, overrideResult, mechanicRoles, benchFlags, metrics, pullScoreRows] = await Promise.all([
     loadParseRows(db, charIds),
     db.prepare('SELECT blizzard_char_id, role FROM bench_role_overrides').all<{ blizzard_char_id: number; role: string }>(),
     loadMechanicRoles(db, charIds),
     loadBenchFlags(db, charIds),
     loadBenchMetrics(db, charIds),
+    getPullScoreRows(db),
   ]);
   const overrides = new Map<number, BenchRole>();
   for (const row of overrideResult.results ?? []) {
     if (isBenchRole(row.role)) overrides.set(Number(row.blizzard_char_id), row.role);
   }
   const noFlags: BenchFlags = { meleeRangedOverride: null, isAbsent: false, isRaidLeader: false };
+  const pullScoreRowsByChar = new Map<number, PullScoreRow[]>();
+  for (const row of pullScoreRows) {
+    const list = pullScoreRowsByChar.get(row.blizzardCharId) ?? [];
+    list.push(row);
+    pullScoreRowsByChar.set(row.blizzardCharId, list);
+  }
 
   const toRaider = (entry: DeathAnalysisEntry): BenchRaider => {
     const row = parseRows.get(entry.blizzardCharId);
@@ -701,9 +721,11 @@ export async function getBenchData(dbInput?: D1Database): Promise<BenchData> {
     const roleOverride = overrides.get(entry.blizzardCharId) ?? null;
     const role = roleOverride ?? autoRole;
     const parse = row ? roleParse(row, role) : null;
-    const parseStatus: BenchParseStatus = !row ? 'pending' : !row.wcl_found ? 'not-found' : parse?.median == null ? 'no-role-parse' : 'ok';
+    const wclParseStatus: BenchParseStatus = !row ? 'pending' : !row.wcl_found ? 'not-found' : parse?.median == null ? 'no-role-parse' : 'ok';
     const flags = benchFlags.get(entry.blizzardCharId) ?? noFlags;
     const scores = metrics.get(entry.blizzardCharId) ?? { vaultScore: 0, preparednessScore: 0, upgradesCompleted: 0 };
+    const roleRows = (pullScoreRowsByChar.get(entry.blizzardCharId) ?? []).filter((pullRow) => pullRow.role === role);
+    const pullScore = aggregatePullScoreRows(roleRows);
     return {
       blizzardCharId: entry.blizzardCharId,
       name: entry.name,
@@ -721,9 +743,14 @@ export async function getBenchData(dbInput?: D1Database): Promise<BenchData> {
       meleeRangedOverride: flags.meleeRangedOverride,
       isAbsent: flags.isAbsent,
       isRaidLeader: flags.isRaidLeader,
-      parse: parseStatus === 'ok' ? Math.round(Number(parse?.median) * 10) / 10 : null,
-      parseBosses: Number(parse?.bosses ?? 0),
-      parseStatus,
+      pullScore: pullScore.pullScore,
+      pullScorePulls: pullScore.pulls,
+      pullScoreKills: pullScore.kills,
+      pullScoreStatus: pullScore.status,
+      wclParseMedian: wclParseStatus === 'ok' ? Math.round(Number(parse?.median) * 10) / 10 : null,
+      wclParseBosses: Number(parse?.bosses ?? 0),
+      wclParseStatus,
+      wclParseKillAvg: pullScore.wclParseKillAvg,
       vaultScore: scores.vaultScore,
       preparednessScore: scores.preparednessScore,
       upgradesCompleted: scores.upgradesCompleted,
@@ -737,7 +764,7 @@ export async function getBenchData(dbInput?: D1Database): Promise<BenchData> {
     ranked: summary.rankings.map(toRaider),
     belowMinimum: summary.belowMinimum
       .map(toRaider)
-      .sort((a, b) => (b.parse ?? -1) - (a.parse ?? -1) || a.name.localeCompare(b.name)),
+      .sort((a, b) => (b.pullScore ?? -1) - (a.pullScore ?? -1) || a.name.localeCompare(b.name)),
   };
 }
 

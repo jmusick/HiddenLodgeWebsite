@@ -7,6 +7,7 @@ import { BENCH_PARSE_DIFFICULTY, getBenchData, type BenchRaider } from '../lib/b
 import { getBuffMinimums, getRaidCompAssignments, getRaidCompLoadouts, getRaidCompManualOverrideIds, getRaidCompSettings, getTempRaidCompCandidates, getUtilityMinimums } from '../lib/raid-comp';
 import { ALL_UTILITY, CONFIGURABLE_RAID_BUFFS, DEFAULT_CONFIGURABLE_BUFF_MINIMUM } from '../lib/raid-teams';
 import { DEATH_ANALYSIS_RAID_NAME } from '../lib/death-analysis';
+import { PULL_SCORE_MIN_PULLS } from '../lib/pull-scores';
 import { FEATURE_FLAGS } from '../lib/feature-flags';
 import { CLASS_COLORS, classColor } from '../lib/wow';
 
@@ -35,8 +36,9 @@ const DIFFICULTY_LABELS: Record<number, string> = { 3: 'Normal', 4: 'Heroic', 5:
 const difficultyLabel = DIFFICULTY_LABELS[BENCH_PARSE_DIFFICULTY] ?? 'Heroic';
 const timestampLabel = (epoch: number | null) =>
   epoch ? `${new Date(epoch * 1000).toLocaleString('en-US', { timeZone: 'America/New_York' })} ET` : 'Never';
+const pullScoreMinPulls = PULL_SCORE_MIN_PULLS;
 const savedWeightSummary = [
-  `Parse ${settings.parseWeight}%`,
+  `Pull Score ${settings.parseWeight}%`,
   `Deaths ${settings.deathWeight}%`,
   `Vault ${settings.vaultWeight}%`,
   `Preparedness ${settings.preparednessWeight}%`,
@@ -45,13 +47,14 @@ const savedWeightSummary = [
 const rosterColumns: ReadonlyArray<{ label: string; help: string; className?: string }> = [
   { label: '#', help: 'Priority rank within this role group. It updates live from the configured score weights; lower is better and is what automatic Regenerate uses first.' },
   { label: 'Raider', help: 'Character name and realm. Class color identifies the character class that supplies buffs, utility, and healer cooldowns.' },
-  { label: 'Median Parse', className: 'num', help: `Median ${difficultyLabel} Warcraft Logs parse across qualifying bosses in the raider’s effective role. This is the source value before the selected parse scale is applied.` },
-  { label: 'Parse Score', className: 'num', help: 'The parse input used by Combined. With Guild percentile it is this raider’s relative parse rank in the scored roster (0–100); with Raw WCL parse it is the WCL parse value itself.' },
+  { label: 'Pull Score', className: 'num', help: `Recency-weighted score from the raider's own ${difficultyLabel} pulls (kills and wipes) in their effective role, computed by this site from Warcraft Logs data — see /parse-analysis. This is the source value before the selected scale is applied.` },
+  { label: 'Score used', className: 'num', help: 'The Pull Score input used by Combined. With Guild percentile it is this raider’s relative Pull Score rank in the scored roster (0–100); with Raw Pull Score it is the Pull Score value itself.' },
+  { label: 'WCL Parse (median)', className: 'num reference', help: 'Warcraft Logs’ own all-time percentile parse for this role, kills only — reference only, never feeds Combined. See /parse-analysis for how it differs from Pull Score.' },
   { label: 'Death Pct', className: 'num', help: 'Guild-relative survival score from Death Analysis. Fewer deaths per counted pull produces a higher percentage and contributes according to the Deaths weight.' },
   { label: 'Vault Pct', className: 'num', help: 'Guild-relative Great Vault completion percentile. Higher Vault scores rank higher and contribute according to the Great Vault weight.' },
   { label: 'Prepared Pct', className: 'num', help: 'Guild-relative preparedness percentile, based on the rolling gem and enchant coverage score. Higher is better and contributes according to the Preparedness weight.' },
   { label: 'Upgrade Pct', className: 'num', help: 'Weekly gear upgrades completed, measured from the decrease in missing upgrade ranks since reset, shown as a share of whoever upgraded the most this week. The top upgrader is 100 and nobody who upgraded nothing scores above 0, so doing twice as much reads as roughly twice the score. Contributes according to the Upgrades weight.' },
-  { label: 'Combined', className: 'num', help: 'Final live priority score: Parse, Deaths, Vault, Preparedness, and Upgrades multiplied by their configured weights. The five weights must total 100%; higher Combined ranks first.' },
+  { label: 'Combined', className: 'num', help: 'Final live priority score: Pull Score, Deaths, Vault, Preparedness, and Upgrades multiplied by their configured weights. The five weights must total 100%; higher Combined ranks first.' },
   { label: 'Role', help: 'Effective tank, healer, or DPS role. Auto-detected from ranked Warcraft Logs bosses unless an officer sets an override. It determines the quota bucket for Regenerate.' },
   { label: 'Melee/Ranged', help: 'DPS sub-role used to balance melee and ranged selections. Derived from the latest WCL spec or class fallback, and can be overridden by an officer.' },
   { label: 'Absent', help: 'When on, the raider is excluded from automatic Regenerate. It does not prevent an officer from manually placing them on the board.' },
@@ -78,9 +81,14 @@ const toTemporaryClient = (candidate: (typeof temporaryCandidates)[number]) => {
     meleeRangedOverride: candidate.assignedRole === 'melee-dps' ? 'melee' : candidate.assignedRole === 'ranged-dps' ? 'ranged' : null,
     isAbsent: false,
     isRaidLeader: false,
-    parse: null,
-    parseBosses: 0,
-    parseStatus: 'pending',
+    pullScore: null,
+    pullScorePulls: 0,
+    pullScoreKills: 0,
+    pullScoreStatus: 'too-few-pulls',
+    wclParseMedian: null,
+    wclParseBosses: 0,
+    wclParseStatus: 'pending',
+    wclParseKillAvg: null,
     vaultScore: 0,
     preparednessScore: 0,
     upgradesCompleted: 0,
@@ -93,6 +101,7 @@ const clientData = {
   temporaryCandidates: temporaryCandidates.map(toTemporaryClient),
   minimumPulls: bench.summary.minimumPulls,
   minimumReports: bench.summary.minimumReports,
+  pullScoreMinPulls: PULL_SCORE_MIN_PULLS,
   difficultyLabel,
   assignments: [...assignments.entries()],
   manualOverrideIds: [...manualOverrideIds],
@@ -106,16 +115,16 @@ const clientData = {
 <Layout title="Raid Composition | The Hidden Lodge">
   <div class="raid-comp-page">
     {isOfficer && statusParam === 'refresh-ok' && (
-      <div class="flash flash-ok" role="status">Parses refreshed from Warcraft Logs.</div>
+      <div class="flash flash-ok" role="status">Logs data refreshed from Warcraft Logs.</div>
     )}
     {isOfficer && statusParam === 'refresh-partial' && (
-      <div class="flash flash-ok" role="status">Refreshed a batch of parses. The rest will finish on the next cron run or another refresh.</div>
+      <div class="flash flash-ok" role="status">Refreshed a batch of logs data. The rest will finish on the next cron run or another refresh.</div>
     )}
     {isOfficer && statusParam === 'refresh-rate-limited' && (
-      <div class="flash flash-error" role="alert">Warcraft Logs rate limit hit. Parses will resume refreshing automatically.</div>
+      <div class="flash flash-error" role="alert">Warcraft Logs rate limit hit. Logs data will resume refreshing automatically.</div>
     )}
     {isOfficer && statusParam === 'refresh-error' && (
-      <div class="flash flash-error" role="alert">Parse refresh failed. Check server logs.</div>
+      <div class="flash flash-error" role="alert">Logs data refresh failed. Check server logs.</div>
     )}
     {isOfficer && statusParam === 'role-saved' && (
       <div class="flash flash-ok" role="status">Role saved.</div>
@@ -152,9 +161,10 @@ const clientData = {
       <div>
         <h1>Raid Composition</h1>
         <p class="page-desc">
-          A suggested raid comp built from Bench priority order (Death Analysis + median {difficultyLabel}{' '}
-          {DEATH_ANALYSIS_RAID_NAME} parse), balanced for raid buffs and distributed as evenly as possible across as many groups as your
-          configured quotas need.
+          A suggested raid comp built from Bench priority order (Death Analysis + each raider's {difficultyLabel}{' '}
+          {DEATH_ANALYSIS_RAID_NAME} Pull Score — this site's own recency-weighted per-pull score, not WCL's Parse; see the Roster
+          columns below), balanced for raid buffs and distributed as evenly as possible across as many groups as your configured
+          quotas need.
           {isOfficer ? ' Drag raiders between groups and the bench to adjust it — everyone sees your changes.' : ' Officers keep this up to date.'}
         </p>
       </div>
@@ -174,7 +184,7 @@ const clientData = {
       </div>
       <p class="current-roster-weights">
         <strong>Roster generated with:</strong> {savedWeightSummary}
-        <span class="current-roster-scale">{settings.scale === 'raw' ? 'Raw WCL parse' : 'Guild percentile parse'}</span>
+        <span class="current-roster-scale">{settings.scale === 'raw' ? 'Raw Pull Score' : 'Guild percentile Pull Score'}</span>
       </p>
       {isOfficer && (
         <div class="loadout-controls" aria-label="Saved Raid Composition loadouts">
@@ -286,11 +296,11 @@ const clientData = {
         )}
         <div class="header-actions">
           <form method="POST" action="/api/admin/bench/refresh">
-            <button type="submit" class="action-btn" disabled={!isOfficer}>Refresh Parses</button>
+            <button type="submit" class="action-btn" disabled={!isOfficer}>Refresh Logs Data</button>
           </form>
         </div>
         <p class="page-meta">
-          Parses updated: {timestampLabel(bench.lastParseSyncAt)} · Deaths updated: {timestampLabel(bench.summary.lastSyncedAt)}
+          WCL Parses updated: {timestampLabel(bench.lastParseSyncAt)} · Deaths updated: {timestampLabel(bench.summary.lastSyncedAt)}
         </p>
 
         <section class="admin-section comp-controls" aria-label="Comp generation controls">
@@ -321,7 +331,7 @@ const clientData = {
           <div class="control weight-control">
             <span class="control-label">Score weights</span>
             <div class="score-weight-grid">
-              <label>Parse <input id="bench-parse-weight" type="number" min="0" max="100" step="1" value={settings.parseWeight} disabled={!isOfficer} />%</label>
+              <label>Pull Score <input id="bench-parse-weight" type="number" min="0" max="100" step="1" value={settings.parseWeight} disabled={!isOfficer} />%</label>
               <label>Deaths <input id="bench-death-weight" type="number" min="0" max="100" step="1" value={settings.deathWeight} disabled={!isOfficer} />%</label>
               <label>Great Vault <input id="bench-vault-weight" type="number" min="0" max="100" step="1" value={settings.vaultWeight} disabled={!isOfficer} />%</label>
               <label>Preparedness <input id="bench-preparedness-weight" type="number" min="0" max="100" step="1" value={settings.preparednessWeight} disabled={!isOfficer} />%</label>
@@ -331,10 +341,10 @@ const clientData = {
           </div>
 
           <fieldset class="control">
-            <legend class="control-label">Parse scale</legend>
+            <legend class="control-label">Pull Score scale</legend>
             <div class="segmented">
               <label><input type="radio" name="bench-scale" value="percentile" checked={settings.scale === 'percentile'} disabled={!isOfficer} /> Guild percentile</label>
-              <label><input type="radio" name="bench-scale" value="raw" checked={settings.scale === 'raw'} disabled={!isOfficer} /> Raw WCL parse</label>
+              <label><input type="radio" name="bench-scale" value="raw" checked={settings.scale === 'raw'} disabled={!isOfficer} /> Raw Pull Score</label>
             </div>
           </fieldset>
 
@@ -344,8 +354,9 @@ const clientData = {
         <section class="admin-section">
           <h3>Roster</h3>
           <p class="section-copy">
-            Raiders with {bench.summary.minimumPulls}+ boss pulls across {bench.summary.minimumReports}+ reports and a parse in their role,
-            grouped by role (best first). This ordering (not saved until an officer clicks Regenerate) is what feeds the comp above.
+            Raiders with {bench.summary.minimumPulls}+ boss pulls across {bench.summary.minimumReports}+ reports and at least{' '}
+            {pullScoreMinPulls} scored {difficultyLabel} pulls in their role, grouped by role (best first). This ordering (not saved
+            until an officer clicks Regenerate) is what feeds the comp above.
             {isOfficer
               ? ' Override Role or Melee/Ranged when auto-detection is wrong; check Absent to exclude someone from Regenerate, or RL to always include them.'
               : ''}
@@ -360,6 +371,7 @@ const clientData = {
                       <col class="col-raider" />
                       <col class="col-median" />
                       <col class="col-parse-score" />
+                      <col class="col-wcl-reference" />
                       <col class="col-death" />
                       <col class="col-vault" />
                       <col class="col-prepared" />
@@ -390,8 +402,9 @@ const clientData = {
           <section class="admin-section">
             <h3>Not Scored</h3>
             <p class="section-copy">
-              Not enough death data (under {bench.summary.minimumPulls} pulls or {bench.summary.minimumReports} reports), or no parse in
-              their role. They are not ranked or auto-selected by Regenerate, but remain available on the Bench for officers to place manually.
+              Not enough death data (under {bench.summary.minimumPulls} pulls or {bench.summary.minimumReports} reports), or fewer than
+              {' '}{pullScoreMinPulls} scored {difficultyLabel} pulls in their role. They are not ranked or auto-selected by Regenerate,
+              but remain available on the Bench for officers to place manually.
             </p>
             <div class="table-wrap">
               <table class="review-table">
@@ -399,8 +412,8 @@ const clientData = {
                   <tr>
                     <th>Raider</th>
                     <th>Role</th>
-                    <th class="num">Median Parse</th>
-                    <th class="num">Bosses</th>
+                    <th class="num">Pull Score</th>
+                    <th class="num">Score Pulls</th>
                     <th class="num">Pulls</th>
                     <th class="num">Reports</th>
                     <th>Reason</th>
@@ -452,9 +465,14 @@ const clientData = {
     meleeRangedOverride: 'melee' | 'ranged' | null;
     isAbsent: boolean;
     isRaidLeader: boolean;
-    parse: number | null;
-    parseBosses: number;
-    parseStatus: 'ok' | 'no-role-parse' | 'not-found' | 'pending';
+    pullScore: number | null;
+    pullScorePulls: number;
+    pullScoreKills: number;
+    pullScoreStatus: 'ok' | 'too-few-pulls';
+    wclParseMedian: number | null;
+    wclParseBosses: number;
+    wclParseStatus: 'ok' | 'no-role-parse' | 'not-found' | 'pending';
+    wclParseKillAvg: number | null;
     vaultScore: number;
     preparednessScore: number;
     upgradesCompleted: number;
@@ -466,6 +484,7 @@ const clientData = {
     temporaryCandidates: Raider[];
     minimumPulls: number;
     minimumReports: number;
+    pullScoreMinPulls: number;
     difficultyLabel: string;
     assignments: Array<[number, number]>;
     manualOverrideIds: number[];
@@ -549,8 +568,8 @@ const clientData = {
     });
   }
 
-  const scored = data.ranked.filter((raider) => raider.parseStatus === 'ok');
-  const unscored = [...data.ranked.filter((raider) => raider.parseStatus !== 'ok'), ...data.belowMinimum];
+  const scored = data.ranked.filter((raider) => raider.pullScoreStatus === 'ok');
+  const unscored = [...data.ranked.filter((raider) => raider.pullScoreStatus !== 'ok'), ...data.belowMinimum];
   const temporary = data.temporaryCandidates;
   const scoredIds = new Set(scored.map((raider) => raider.blizzardCharId));
   const temporaryIds = new Set(temporary.map((raider) => raider.blizzardCharId));
@@ -562,7 +581,7 @@ const clientData = {
   // --- Shared scoring (used by both the Roster table and the Bench "why" popover) ---
 
   const deathPool = scored.map((raider) => raider.weightedScore);
-  const parsePool = scored.map((raider) => raider.parse ?? 0);
+  const pullScorePool = scored.map((raider) => raider.pullScore ?? 0);
   const vaultPool = scored.map((raider) => raider.vaultScore);
   const preparednessPool = scored.map((raider) => raider.preparednessScore);
   const upgradesPool = scored.map((raider) => raider.upgradesCompleted);
@@ -606,7 +625,7 @@ const clientData = {
   }
 
   const poolVaries = {
-    parse: hasVariance(parsePool),
+    pullScore: hasVariance(pullScorePool),
     death: hasVariance(deathPool),
     vault: hasVariance(vaultPool),
     preparedness: hasVariance(preparednessPool),
@@ -632,7 +651,7 @@ const clientData = {
 
   interface ScoredRow {
     raider: Raider;
-    parseScore: number;
+    pullScoreValue: number;
     deathPct: number;
     vaultPct: number;
     preparednessPct: number;
@@ -643,20 +662,20 @@ const clientData = {
   function computeScoredRows(): ScoredRow[] {
     const settings = currentSettings();
     return scored.map((raider) => {
-      const parse = raider.parse ?? 0;
-      const parseScore = settings.scale === 'raw' ? parse : 100 * percentRank(parsePool, parse);
+      const pullScore = raider.pullScore ?? 0;
+      const pullScoreValue = settings.scale === 'raw' ? pullScore : 100 * percentRank(pullScorePool, pullScore);
       const deathPct = 100 * inversePercentRank(deathPool, raider.weightedScore);
       const vaultPct = 100 * percentRank(vaultPool, raider.vaultScore);
       const preparednessPct = 100 * percentRank(preparednessPool, raider.preparednessScore);
       const upgradesPct = relativeToMax(upgradesPool, raider.upgradesCompleted);
       const combined = combineScores([
-        { weight: settings.parseWeight, value: parseScore, varies: poolVaries.parse },
+        { weight: settings.parseWeight, value: pullScoreValue, varies: poolVaries.pullScore },
         { weight: settings.deathWeight, value: deathPct, varies: poolVaries.death },
         { weight: settings.vaultWeight, value: vaultPct, varies: poolVaries.vault },
         { weight: settings.preparednessWeight, value: preparednessPct, varies: poolVaries.preparedness },
         { weight: settings.upgradesWeight, value: upgradesPct, varies: poolVaries.upgrades },
       ]);
-      return { raider, parseScore, deathPct, vaultPct, preparednessPct, upgradesPct, combined };
+      return { raider, pullScoreValue, deathPct, vaultPct, preparednessPct, upgradesPct, combined };
     });
   }
 
@@ -862,7 +881,7 @@ const clientData = {
     if (temporaryIds.has(raider.blizzardCharId)) {
       reasons.push('Temporary PUG/trial candidate — available for manual placement only and never selected by automatic Regenerate.');
     } else if (!scoredIds.has(raider.blizzardCharId)) {
-      reasons.push('Not scored — available for manual placement, but excluded from automatic Regenerate until enough raid data and a role parse are available.');
+      reasons.push('Not scored — available for manual placement, but excluded from automatic Regenerate until enough raid data and a role Pull Score are available.');
     }
     if (raider.isAbsent) reasons.push('Marked absent — excluded from Regenerate regardless of priority.');
 
@@ -885,7 +904,7 @@ const clientData = {
       );
       reasons.push(`Upgrades completed since reset: ${raider.upgradesCompleted} (${scoreRow.upgradesPct.toFixed(1)} guild percentile).`);
       reasons.push(
-        `Current weighted contributions: Parse ${(settings.parseWeight * scoreRow.parseScore / 100).toFixed(1)} · Deaths ${(settings.deathWeight * scoreRow.deathPct / 100).toFixed(1)} · Vault ${(settings.vaultWeight * scoreRow.vaultPct / 100).toFixed(1)} · Preparedness ${(settings.preparednessWeight * scoreRow.preparednessPct / 100).toFixed(1)} · Upgrades ${(settings.upgradesWeight * scoreRow.upgradesPct / 100).toFixed(1)}.`
+        `Current weighted contributions: Pull Score ${(settings.parseWeight * scoreRow.pullScoreValue / 100).toFixed(1)} · Deaths ${(settings.deathWeight * scoreRow.deathPct / 100).toFixed(1)} · Vault ${(settings.vaultWeight * scoreRow.vaultPct / 100).toFixed(1)} · Preparedness ${(settings.preparednessWeight * scoreRow.preparednessPct / 100).toFixed(1)} · Upgrades ${(settings.upgradesWeight * scoreRow.upgradesPct / 100).toFixed(1)}.`
       );
     }
 
@@ -998,7 +1017,7 @@ const clientData = {
     tag.textContent = temporaryIds.has(raider.blizzardCharId)
       ? `${ROLE_TAG_LABELS[naturalRole(raider)]} · Temporary`
       : scoredIds.has(raider.blizzardCharId)
-        ? `${ROLE_TAG_LABELS[naturalRole(raider)]} · Parse ${(raider.parse ?? 0).toFixed(1)}`
+        ? `${ROLE_TAG_LABELS[naturalRole(raider)]} · Pull Score ${(raider.pullScore ?? 0).toFixed(1)}`
         : `${ROLE_TAG_LABELS[naturalRole(raider)]} · Not scored`;
     if (temporaryIds.has(raider.blizzardCharId)) li.classList.add('is-temporary');
     else if (!scoredIds.has(raider.blizzardCharId)) li.classList.add('is-unscored');
@@ -1131,11 +1150,11 @@ const clientData = {
     const countsLine = document.createElement('p');
     countsLine.className = 'comp-group-counts';
     countsLine.textContent = `${counts.tank}T · ${counts.healer}H · ${counts['melee-dps']}M · ${counts['ranged-dps']}R`;
-    const healerParseSum = members.filter((raider) => naturalRole(raider) === 'healer').reduce((sum, raider) => sum + (raider.parse ?? 0), 0);
-    const nonHealerParseSum = members.filter((raider) => naturalRole(raider) !== 'healer').reduce((sum, raider) => sum + (raider.parse ?? 0), 0);
+    const healerPullScoreSum = members.filter((raider) => naturalRole(raider) === 'healer').reduce((sum, raider) => sum + (raider.pullScore ?? 0), 0);
+    const nonHealerPullScoreSum = members.filter((raider) => naturalRole(raider) !== 'healer').reduce((sum, raider) => sum + (raider.pullScore ?? 0), 0);
     const parseLine = document.createElement('p');
     parseLine.className = 'comp-group-parse';
-    parseLine.textContent = `Tank/DPS Parse: ${nonHealerParseSum.toFixed(1)} · Healer Parse: ${healerParseSum.toFixed(1)}`;
+    parseLine.textContent = `Tank/DPS Pull Score: ${nonHealerPullScoreSum.toFixed(1)} · Healer Pull Score: ${healerPullScoreSum.toFixed(1)}`;
     const list = document.createElement('ul');
     list.className = 'comp-chip-list';
     registerDropZone(list, groupNumber);
@@ -1174,8 +1193,8 @@ const clientData = {
     compQuotaWarning.hidden = quotaWarnings.length === 0;
     compQuotaWarning.textContent = quotaWarnings.length > 0 ? `Quota warning — ${quotaWarnings.join(' · ')}` : '';
 
-    const sumParse = (members: Raider[], predicate: (raider: Raider) => boolean) =>
-      members.filter(predicate).reduce((sum, raider) => sum + (raider.parse ?? 0), 0);
+    const sumPullScore = (members: Raider[], predicate: (raider: Raider) => boolean) =>
+      members.filter(predicate).reduce((sum, raider) => sum + (raider.pullScore ?? 0), 0);
     const oddMembers = groups.filter((_, index) => (index + 1) % 2 === 1).flat();
     const evenMembers = groups.filter((_, index) => (index + 1) % 2 === 0).flat();
     const isHealer = (raider: Raider) => naturalRole(raider) === 'healer';
@@ -1193,8 +1212,8 @@ const clientData = {
       return stat;
     };
     compParitySummary.replaceChildren(
-      parityStat('Tank/DPS Parse', sumParse(oddMembers, isNotHealer), sumParse(evenMembers, isNotHealer)),
-      parityStat('Healer Parse', sumParse(oddMembers, isHealer), sumParse(evenMembers, isHealer))
+      parityStat('Tank/DPS Pull Score', sumPullScore(oddMembers, isNotHealer), sumPullScore(evenMembers, isNotHealer)),
+      parityStat('Healer Pull Score', sumPullScore(oddMembers, isHealer), sumPullScore(evenMembers, isHealer))
     );
 
     compGroupsEl.replaceChildren(...groups.map((members, index) => renderCompGroup(index + 1, members)));
@@ -1480,9 +1499,9 @@ const clientData = {
       if (raider.fightsPresent < data.minimumPulls || raider.reportCount < data.minimumReports) {
         reasons.push(`Under ${data.minimumPulls} pulls / ${data.minimumReports} reports`);
       }
-      if (raider.parseStatus === 'pending') reasons.push('Parse not fetched yet');
-      else if (raider.parseStatus === 'not-found') reasons.push('Not found on Warcraft Logs');
-      else if (raider.parseStatus === 'no-role-parse') reasons.push(`No ${data.difficultyLabel} ${ROLE_LABELS[raider.role]} parse`);
+      if (raider.pullScoreStatus === 'too-few-pulls') {
+        reasons.push(`Fewer than ${data.pullScoreMinPulls} scored ${data.difficultyLabel} ${ROLE_LABELS[raider.role]} pulls`);
+      }
       return reasons.join(' · ');
     }
 
@@ -1493,11 +1512,11 @@ const clientData = {
       const validWeights = [settings.parseWeight, settings.deathWeight, settings.vaultWeight, settings.preparednessWeight, settings.upgradesWeight]
         .every((weight) => Number.isInteger(weight) && weight >= 0 && weight <= 100) && weightTotal === 100;
 
-      weightLabel.value = `Parse ${settings.parseWeight}% · Deaths ${settings.deathWeight}% · Vault ${settings.vaultWeight}% · Preparedness ${settings.preparednessWeight}% · Upgrades ${settings.upgradesWeight}% = ${weightTotal}%${validWeights ? '' : ' — must equal 100%'}`;
+      weightLabel.value = `Pull Score ${settings.parseWeight}% · Deaths ${settings.deathWeight}% · Vault ${settings.vaultWeight}% · Preparedness ${settings.preparednessWeight}% · Upgrades ${settings.upgradesWeight}% = ${weightTotal}%${validWeights ? '' : ' — must equal 100%'}`;
       formula.textContent =
         settings.scale === 'raw'
-          ? `Combined uses the five configured weights. Vault, Preparedness, and weekly Upgrades are always guild-relative percentiles; raw parses retain their WCL scale.`
-          : `Combined uses the five configured weights. Parse, deaths, Vault, Preparedness, and weekly Upgrades are each ranked within the scored guild roster (0–100).`;
+          ? `Combined uses the five configured weights. Vault, Preparedness, and weekly Upgrades are always guild-relative percentiles; raw Pull Scores retain their own scale.`
+          : `Combined uses the five configured weights. Pull Score, deaths, Vault, Preparedness, and weekly Upgrades are each ranked within the scored guild roster (0–100).`;
 
       // Best first within each role group — this is a roster view, not a bench-priority list.
       const sorted = computeScoredRows().sort(
@@ -1515,8 +1534,9 @@ const clientData = {
             tr.append(
               cell(String(index + 1), 'rank'),
               raiderCell(row.raider),
-              cell((row.raider.parse ?? 0).toFixed(1), 'num'),
-              cell(row.parseScore.toFixed(1), 'num'),
+              cell((row.raider.pullScore ?? 0).toFixed(1), 'num'),
+              cell(row.pullScoreValue.toFixed(1), 'num'),
+              cell(row.raider.wclParseMedian === null ? '—' : row.raider.wclParseMedian.toFixed(1), 'num reference'),
               cell(row.deathPct.toFixed(1), 'num'),
               cell(row.vaultPct.toFixed(1), 'num'),
               cell(row.preparednessPct.toFixed(1), 'num'),
@@ -1541,8 +1561,8 @@ const clientData = {
           tr.append(
             raiderCell(raider),
             roleCell(raider),
-            cell(raider.parse === null ? '—' : raider.parse.toFixed(1), 'num'),
-            cell(String(raider.parseBosses), 'num'),
+            cell(raider.pullScore === null ? '—' : raider.pullScore.toFixed(1), 'num'),
+            cell(String(raider.pullScorePulls), 'num'),
             cell(String(raider.fightsPresent), 'num'),
             cell(String(raider.reportCount), 'num'),
             cell(unscoredReason(raider), 'reason')
@@ -2208,9 +2228,10 @@ const clientData = {
    * name over a realm — so the wider score headers borrow from it.
    */
   .roster-table .col-rank { width: 2.6%; }
-  .roster-table .col-raider { width: 17%; }
-  .roster-table .col-median { width: 8.4%; }
-  .roster-table .col-parse-score { width: 8%; }
+  .roster-table .col-raider { width: 15%; }
+  .roster-table .col-median { width: 7.6%; }
+  .roster-table .col-parse-score { width: 7.2%; }
+  .roster-table .col-wcl-reference { width: 8%; }
   .roster-table .col-death { width: 7%; }
   .roster-table .col-vault { width: 6.6%; }
   .roster-table .col-prepared { width: 8.4%; }
@@ -2227,6 +2248,12 @@ const clientData = {
   .roster-table th {
     font-size: 0.82rem;
     vertical-align: bottom;
+  }
+
+  /* Reference-only column (WCL Parse median) — greyed to distinguish it from the scoring inputs. */
+  .roster-table th.reference :global(.column-help),
+  .roster-table :global(td.reference) {
+    color: var(--muted, #8fa3b3);
   }
 
   .review-table th,
