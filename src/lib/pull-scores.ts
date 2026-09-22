@@ -173,8 +173,14 @@ function pendingPhase(
   if (!cursor || cursor.syncedAt < report.syncedAt) return 'fights';
   if (cursor.syncedFights < cursor.totalFights) return 'fights';
   if (!cursor.rankingsSynced) {
+    // Every report gets one unconditional attempt, however old — by the time a
+    // backfilled night's fights finish syncing (could be weeks later), WCL has
+    // long since computed rankings if it ever would. Only a *retry* after an
+    // empty first attempt is limited to recent nights, where "WCL is still
+    // computing" (the actual lag) is a real possibility worth waiting out.
+    if (cursor.rankingsAttemptedAt === 0) return 'rankings';
     const endedDaysAgo = (nowUtc - report.endUtc) / 86_400;
-    const lastTriedHoursAgo = cursor.rankingsAttemptedAt > 0 ? (nowUtc - cursor.rankingsAttemptedAt) / 3_600 : Infinity;
+    const lastTriedHoursAgo = (nowUtc - cursor.rankingsAttemptedAt) / 3_600;
     if (endedDaysAgo < RANKINGS_MAX_AGE_DAYS && lastTriedHoursAgo > RANKINGS_RETRY_HOURS) return 'rankings';
   }
   return null;
