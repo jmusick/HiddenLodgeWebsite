@@ -10,6 +10,9 @@ import { getLatestSingleTargetForRaiders } from '../../lib/sim-api';
 import { attendanceScoringStartUtc, attendanceStatusLabel, getAttendanceSummaryMap } from '../../lib/attendance';
 import { RAID_PROGRESS_TARGET_GROUPS } from '../../data/raidProgressTargets';
 import { FEATURE_FLAGS } from '../../lib/feature-flags';
+import { getBenchData } from '../../lib/bench';
+import { getPullHistory } from '../../lib/pull-scores';
+import PullHistoryTable from '../../components/PullHistoryTable.astro';
 
 const { charId } = Astro.params;
 const id = Number(charId);
@@ -46,6 +49,14 @@ const attendanceStartLabel = new Date(attendanceScoringStartUtc() * 1000).toLoca
   day: 'numeric',
   year: 'numeric',
 });
+
+const showPullScoreHistory = FEATURE_FLAGS.deathAnalysis && FEATURE_FLAGS.parseAnalysis;
+const [pullScoreRaider, pullScoreHistory] = showPullScoreHistory
+  ? await Promise.all([
+      getBenchData(env.DB).then((bench) => [...bench.ranked, ...bench.belowMinimum].find((entry) => entry.blizzardCharId === id) ?? null),
+      getPullHistory(env.DB, id),
+    ])
+  : [null, []];
 
 function authLabel(state: string): string {
   if (state === 'ready') return 'Profile Ready';
@@ -1226,6 +1237,33 @@ function gearTitle(
           </>
         ) : (
           <p class="raid-progress-empty">No scored attendance raids yet. Attendance starts at {attendanceStartLabel} after logs are parsed.</p>
+        )}
+      </details>
+      )}
+
+      {showPullScoreHistory && (
+      <details class="preparedness-history-panel panel">
+        <summary class="prep-history-summary" aria-label="Pull Score history">
+          <Icon name="lucide:activity" class="raid-progress-icon" aria-hidden="true" />
+          Pull Score History
+          <span class="history-subtitle">(<a href="/parse-analysis">how this works</a>)</span>
+          <Icon name="lucide:chevron-down" class="collapse-chevron" aria-hidden="true" />
+        </summary>
+        {pullScoreRaider && pullScoreRaider.pullScoreStatus === 'ok' ? (
+          <>
+            <p class="history-note">
+              Pull Score: <strong>{pullScoreRaider.pullScore?.toFixed(1)}</strong> from {pullScoreRaider.pullScorePulls} pulls
+              ({pullScoreRaider.pullScoreKills} kills).
+              {pullScoreRaider.wclParseKillAvg !== null && (
+                <> WCL Parse (kills, weighted avg): <strong>{pullScoreRaider.wclParseKillAvg.toFixed(1)}</strong>.</>
+              )}
+            </p>
+            <PullHistoryTable history={pullScoreHistory} />
+          </>
+        ) : (
+          <p class="raid-progress-empty">
+            Not enough scored pulls yet — Pull Score needs at least a handful of qualifying pulls in this raider's effective role.
+          </p>
         )}
       </details>
       )}
