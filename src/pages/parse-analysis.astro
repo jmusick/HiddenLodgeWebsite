@@ -371,12 +371,12 @@ const roleColumns: ReadonlyArray<{ label: string; help?: string; className?: str
     text-align: left;
   }
 
-  .pull-history-toggle::after {
+  .pull-history-toggle :global(.cell-stack strong)::after {
     content: ' ▾';
     color: var(--gold, #d6b06a);
   }
 
-  .pull-history-toggle[aria-expanded='true']::after {
+  .pull-history-toggle[aria-expanded='true'] :global(.cell-stack strong)::after {
     content: ' ▴';
   }
 
