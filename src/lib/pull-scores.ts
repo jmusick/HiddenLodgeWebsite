@@ -645,14 +645,20 @@ export interface PullHistoryEntry extends PullScoreRow {
   wclLink: string;
 }
 
+/** Sorts newest first and adds the WCL report link. Pure — doesn't touch the DB, so callers who already have rows (e.g. from getPullScoreRows) can reuse them for several raiders without refetching. */
+export function toPullHistoryEntries(rows: PullScoreRow[]): PullHistoryEntry[] {
+  return [...rows]
+    .sort((a, b) => b.fightEndUtc - a.fightEndUtc)
+    .map((row) => ({
+      ...row,
+      wclLink: `https://www.warcraftlogs.com/reports/${row.reportCode}#fight=${row.fightId}&type=${row.role === 'healer' ? 'healing' : 'damage-done'}`,
+    }));
+}
+
 /** One raider's pull history, newest first, for the profile panel and the parse-analysis expanded row. */
 export async function getPullHistory(dbInput: D1Database | undefined, blizzardCharId: number): Promise<PullHistoryEntry[]> {
   const rows = (await getPullScoreRows(dbInput)).filter((row) => row.blizzardCharId === blizzardCharId);
-  rows.sort((a, b) => b.fightEndUtc - a.fightEndUtc);
-  return rows.map((row) => ({
-    ...row,
-    wclLink: `https://www.warcraftlogs.com/reports/${row.reportCode}#fight=${row.fightId}&type=${row.role === 'healer' ? 'healing' : 'damage-done'}`,
-  }));
+  return toPullHistoryEntries(rows);
 }
 
 export interface PullScoreSummaryEntry {

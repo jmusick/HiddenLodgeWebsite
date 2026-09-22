@@ -1,0 +1,57 @@
+---
+import { recencyWeight } from '../lib/death-analysis';
+import type { PullHistoryEntry } from '../lib/pull-scores';
+
+interface Props {
+  history: PullHistoryEntry[];
+}
+
+const { history } = Astro.props;
+const nowUtc = Math.floor(Date.now() / 1000);
+
+const dateFormatter = new Intl.DateTimeFormat('en-US', {
+  timeZone: 'America/New_York',
+  weekday: 'short',
+  month: 'short',
+  day: 'numeric',
+});
+---
+
+{history.length === 0 ? (
+  <p class="empty-state">No scored pulls yet.</p>
+) : (
+  <div class="table-wrap">
+    <table class="data-table data-table--compact">
+      <thead>
+        <tr>
+          <th>Date</th>
+          <th>Boss</th>
+          <th>Result</th>
+          <th class="num">DPS/HPS</th>
+          <th class="num">Role Median</th>
+          <th class="num">Pull Score</th>
+          <th class="num">WCL Parse</th>
+          <th class="num">Weight</th>
+          <th>Log</th>
+        </tr>
+      </thead>
+      <tbody>
+        {history.map((pull) => (
+          <tr>
+            <td>{dateFormatter.format(new Date(pull.fightEndUtc * 1000))}</td>
+            <td>{pull.encounterName}</td>
+            <td>{pull.isKill ? 'Kill' : `Wipe (${pull.bossPercent.toFixed(1)}%)`}</td>
+            <td class="num">{pull.amount.toFixed(0)}</td>
+            <td class="num">{pull.roleMedian.toFixed(0)}</td>
+            <td class="num">{pull.pullScore.toFixed(1)}</td>
+            <td class="num">{pull.wclPercent === null ? '—' : pull.wclPercent.toFixed(1)}</td>
+            <td class="num">{recencyWeight(pull.fightEndUtc, nowUtc).toFixed(2)}</td>
+            <td>
+              <a href={pull.wclLink} target="_blank" rel="noopener noreferrer">WCL</a>
+            </td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  </div>
+)}

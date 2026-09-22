@@ -43,6 +43,9 @@ const toolsNavItems = [
 		? [{ href: '/mechanics-analysis', label: 'Mechanics Analysis' }]
 		: []),
 	...(isGuildMember && FEATURE_FLAGS.deathAnalysis && FEATURE_FLAGS.raidComp ? [{ href: '/raid-composition', label: 'Raid Composition' }] : []),
+	...(isGuildMember && FEATURE_FLAGS.deathAnalysis && FEATURE_FLAGS.parseAnalysis
+		? [{ href: '/parse-analysis', label: 'Parse Analysis' }]
+		: []),
 ];
 
 const memberNavItems = [
@@ -76,6 +79,7 @@ const NOINDEX_PREFIXES = [
 	'/upgrades',
 	'/death-analysis',
 	'/mechanics-analysis',
+	'/parse-analysis',
 ];
 const currentPath = Astro.url.pathname;
 const isIndexable = !NOINDEX_PREFIXES.some(

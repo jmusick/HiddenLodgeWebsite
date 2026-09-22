@@ -1,0 +1,242 @@
+---
+export const prerender = false;
+
+import Layout from '../layouts/Layout.astro';
+import PageHeader from '../components/PageHeader.astro';
+import PullHistoryTable from '../components/PullHistoryTable.astro';
+import { env } from 'cloudflare:workers';
+import { getBenchData, type BenchRaider, type BenchRole } from '../lib/bench';
+import { naturalRole } from '../lib/raid-comp';
+import type { AssignedRole } from '../lib/raid-teams';
+import {
+  PULL_SCORE_MIN_PULLS,
+  getPullScoreRows,
+  getPullScoreSummary,
+  toPullHistoryEntries,
+  type PullScoreRole,
+  type PullScoreSummaryEntry,
+} from '../lib/pull-scores';
+import { BENCH_PARSE_DIFFICULTY } from '../lib/bench';
+import { DEATH_ANALYSIS_RAID_NAME } from '../lib/death-analysis';
+import { FEATURE_FLAGS } from '../lib/feature-flags';
+
+if (!FEATURE_FLAGS.tools || !FEATURE_FLAGS.deathAnalysis || !FEATURE_FLAGS.parseAnalysis) {
+  return Astro.redirect('/');
+}
+
+if (!Astro.locals.isGuildMember) {
+  return Astro.redirect('/auth/login');
+}
+
+const DIFFICULTY_LABELS: Record<number, string> = { 3: 'Normal', 4: 'Heroic', 5: 'Mythic' };
+const difficultyLabel = DIFFICULTY_LABELS[BENCH_PARSE_DIFFICULTY] ?? 'Heroic';
+
+const bench = await getBenchData(env.DB);
+const allRaiders: BenchRaider[] = [...bench.ranked, ...bench.belowMinimum];
+const raiderByCharId = new Map(allRaiders.map((raider) => [raider.blizzardCharId, raider]));
+const effectiveRoleByCharId = new Map<number, PullScoreRole>(allRaiders.map((raider) => [raider.blizzardCharId, raider.role]));
+
+const rows = await getPullScoreRows(env.DB);
+const rowsByChar = new Map<number, typeof rows>();
+for (const row of rows) {
+  const list = rowsByChar.get(row.blizzardCharId) ?? [];
+  list.push(row);
+  rowsByChar.set(row.blizzardCharId, list);
+}
+
+const summary = getPullScoreSummary(rows, effectiveRoleByCharId);
+
+interface DisplayRow {
+  entry: PullScoreSummaryEntry;
+  raider: BenchRaider;
+}
+
+const bucketFor = (role: BenchRole, raider: BenchRaider): AssignedRole => {
+  if (role === 'tank') return 'tank';
+  if (role === 'healer') return 'healer';
+  return naturalRole(raider);
+};
+
+const buckets: Record<AssignedRole, DisplayRow[]> = { tank: [], healer: [], 'melee-dps': [], 'ranged-dps': [] };
+for (const entry of summary) {
+  const raider = raiderByCharId.get(entry.blizzardCharId);
+  if (!raider) continue;
+  buckets[bucketFor(entry.role, raider)].push({ entry, raider });
+}
+for (const bucket of Object.values(buckets)) {
+  bucket.sort((a, b) => (b.entry.pullScore ?? -1) - (a.entry.pullScore ?? -1) || a.raider.name.localeCompare(b.raider.name));
+}
+
+const bucketLabels: Record<AssignedRole, string> = {
+  tank: 'Tanks',
+  healer: 'Healers',
+  'ranged-dps': 'Ranged',
+  'melee-dps': 'Melee',
+};
+const bucketOrder: AssignedRole[] = ['tank', 'healer', 'ranged-dps', 'melee-dps'];
+
+function trendLabel(row: DisplayRow): string {
+  const { trendRecent, trendPrior } = row.entry;
+  if (trendRecent === null || trendPrior === null) return '—';
+  const delta = trendRecent - trendPrior;
+  const arrow = delta > 0.5 ? '▲' : delta < -0.5 ? '▼' : '▬';
+  return `${arrow} ${delta >= 0 ? '+' : ''}${delta.toFixed(1)}`;
+}
+---
+
+<Layout title="Parse Analysis | The Hidden Lodge">
+  <div class="parse-analysis-page">
+    <PageHeader
+      title="Parse Analysis"
+      description={`How ${difficultyLabel} ${DEATH_ANALYSIS_RAID_NAME} performance is scored on this site, and how it compares to Warcraft Logs' own Parse.`}
+    />
+
+    <section class="card how-it-works">
+      <h2>How this works</h2>
+      <p>
+        <strong>Pull Score</strong> is this site's own recency-weighted score, computed from every qualifying {difficultyLabel} pull —
+        <strong>kills and wipes</strong> — at least 30 seconds long. On each pull, a raider's DPS (tanks/DPS) or HPS (healers) is compared
+        to the median of everyone in that role on that pull: 50 is typical for the role that pull, 100 is twice typical or better. A
+        raider's overall Pull Score is the weighted average of their own pulls in their effective role, with a 30-day half-life — a pull
+        from 30 days ago counts half as much as one from today, so recent form matters more than a season-old streak. This is what feeds
+        Raid Composition's scoring.
+      </p>
+      <p>
+        <strong>WCL Parse</strong> is Warcraft Logs' own all-time percentile versus every log of that spec/boss/item-level bracket
+        worldwide. It's shown here for reference only — it never feeds Raid Comp scoring — and only exists for <strong>kills</strong>,
+        since Warcraft Logs' public API doesn't expose a percentile for wipes.
+      </p>
+      <p class="how-it-works-meta">
+        Guild logs only, {difficultyLabel} only, pulls at least 30 seconds long. A raider needs at least {PULL_SCORE_MIN_PULLS} scored
+        pulls in a role before Pull Score is shown for it.
+      </p>
+    </section>
+
+    {bucketOrder.map((bucket) => (
+      <section class="card role-section">
+        <h2>{bucketLabels[bucket]}</h2>
+        {buckets[bucket].length === 0 ? (
+          <p class="empty-state">No scored raiders yet.</p>
+        ) : (
+          <div class="table-wrap">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>Raider</th>
+                  <th class="num">Pull Score</th>
+                  <th class="num">Pulls</th>
+                  <th class="num">Kills</th>
+                  <th class="num reference">WCL Parse (kills)</th>
+                  <th class="num reference">WCL Parse (median)</th>
+                  <th class="num">Trend (14d)</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody>
+                {buckets[bucket].map((row) => {
+                  const history = toPullHistoryEntries(rowsByChar.get(row.raider.blizzardCharId) ?? []);
+                  const detailId = `pull-history-${row.raider.blizzardCharId}-${bucket}`;
+                  return (
+                    <>
+                      <tr>
+                        <td>
+                          <button
+                            type="button"
+                            class="pull-history-toggle"
+                            aria-expanded="false"
+                            aria-controls={detailId}
+                          >
+                            {row.raider.name} <small>{row.raider.realm}</small>
+                          </button>
+                        </td>
+                        <td class="num">{row.entry.pullScore === null ? '—' : row.entry.pullScore.toFixed(1)}</td>
+                        <td class="num">{row.entry.pulls}</td>
+                        <td class="num">{row.entry.kills}</td>
+                        <td class="num reference">{row.entry.wclParseKillAvg === null ? '—' : row.entry.wclParseKillAvg.toFixed(1)}</td>
+                        <td class="num reference">{row.raider.wclParseMedian === null ? '—' : row.raider.wclParseMedian.toFixed(1)}</td>
+                        <td class="num">{trendLabel(row)}</td>
+                        <td></td>
+                      </tr>
+                      <tr id={detailId} class="pull-history-row" hidden>
+                        <td colspan={8}>
+                          <PullHistoryTable history={history} />
+                        </td>
+                      </tr>
+                    </>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </section>
+    ))}
+  </div>
+</Layout>
+
+<script>
+  document.querySelectorAll<HTMLButtonElement>('.pull-history-toggle').forEach((button) => {
+    button.addEventListener('click', () => {
+      const targetId = button.getAttribute('aria-controls');
+      const detailRow = targetId ? document.getElementById(targetId) : null;
+      if (!detailRow) return;
+      const nowHidden = !detailRow.hidden;
+      detailRow.hidden = nowHidden;
+      button.setAttribute('aria-expanded', String(!nowHidden));
+    });
+  });
+</script>
+
+<style>
+  .parse-analysis-page {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-7);
+  }
+
+  .how-it-works p {
+    margin: 0 0 var(--space-4);
+    color: var(--text);
+  }
+
+  .how-it-works p:last-child {
+    margin-bottom: 0;
+  }
+
+  .how-it-works-meta {
+    color: var(--muted);
+    font-size: var(--text-sm);
+  }
+
+  .role-section h2 {
+    margin: 0 0 var(--space-5);
+  }
+
+  .pull-history-toggle {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.1rem;
+    background: none;
+    border: 0;
+    padding: 0;
+    font: inherit;
+    color: var(--text);
+    cursor: pointer;
+    text-align: left;
+  }
+
+  .pull-history-toggle:hover,
+  .pull-history-toggle:focus-visible {
+    color: var(--gold-bright);
+  }
+
+  .pull-history-toggle small {
+    color: var(--muted);
+    font-size: var(--text-xs);
+  }
+
+  .pull-history-row td {
+    padding-block: var(--space-4);
+  }
+</style>

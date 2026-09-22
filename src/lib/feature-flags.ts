@@ -10,6 +10,10 @@ export const FEATURE_FLAGS = {
   mechanicsAnalysis: true,
   // Reads Bench's scoring (src/lib/bench.ts), so it also needs deathAnalysis on.
   raidComp: true,
+  // Gates only the /parse-analysis page, its nav entry, and the profile Pull
+  // Score panel — Raid Comp's own Pull Score sync/scoring runs whenever
+  // deathAnalysis is on, regardless of this flag.
+  parseAnalysis: true,
   applications: false,
   feedback: false,
   tools: true,

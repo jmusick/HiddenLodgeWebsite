@@ -17,5 +17,6 @@ Disallow: /loot-history
 Disallow: /upgrades
 Disallow: /death-analysis
 Disallow: /mechanics-analysis
+Disallow: /parse-analysis
 
 Sitemap: https://hidden-lodge.com/sitemap.xml
