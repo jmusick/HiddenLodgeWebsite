@@ -1252,17 +1252,17 @@ function gearTitle(
         {pullScoreRaider && pullScoreRaider.pullScoreStatus === 'ok' ? (
           <>
             <p class="history-note">
-              Pull Score: <strong>{pullScoreRaider.pullScore?.toFixed(1)}</strong> from {pullScoreRaider.pullScorePulls} pulls
-              ({pullScoreRaider.pullScoreKills} kills).
-              {pullScoreRaider.wclParseKillAvg !== null && (
-                <> WCL Parse (kills, weighted avg): <strong>{pullScoreRaider.wclParseKillAvg.toFixed(1)}</strong>.</>
+              Pull Score: <strong>{pullScoreRaider.pullScore?.toFixed(1)}</strong> from {pullScoreRaider.pullScoreKills} scored kills
+              ({pullScoreRaider.pullScorePulls} pulls attended in this role).
+              {pullScoreRaider.wclParseMedian !== null && (
+                <> WCL Parse (median, all-time): <strong>{pullScoreRaider.wclParseMedian.toFixed(1)}</strong>.</>
               )}
             </p>
             <PullHistoryTable history={pullScoreHistory} />
           </>
         ) : (
           <p class="raid-progress-empty">
-            Not enough scored pulls yet — Pull Score needs at least a handful of qualifying pulls in this raider's effective role.
+            Not enough scored kills yet — Pull Score needs at least a handful of ranked kills in this raider's effective role.
           </p>
         )}
       </details>

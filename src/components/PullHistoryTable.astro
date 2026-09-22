@@ -29,7 +29,6 @@ const dateFormatter = new Intl.DateTimeFormat('en-US', {
         <col class="col-amount" />
         <col class="col-median" />
         <col class="col-score" />
-        <col class="col-parse" />
         <col class="col-weight" />
         <col class="col-log" />
       </colgroup>
@@ -40,8 +39,7 @@ const dateFormatter = new Intl.DateTimeFormat('en-US', {
           <th>Result</th>
           <th class="num">DPS/HPS</th>
           <th class="num">Role Median</th>
-          <th class="num">Pull Score</th>
-          <th class="num">WCL Parse</th>
+          <th class="num">Parse</th>
           <th class="num">Weight</th>
           <th>Log</th>
         </tr>
@@ -54,8 +52,7 @@ const dateFormatter = new Intl.DateTimeFormat('en-US', {
             <td>{pull.isKill ? 'Kill' : `Wipe (${pull.bossPercent.toFixed(1)}%)`}</td>
             <td class="num">{pull.amount.toFixed(0)}</td>
             <td class="num">{pull.roleMedian.toFixed(0)}</td>
-            <td class="num">{pull.pullScore.toFixed(1)}</td>
-            <td class="num">{pull.wclPercent === null ? '—' : pull.wclPercent.toFixed(1)}</td>
+            <td class="num">{pull.pullScore === null ? '—' : pull.pullScore.toFixed(1)}</td>
             <td class="num">{recencyWeight(pull.fightEndUtc, nowUtc).toFixed(2)}</td>
             <td>
               <a href={pull.wclLink} target="_blank" rel="noopener noreferrer">WCL</a>
@@ -72,15 +69,14 @@ const dateFormatter = new Intl.DateTimeFormat('en-US', {
     table-layout: fixed;
   }
 
-  .pull-history-table .col-date { width: 11%; }
-  .pull-history-table .col-boss { width: 15%; }
-  .pull-history-table .col-result { width: 14%; }
-  .pull-history-table .col-amount { width: 10%; }
-  .pull-history-table .col-median { width: 11%; }
-  .pull-history-table .col-score { width: 10%; }
-  .pull-history-table .col-parse { width: 10%; }
-  .pull-history-table .col-weight { width: 9%; }
-  .pull-history-table .col-log { width: 10%; }
+  .pull-history-table .col-date { width: 12%; }
+  .pull-history-table .col-boss { width: 16%; }
+  .pull-history-table .col-result { width: 15%; }
+  .pull-history-table .col-amount { width: 11%; }
+  .pull-history-table .col-median { width: 12%; }
+  .pull-history-table .col-score { width: 12%; }
+  .pull-history-table .col-weight { width: 10%; }
+  .pull-history-table .col-log { width: 12%; }
 
   .pull-history-table th.num,
   .pull-history-table td.num {

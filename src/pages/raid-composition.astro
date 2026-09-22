@@ -47,9 +47,9 @@ const savedWeightSummary = [
 const rosterColumns: ReadonlyArray<{ label: string; help: string; className?: string }> = [
   { label: '#', help: 'Priority rank within this role group. It updates live from the configured score weights; lower is better and is what automatic Regenerate uses first.' },
   { label: 'Raider', help: 'Character name and realm. Class color identifies the character class that supplies buffs, utility, and healer cooldowns.' },
-  { label: 'Pull Score', className: 'num', help: `Recency-weighted score from the raider's own ${difficultyLabel} pulls (kills and wipes) in their effective role, computed by this site from Warcraft Logs data — see /parse-analysis. This is the source value before the selected scale is applied.` },
+  { label: 'Pull Score', className: 'num', help: `The raider's own Warcraft Logs percentile parse (WCL's normalization for spec/boss/item level, not ours) across their counted ${difficultyLabel} kills in this role, weighted so recent kills count more than old ones instead of WCL's flat all-time average — see /parse-analysis. This is the source value before the selected scale is applied.` },
   { label: 'Score used', className: 'num', help: 'The Pull Score input used by Combined. With Guild percentile it is this raider’s relative Pull Score rank in the scored roster (0–100); with Raw Pull Score it is the Pull Score value itself.' },
-  { label: 'WCL Parse (median)', className: 'num reference', help: 'Warcraft Logs’ own all-time percentile parse for this role, kills only — reference only, never feeds Combined. See /parse-analysis for how it differs from Pull Score.' },
+  { label: 'WCL Parse (median)', className: 'num reference', help: 'Warcraft Logs’ own flat, all-time median parse for this role — reference only, never feeds Combined. This is the number Pull Score replaces for scoring; see /parse-analysis.' },
   { label: 'Death Pct', className: 'num', help: 'Guild-relative survival score from Death Analysis. Fewer deaths per counted pull produces a higher percentage and contributes according to the Deaths weight.' },
   { label: 'Vault Pct', className: 'num', help: 'Guild-relative Great Vault completion percentile. Higher Vault scores rank higher and contribute according to the Great Vault weight.' },
   { label: 'Prepared Pct', className: 'num', help: 'Guild-relative preparedness percentile, based on the rolling gem and enchant coverage score. Higher is better and contributes according to the Preparedness weight.' },
@@ -162,7 +162,7 @@ const clientData = {
         <h1>Raid Composition</h1>
         <p class="page-desc">
           A suggested raid comp built from Bench priority order (Death Analysis + each raider's {difficultyLabel}{' '}
-          {DEATH_ANALYSIS_RAID_NAME} Pull Score — this site's own recency-weighted per-pull score, not WCL's Parse; see{' '}
+          {DEATH_ANALYSIS_RAID_NAME} Pull Score — WCL's own percentile parse, weighted so recent kills count more than old ones; see{' '}
           <a href="/parse-analysis">how it's computed</a>), balanced for raid buffs and distributed as evenly as possible across as
           many groups as your configured quotas need.
           {isOfficer ? ' Drag raiders between groups and the bench to adjust it — everyone sees your changes.' : ' Officers keep this up to date.'}
@@ -355,7 +355,7 @@ const clientData = {
           <h3>Roster</h3>
           <p class="section-copy">
             Raiders with {bench.summary.minimumPulls}+ boss pulls across {bench.summary.minimumReports}+ reports and at least{' '}
-            {pullScoreMinPulls} scored {difficultyLabel} pulls in their role, grouped by role (best first). This ordering (not saved
+            {pullScoreMinPulls} scored {difficultyLabel} kills in their role, grouped by role (best first). This ordering (not saved
             until an officer clicks Regenerate) is what feeds the comp above.
             {isOfficer
               ? ' Override Role or Melee/Ranged when auto-detection is wrong; check Absent to exclude someone from Regenerate, or RL to always include them.'
@@ -403,7 +403,7 @@ const clientData = {
             <h3>Not Scored</h3>
             <p class="section-copy">
               Not enough death data (under {bench.summary.minimumPulls} pulls or {bench.summary.minimumReports} reports), or fewer than
-              {' '}{pullScoreMinPulls} scored {difficultyLabel} pulls in their role. They are not ranked or auto-selected by Regenerate,
+              {' '}{pullScoreMinPulls} scored {difficultyLabel} kills in their role. They are not ranked or auto-selected by Regenerate,
               but remain available on the Bench for officers to place manually.
             </p>
             <div class="table-wrap">
@@ -413,7 +413,7 @@ const clientData = {
                     <th>Raider</th>
                     <th>Role</th>
                     <th class="num">Pull Score</th>
-                    <th class="num">Score Pulls</th>
+                    <th class="num">Score Kills</th>
                     <th class="num">Pulls</th>
                     <th class="num">Reports</th>
                     <th>Reason</th>
@@ -1500,7 +1500,7 @@ const clientData = {
         reasons.push(`Under ${data.minimumPulls} pulls / ${data.minimumReports} reports`);
       }
       if (raider.pullScoreStatus === 'too-few-pulls') {
-        reasons.push(`Fewer than ${data.pullScoreMinPulls} scored ${data.difficultyLabel} ${ROLE_LABELS[raider.role]} pulls`);
+        reasons.push(`Fewer than ${data.pullScoreMinPulls} scored ${data.difficultyLabel} ${ROLE_LABELS[raider.role]} kills`);
       }
       return reasons.join(' · ');
     }
@@ -1562,7 +1562,7 @@ const clientData = {
             raiderCell(raider),
             roleCell(raider),
             cell(raider.pullScore === null ? '—' : raider.pullScore.toFixed(1), 'num'),
-            cell(String(raider.pullScorePulls), 'num'),
+            cell(String(raider.pullScoreKills), 'num'),
             cell(String(raider.fightsPresent), 'num'),
             cell(String(raider.reportCount), 'num'),
             cell(unscoredReason(raider), 'reason')

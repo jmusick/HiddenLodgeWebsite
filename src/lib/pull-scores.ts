@@ -17,8 +17,21 @@ import {
   type DeathAnalysisReportRow,
 } from './death-analysis';
 
-// Pull Score: a recency-weighted, per-pull performance score computed from WCL
-// `table` data (ours), kept distinct from WCL's own all-time Parse (theirs).
+// Pull Score: WCL's own per-kill percentile parse (bracketPercent, already
+// spec/boss/item-level-bracket normalized by WCL), decay-weighted by us
+// instead of averaged flat over all time the way WCL's own median is. This
+// intentionally matches how Raid Comp scored raiders before Pull Score
+// existed (a WCL parse) plus recency — it does NOT invent a new from-scratch
+// formula. Only kills score, since WCL's public API has no percentile for
+// wipes; wipes are still synced and shown (pull history, attendance-style
+// context) but never move the score. An earlier version of this scored every
+// pull (kills and wipes) against the raid group's own median DPS/HPS that
+// pull, but that pools every spec into one role bucket with no outside
+// reference point — a raider who's the only one of their spec in the guild
+// can never score above or below 50 under that scheme, since the "median"
+// is their own value. WCL's bracketPercent doesn't have that problem: it's
+// a percentile against a worldwide population, populated regardless of how
+// many guildmates share a spec.
 // Reuses Death Analysis's canonical raid-night reports. See TODO.md "Pull
 // Score & Parse Analysis" for the full plan. Mirrors refreshMechanicsAnalysis
 // in mechanics-analysis.ts for the sync shape.
@@ -30,7 +43,7 @@ import {
  * the recency half-life and the Death Analysis 60-day prune.
  */
 export const PULL_SCORE_DIFFICULTIES = new Set([4]);
-/** Fewer than this many pulls in a role is "too few to score", not a fallback to the WCL median (different scale). */
+/** Fewer than this many *scored* kills (bracketPercent present) in a role is "too few to score", not a fallback to the WCL median (different scale). */
 export const PULL_SCORE_MIN_PULLS = 5;
 
 /** Fights per aliased GraphQL request within one report (table x2 + playerDetails each) — see the spike's point-cost measurement in TODO.md. */
@@ -319,19 +332,21 @@ async function syncReportFightsBatch(
       const difficulty = toPositiveInt(fight.difficulty);
 
       // Rows are only stored for matched roster characters; the role median above still includes pugs.
+      // amount/role_median/role_count are display context only (DPS/HPS, Role Median in the pull
+      // history) — they no longer feed the score. pull_score is filled in by syncReportRankings,
+      // once WCL's bracketPercent is known; it stays NULL here, and forever on a wipe.
       for (const scoped of scopedPlayers) {
         const charId = matchWclActorCharId({ gameID: scoped.guid, name: scoped.player.name, server: scoped.player.server }, ownership);
         if (!charId) continue;
         const roleMedian = medianByRole[scoped.role];
-        const pullScore = roleMedian > 0 ? Math.max(0, Math.min(100, (50 * scoped.amount) / roleMedian)) : 0;
 
         statements.push(
           db
             .prepare(
               `INSERT INTO pull_score_pulls (
                  report_code, fight_id, blizzard_char_id, encounter_id, encounter_name, difficulty,
-                 is_kill, boss_percent, fight_end_utc, role, amount, role_median, role_count, pull_score, wcl_percent
-               ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)`
+                 is_kill, boss_percent, fight_end_utc, role, amount, role_median, role_count, pull_score
+               ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)`
             )
             .bind(
               report.code,
@@ -346,8 +361,7 @@ async function syncReportFightsBatch(
               scoped.role,
               scoped.amount,
               roleMedian,
-              countByRole[scoped.role],
-              pullScore
+              countByRole[scoped.role]
             )
         );
       }
@@ -428,7 +442,7 @@ async function syncReportRankings(
         matchedAny = true;
         statements.push(
           db
-            .prepare('UPDATE pull_score_pulls SET wcl_percent = ? WHERE report_code = ? AND fight_id = ? AND blizzard_char_id = ?')
+            .prepare('UPDATE pull_score_pulls SET pull_score = ? WHERE report_code = ? AND fight_id = ? AND blizzard_char_id = ?')
             .bind(bracketPercent, report.code, fightId, charId)
         );
       }
@@ -561,13 +575,13 @@ export interface PullScoreRow {
   bossPercent: number;
   fightEndUtc: number;
   role: PullScoreRole;
-  /** DPS for tank/dps rows, HPS for healer rows. */
+  /** DPS for tank/dps rows, HPS for healer rows — display context only, doesn't feed the score. */
   amount: number;
+  /** Median amount across everyone in the role that pull — display context only, doesn't feed the score. */
   roleMedian: number;
   roleCount: number;
-  pullScore: number;
-  /** WCL bracketPercent; null on wipes (kills only). */
-  wclPercent: number | null;
+  /** WCL's bracketPercent for this pull (this site decay-weights it elsewhere into the raider's overall Pull Score). Null on wipes — WCL has no percentile for them. */
+  pullScore: number | null;
 }
 
 /**
@@ -590,7 +604,7 @@ export async function getPullScoreRows(dbInput?: D1Database): Promise<PullScoreR
     const result = await db
       .prepare(
         `SELECT report_code, fight_id, blizzard_char_id, encounter_id, encounter_name, difficulty,
-                is_kill, boss_percent, fight_end_utc, role, amount, role_median, role_count, pull_score, wcl_percent
+                is_kill, boss_percent, fight_end_utc, role, amount, role_median, role_count, pull_score
            FROM pull_score_pulls
           WHERE report_code IN (${codes.map(() => '?').join(', ')})`
       )
@@ -612,18 +626,19 @@ export async function getPullScoreRows(dbInput?: D1Database): Promise<PullScoreR
         amount: Number(row.amount ?? 0),
         roleMedian: Number(row.role_median ?? 0),
         roleCount: toPositiveInt(row.role_count),
-        pullScore: Number(row.pull_score ?? 0),
-        wclPercent: row.wcl_percent === null || row.wcl_percent === undefined ? null : Number(row.wcl_percent),
+        pullScore: row.pull_score === null || row.pull_score === undefined ? null : Number(row.pull_score),
       });
     }
   }
   return rows;
 }
 
+/** Skips rows with no score (wipes, or kills not ranked by WCL yet) — they contribute no weight either way. */
 function weightedPullScoreAverage(rows: PullScoreRow[], nowUtc: number): number | null {
   let scoreSum = 0;
   let weightSum = 0;
   for (const row of rows) {
+    if (row.pullScore === null) continue;
     const weight = recencyWeight(row.fightEndUtc, nowUtc);
     scoreSum += row.pullScore * weight;
     weightSum += weight;
@@ -633,32 +648,23 @@ function weightedPullScoreAverage(rows: PullScoreRow[], nowUtc: number): number 
 
 export interface PullScoreAggregate {
   pullScore: number | null;
+  /** Every qualifying pull attended (kills and wipes) — attendance context, not all of these are scored. */
   pulls: number;
   kills: number;
-  wclParseKillAvg: number | null;
   status: 'ok' | 'too-few-pulls';
 }
 
 /** rows must already be filtered to one raider's pulls in one role. */
 export function aggregatePullScoreRows(rows: PullScoreRow[], nowUtc: number = Math.floor(Date.now() / 1000)): PullScoreAggregate {
   const pulls = rows.length;
-  let weightedWclSum = 0;
-  let weightedWclWeightSum = 0;
-  let kills = 0;
-  for (const row of rows) {
-    if (row.isKill) kills += 1;
-    if (row.wclPercent !== null) {
-      const weight = recencyWeight(row.fightEndUtc, nowUtc);
-      weightedWclSum += row.wclPercent * weight;
-      weightedWclWeightSum += weight;
-    }
-  }
+  const kills = rows.filter((row) => row.isKill).length;
+  // Only scored rows (kills WCL has ranked) count toward "enough data" — a pile of wipes shouldn't read as "ok".
+  const scoredCount = rows.filter((row) => row.pullScore !== null).length;
   return {
-    pullScore: pulls >= PULL_SCORE_MIN_PULLS ? weightedPullScoreAverage(rows, nowUtc) : null,
+    pullScore: scoredCount >= PULL_SCORE_MIN_PULLS ? weightedPullScoreAverage(rows, nowUtc) : null,
     pulls,
     kills,
-    wclParseKillAvg: weightedWclWeightSum > 0 ? weightedWclSum / weightedWclWeightSum : null,
-    status: pulls >= PULL_SCORE_MIN_PULLS ? 'ok' : 'too-few-pulls',
+    status: scoredCount >= PULL_SCORE_MIN_PULLS ? 'ok' : 'too-few-pulls',
   };
 }
 
@@ -688,7 +694,6 @@ export interface PullScoreSummaryEntry {
   pullScore: number | null;
   pulls: number;
   kills: number;
-  wclParseKillAvg: number | null;
   status: 'ok' | 'too-few-pulls';
   /** Weighted score using only the last 14 days of pulls, no minimum-pulls gate. */
   trendRecent: number | null;
@@ -731,7 +736,6 @@ export function getPullScoreSummary(
       pullScore: aggregate.pullScore,
       pulls: aggregate.pulls,
       kills: aggregate.kills,
-      wclParseKillAvg: aggregate.wclParseKillAvg,
       status: aggregate.status,
       trendRecent: weightedPullScoreAverage(recentRows, nowUtc),
       trendPrior: weightedPullScoreAverage(priorRows, nowUtc),

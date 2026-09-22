@@ -69,21 +69,23 @@ export interface BenchRaider {
   /** Always included by "Regenerate", bumping a lower-priority same-role pick if needed. */
   isRaidLeader: boolean;
   /**
-   * Raid Comp's scoring input: recency-weighted score from our own per-pull
-   * WCL data (see pull-scores.ts), over the raider's pulls in `role`. Null
-   * unless pullScoreStatus is 'ok' — never falls back to wclParseMedian,
-   * different scale.
+   * Raid Comp's scoring input: WCL's own bracketPercent (already
+   * spec/boss/item-level-bracket normalized by WCL) for the raider's kills
+   * in `role`, decay-weighted by recency instead of averaged flat over all
+   * time the way wclParseMedian is (see pull-scores.ts). Only kills score —
+   * WCL's public API has no percentile for wipes. Null unless
+   * pullScoreStatus is 'ok'; never falls back to wclParseMedian, which is a
+   * different (flat, all-time) scale.
    */
   pullScore: number | null;
+  /** Every qualifying pull attended (kills and wipes) — attendance context; only kills feed pullScore. */
   pullScorePulls: number;
   pullScoreKills: number;
   pullScoreStatus: 'ok' | 'too-few-pulls';
-  /** Median WCL parse for `role` (WCL medianPerformanceAverage) — reference only, never feeds scoring. Null unless wclParseStatus is 'ok'. */
+  /** Median WCL parse for `role` (WCL medianPerformanceAverage) — the old flat all-time comparison point, still shown for reference. Null unless wclParseStatus is 'ok'. */
   wclParseMedian: number | null;
   wclParseBosses: number;
   wclParseStatus: BenchParseStatus;
-  /** Decay-weighted mean of WCL bracketPercent across the raider's counted kills — reference only, null with no kills yet. */
-  wclParseKillAvg: number | null;
   /** Current 0-100 Great Vault completion score, before guild-relative ranking. */
   vaultScore: number;
   /** Two-week rolling gem/enchant coverage percentage (current snapshot fallback), before guild-relative ranking. */
@@ -750,7 +752,6 @@ export async function getBenchData(dbInput?: D1Database): Promise<BenchData> {
       wclParseMedian: wclParseStatus === 'ok' ? Math.round(Number(parse?.median) * 10) / 10 : null,
       wclParseBosses: Number(parse?.bosses ?? 0),
       wclParseStatus,
-      wclParseKillAvg: pullScore.wclParseKillAvg,
       vaultScore: scores.vaultScore,
       preparednessScore: scores.preparednessScore,
       upgradesCompleted: scores.upgradesCompleted,

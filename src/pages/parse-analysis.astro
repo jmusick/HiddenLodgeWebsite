@@ -89,19 +89,14 @@ const roleColumns: ReadonlyArray<{ label: string; help?: string; className?: str
   {
     label: 'Pull Score',
     className: 'num',
-    help: `Recency-weighted score from this raider's own ${difficultyLabel} pulls (kills and wipes) in this role, computed by this site — see "How this works" above. 50 is typical for the role that pull, 100 is twice typical or better. Needs at least ${PULL_SCORE_MIN_PULLS} scored pulls.`,
+    help: `This raider's own Warcraft Logs percentile parse (already normalized by WCL for spec, boss, and item level) across their counted ${difficultyLabel} kills in this role, weighted so recent kills count more than old ones — see "How this works" above. Needs at least ${PULL_SCORE_MIN_PULLS} scored kills.`,
   },
-  { label: 'Pulls', className: 'num', help: `Qualifying ${difficultyLabel} pulls (kills and wipes, 30s+) counted toward Pull Score.` },
-  { label: 'Kills', className: 'num', help: 'Of those pulls, how many were kills — the only ones Warcraft Logs has a Parse for.' },
-  {
-    label: 'WCL Parse (kills)',
-    className: 'num reference',
-    help: `This raider's Warcraft Logs percentile parse, decay-weighted average across their counted kills. Reference only — never feeds Raid Comp scoring.`,
-  },
+  { label: 'Pulls', className: 'num', help: `Every qualifying ${difficultyLabel} pull attended (kills and wipes, 30s+) — attendance context. Only kills feed Pull Score.` },
+  { label: 'Kills', className: 'num', help: 'Of those pulls, how many were kills — the only ones Warcraft Logs has a percentile parse for.' },
   {
     label: 'WCL Parse (median)',
     className: 'num reference',
-    help: `Warcraft Logs' own median parse for this role (same value shown on the Raid Composition Bench). Reference only — never feeds Raid Comp scoring.`,
+    help: `Warcraft Logs' own flat, all-time median parse for this role (same value shown on the Raid Composition Bench) — reference only, this is the number Pull Score replaces for scoring.`,
   },
   {
     label: 'Trend (14d)',
@@ -121,21 +116,21 @@ const roleColumns: ReadonlyArray<{ label: string; help?: string; className?: str
     <section class="card how-it-works">
       <h2>How this works</h2>
       <p>
-        <strong>Pull Score</strong> is this site's own recency-weighted score, computed from every qualifying {difficultyLabel} pull —
-        <strong>kills and wipes</strong> — at least 30 seconds long. On each pull, a raider's DPS (tanks/DPS) or HPS (healers) is compared
-        to the median of everyone in that role on that pull: 50 is typical for the role that pull, 100 is twice typical or better. A
-        raider's overall Pull Score is the weighted average of their own pulls in their effective role, with a 30-day half-life — a pull
-        from 30 days ago counts half as much as one from today, so recent form matters more than a season-old streak. This is what feeds
-        Raid Composition's scoring.
+        <strong>Pull Score</strong> and <strong>WCL Parse</strong> are the same underlying number — Warcraft Logs' own percentile parse
+        for a kill, already normalized by WCL for spec, boss, and item level, so a mage and a shaman are never compared on raw DPS. The
+        difference is how the two are averaged. WCL's own Parse (the "median" column below) is a flat average across every kill all
+        time, so it's slow to move — a raider who's improved this tier still reads the same as before. <strong>Pull Score</strong> takes
+        the same per-kill numbers and decay-weights them instead: a kill from 30 days ago counts half as much as one from today (a
+        30-day half-life), so recent form dominates. This is what feeds Raid Composition's scoring — WCL Parse (median) is shown for
+        reference only and never does.
       </p>
       <p>
-        <strong>WCL Parse</strong> is Warcraft Logs' own all-time percentile versus every log of that spec/boss/item-level bracket
-        worldwide. It's shown here for reference only — it never feeds Raid Comp scoring — and only exists for <strong>kills</strong>,
-        since Warcraft Logs' public API doesn't expose a percentile for wipes.
+        Only <strong>kills</strong> have a percentile parse — Warcraft Logs' public API doesn't expose one for wipes, so wipes never
+        move Pull Score. They're still tracked and shown (Pulls, and in each raider's pull history) for attendance context.
       </p>
       <p class="how-it-works-meta">
-        Guild logs only, {difficultyLabel} only, pulls at least 30 seconds long. A raider needs at least {PULL_SCORE_MIN_PULLS} scored
-        pulls in a role before Pull Score is shown for it.
+        Guild logs only, {difficultyLabel} only, kills at least 30 seconds long. A raider needs at least {PULL_SCORE_MIN_PULLS} scored
+        kills in a role before Pull Score is shown for it.
       </p>
     </section>
 
@@ -152,7 +147,6 @@ const roleColumns: ReadonlyArray<{ label: string; help?: string; className?: str
                 <col class="col-score" />
                 <col class="col-pulls" />
                 <col class="col-kills" />
-                <col class="col-wcl-kills" />
                 <col class="col-wcl-median" />
                 <col class="col-trend" />
               </colgroup>
@@ -190,7 +184,6 @@ const roleColumns: ReadonlyArray<{ label: string; help?: string; className?: str
                         <td class="num">{row.entry.pullScore === null ? '—' : row.entry.pullScore.toFixed(1)}</td>
                         <td class="num">{row.entry.pulls}</td>
                         <td class="num">{row.entry.kills}</td>
-                        <td class="num reference">{row.entry.wclParseKillAvg === null ? '—' : row.entry.wclParseKillAvg.toFixed(1)}</td>
                         <td class="num reference">{row.raider.wclParseMedian === null ? '—' : row.raider.wclParseMedian.toFixed(1)}</td>
                         <td class="num">{trendLabel(row)}</td>
                       </tr>
@@ -302,13 +295,12 @@ const roleColumns: ReadonlyArray<{ label: string; help?: string; className?: str
     table-layout: fixed;
   }
 
-  .parse-table .col-raider { width: 28%; }
-  .parse-table .col-score { width: 13%; }
-  .parse-table .col-pulls { width: 10%; }
-  .parse-table .col-kills { width: 10%; }
-  .parse-table .col-wcl-kills { width: 14%; }
-  .parse-table .col-wcl-median { width: 14%; }
-  .parse-table .col-trend { width: 11%; }
+  .parse-table .col-raider { width: 32%; }
+  .parse-table .col-score { width: 15%; }
+  .parse-table .col-pulls { width: 12%; }
+  .parse-table .col-kills { width: 12%; }
+  .parse-table .col-wcl-median { width: 16%; }
+  .parse-table .col-trend { width: 13%; }
 
   .review-table th,
   .review-table :global(td) {
