@@ -117,7 +117,7 @@ const roleColumns: ReadonlyArray<{ label: string; help?: string; className?: str
       <h2>How this works</h2>
       <p>
         <strong>Pull Score</strong> and <strong>WCL Parse</strong> are the same underlying number — Warcraft Logs' own percentile parse
-        for a kill, already normalized by WCL for spec, boss, and item level, so a mage and a shaman are never compared on raw DPS. The
+        for a kill, already normalized by WCL for spec, boss, and item level, so different classes are never compared on raw DPS. The
         difference is how the two are averaged. WCL's own Parse (the "median" column below) is a flat average across every kill all
         time, so it's slow to move — a raider who's improved this tier still reads the same as before. <strong>Pull Score</strong> takes
         the same per-kill numbers and decay-weights them instead: a kill from 30 days ago counts half as much as one from today (a
