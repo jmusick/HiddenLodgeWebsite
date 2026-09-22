@@ -7,6 +7,7 @@ import PullHistoryTable from '../components/PullHistoryTable.astro';
 import { env } from 'cloudflare:workers';
 import { getBenchData, type BenchRaider, type BenchRole } from '../lib/bench';
 import { naturalRole } from '../lib/raid-comp';
+import { classColor } from '../lib/wow';
 import type { AssignedRole } from '../lib/raid-teams';
 import {
   PULL_SCORE_MIN_PULLS,
@@ -82,6 +83,32 @@ function trendLabel(row: DisplayRow): string {
   const arrow = delta > 0.5 ? '▲' : delta < -0.5 ? '▼' : '▬';
   return `${arrow} ${delta >= 0 ? '+' : ''}${delta.toFixed(1)}`;
 }
+
+const roleColumns: ReadonlyArray<{ label: string; help?: string; className?: string }> = [
+  { label: 'Raider', help: `Character name and realm. Class color identifies the character class. Click to see the raider's pull history.` },
+  {
+    label: 'Pull Score',
+    className: 'num',
+    help: `Recency-weighted score from this raider's own ${difficultyLabel} pulls (kills and wipes) in this role, computed by this site — see "How this works" above. 50 is typical for the role that pull, 100 is twice typical or better. Needs at least ${PULL_SCORE_MIN_PULLS} scored pulls.`,
+  },
+  { label: 'Pulls', className: 'num', help: `Qualifying ${difficultyLabel} pulls (kills and wipes, 30s+) counted toward Pull Score.` },
+  { label: 'Kills', className: 'num', help: 'Of those pulls, how many were kills — the only ones Warcraft Logs has a Parse for.' },
+  {
+    label: 'WCL Parse (kills)',
+    className: 'num reference',
+    help: `This raider's Warcraft Logs percentile parse, decay-weighted average across their counted kills. Reference only — never feeds Raid Comp scoring.`,
+  },
+  {
+    label: 'WCL Parse (median)',
+    className: 'num reference',
+    help: `Warcraft Logs' own median parse for this role (same value shown on the Raid Composition Bench). Reference only — never feeds Raid Comp scoring.`,
+  },
+  {
+    label: 'Trend (14d)',
+    className: 'num',
+    help: 'Change in weighted Pull Score comparing the last 14 days to the 46 days before that. ▲ improving, ▼ declining, ▬ flat.',
+  },
+];
 ---
 
 <Layout title="Parse Analysis | The Hidden Lodge">
@@ -119,17 +146,25 @@ function trendLabel(row: DisplayRow): string {
           <p class="empty-state">No scored raiders yet.</p>
         ) : (
           <div class="table-wrap">
-            <table class="data-table">
+            <table class="data-table parse-table">
+              <colgroup>
+                <col class="col-raider" />
+                <col class="col-score" />
+                <col class="col-pulls" />
+                <col class="col-kills" />
+                <col class="col-wcl-kills" />
+                <col class="col-wcl-median" />
+                <col class="col-trend" />
+              </colgroup>
               <thead>
                 <tr>
-                  <th>Raider</th>
-                  <th class="num">Pull Score</th>
-                  <th class="num">Pulls</th>
-                  <th class="num">Kills</th>
-                  <th class="num reference">WCL Parse (kills)</th>
-                  <th class="num reference">WCL Parse (median)</th>
-                  <th class="num">Trend (14d)</th>
-                  <th></th>
+                  {roleColumns.map((column) => (
+                    <th class={column.className}>
+                      {column.help ? (
+                        <button type="button" class="column-help" data-column-tooltip={column.help}>{column.label}</button>
+                      ) : column.label}
+                    </th>
+                  ))}
                 </tr>
               </thead>
               <tbody>
@@ -146,7 +181,10 @@ function trendLabel(row: DisplayRow): string {
                             aria-expanded="false"
                             aria-controls={detailId}
                           >
-                            {row.raider.name} <small>{row.raider.realm}</small>
+                            <span class="cell-stack">
+                              <strong style={`color: ${classColor(row.raider.className)}`}>{row.raider.name}</strong>
+                              <small>{row.raider.realm}</small>
+                            </span>
                           </button>
                         </td>
                         <td class="num">{row.entry.pullScore === null ? '—' : row.entry.pullScore.toFixed(1)}</td>
@@ -155,10 +193,9 @@ function trendLabel(row: DisplayRow): string {
                         <td class="num reference">{row.entry.wclParseKillAvg === null ? '—' : row.entry.wclParseKillAvg.toFixed(1)}</td>
                         <td class="num reference">{row.raider.wclParseMedian === null ? '—' : row.raider.wclParseMedian.toFixed(1)}</td>
                         <td class="num">{trendLabel(row)}</td>
-                        <td></td>
                       </tr>
                       <tr id={detailId} class="pull-history-row" hidden>
-                        <td colspan={8}>
+                        <td colspan={roleColumns.length}>
                           <PullHistoryTable history={history} />
                         </td>
                       </tr>
@@ -185,6 +222,42 @@ function trendLabel(row: DisplayRow): string {
       button.setAttribute('aria-expanded', String(!nowHidden));
     });
   });
+
+  // One shared HTML tooltip for every column-header "?" button, same pattern as Raid Composition's Roster table.
+  const columnTooltip = document.createElement('div');
+  columnTooltip.className = 'column-tooltip';
+  columnTooltip.id = 'parse-analysis-column-tooltip';
+  columnTooltip.role = 'tooltip';
+  columnTooltip.hidden = true;
+  document.body.append(columnTooltip);
+
+  const hideColumnTooltip = (button?: HTMLButtonElement) => {
+    columnTooltip.hidden = true;
+    if (button) button.setAttribute('aria-expanded', 'false');
+  };
+  const showColumnTooltip = (button: HTMLButtonElement) => {
+    columnTooltip.textContent = button.dataset.columnTooltip ?? '';
+    columnTooltip.hidden = false;
+    button.setAttribute('aria-describedby', columnTooltip.id);
+    button.setAttribute('aria-expanded', 'true');
+    const rect = button.getBoundingClientRect();
+    const tooltipRect = columnTooltip.getBoundingClientRect();
+    const horizontal = Math.max(10, Math.min(rect.left, window.innerWidth - tooltipRect.width - 10));
+    const vertical = rect.bottom + tooltipRect.height + 10 <= window.innerHeight ? rect.bottom + 8 : Math.max(10, rect.top - tooltipRect.height - 8);
+    columnTooltip.style.left = `${horizontal}px`;
+    columnTooltip.style.top = `${vertical}px`;
+  };
+  for (const button of document.querySelectorAll<HTMLButtonElement>('.column-help')) {
+    button.setAttribute('aria-expanded', 'false');
+    button.addEventListener('mouseenter', () => showColumnTooltip(button));
+    button.addEventListener('focus', () => showColumnTooltip(button));
+    button.addEventListener('mouseleave', () => hideColumnTooltip(button));
+    button.addEventListener('blur', () => hideColumnTooltip(button));
+    button.addEventListener('click', () => {
+      if (columnTooltip.hidden) showColumnTooltip(button);
+      else hideColumnTooltip(button);
+    });
+  }
 </script>
 
 <style>
@@ -212,11 +285,39 @@ function trendLabel(row: DisplayRow): string {
     margin: 0 0 var(--space-5);
   }
 
+  /* Fixed, shared column widths so every role table's columns line up, same approach as raid-composition's .roster-table. */
+  .parse-table {
+    table-layout: fixed;
+  }
+
+  .parse-table .col-raider { width: 28%; }
+  .parse-table .col-score { width: 13%; }
+  .parse-table .col-pulls { width: 10%; }
+  .parse-table .col-kills { width: 10%; }
+  .parse-table .col-wcl-kills { width: 14%; }
+  .parse-table .col-wcl-median { width: 14%; }
+  .parse-table .col-trend { width: 11%; }
+
+  .parse-table th {
+    font-size: var(--text-sm);
+    vertical-align: bottom;
+  }
+
+  .parse-table th.num,
+  .parse-table :global(td.num) {
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* Reference-only columns (WCL Parse) — greyed to distinguish them from the scoring inputs. */
+  .parse-table th.reference :global(.column-help),
+  .parse-table :global(td.reference) {
+    color: var(--muted);
+  }
+
   .pull-history-toggle {
-    display: flex;
-    flex-direction: column;
-    align-items: flex-start;
-    gap: 0.1rem;
+    display: block;
+    width: 100%;
     background: none;
     border: 0;
     padding: 0;
@@ -231,6 +332,12 @@ function trendLabel(row: DisplayRow): string {
     color: var(--gold-bright);
   }
 
+  .pull-history-toggle :global(.cell-stack) {
+    display: flex;
+    flex-direction: column;
+    gap: 0.15rem;
+  }
+
   .pull-history-toggle small {
     color: var(--muted);
     font-size: var(--text-xs);
@@ -238,5 +345,47 @@ function trendLabel(row: DisplayRow): string {
 
   .pull-history-row td {
     padding-block: var(--space-4);
+  }
+
+  /*
+   * The header label is itself the tooltip trigger — a real button so it stays
+   * keyboard reachable, styled as plain header text with a dotted underline as
+   * the "there's an explanation here" affordance. Same pattern as raid-composition.astro.
+   */
+  .column-help {
+    display: inline;
+    padding: 0;
+    border: 0;
+    background: none;
+    color: inherit;
+    font: inherit;
+    text-align: inherit;
+    text-decoration: underline dotted rgb(var(--gold-rgb) / 0.55);
+    text-underline-offset: 0.25em;
+    cursor: help;
+  }
+
+  .column-help:hover,
+  .column-help:focus-visible {
+    color: var(--gold-bright);
+    text-decoration-color: var(--gold-bright);
+    outline: none;
+  }
+
+  :global(.column-tooltip) {
+    position: fixed;
+    z-index: 50;
+    box-sizing: border-box;
+    width: min(21rem, calc(100vw - 1.25rem));
+    padding: 0.65rem 0.75rem;
+    border: 1px solid rgb(var(--gold-rgb) / 0.65);
+    border-radius: var(--radius-md);
+    background: var(--surface-sunken);
+    box-shadow: 0 0.65rem 1.5rem rgba(0, 0, 0, 0.42);
+    color: var(--gold-bright);
+    font-size: var(--text-sm);
+    font-weight: 400;
+    line-height: 1.35;
+    pointer-events: none;
   }
 </style>
