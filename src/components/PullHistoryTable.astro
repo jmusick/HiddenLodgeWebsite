@@ -21,7 +21,18 @@ const dateFormatter = new Intl.DateTimeFormat('en-US', {
   <p class="empty-state">No scored pulls yet.</p>
 ) : (
   <div class="table-wrap">
-    <table class="data-table data-table--compact">
+    <table class="data-table data-table--compact pull-history-table">
+      <colgroup>
+        <col class="col-date" />
+        <col class="col-boss" />
+        <col class="col-result" />
+        <col class="col-amount" />
+        <col class="col-median" />
+        <col class="col-score" />
+        <col class="col-parse" />
+        <col class="col-weight" />
+        <col class="col-log" />
+      </colgroup>
       <thead>
         <tr>
           <th>Date</th>
@@ -55,3 +66,25 @@ const dateFormatter = new Intl.DateTimeFormat('en-US', {
     </table>
   </div>
 )}
+
+<style>
+  .pull-history-table {
+    table-layout: fixed;
+  }
+
+  .pull-history-table .col-date { width: 11%; }
+  .pull-history-table .col-boss { width: 15%; }
+  .pull-history-table .col-result { width: 14%; }
+  .pull-history-table .col-amount { width: 10%; }
+  .pull-history-table .col-median { width: 11%; }
+  .pull-history-table .col-score { width: 10%; }
+  .pull-history-table .col-parse { width: 10%; }
+  .pull-history-table .col-weight { width: 9%; }
+  .pull-history-table .col-log { width: 10%; }
+
+  .pull-history-table th.num,
+  .pull-history-table td.num {
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+  }
+</style>
