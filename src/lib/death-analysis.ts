@@ -28,7 +28,7 @@ const SIGNIFICANT_THRESHOLD = 0.25;
 const QUALIFYING_DIFFICULTIES = new Set([4, 5]);
 // Sub-30s fights are usually an immediate wipe (bad pull, DC, accidental pull)
 // rather than a real attempt; excluding them keeps pulls/deaths meaningful.
-const MIN_FIGHT_DURATION_MS = 30_000;
+export const MIN_FIGHT_DURATION_MS = 30_000;
 // Raid nights are Thu/Fri 9pm–midnight Eastern.
 const RAID_WEEKDAYS_ET = new Set([4, 5]);
 const RAID_START_HOUR_ET = 21;
@@ -639,7 +639,7 @@ export async function getDeathAnalysisNights(dbInput?: D1Database): Promise<Deat
   });
 }
 
-function recencyWeight(reportEndUtc: number, nowUtc: number): number {
+export function recencyWeight(reportEndUtc: number, nowUtc: number): number {
   const ageDays = Math.max(0, nowUtc - reportEndUtc) / 86_400;
   return 0.5 ** (ageDays / DEATH_ANALYSIS_RECENCY_HALF_LIFE_DAYS);
 }
