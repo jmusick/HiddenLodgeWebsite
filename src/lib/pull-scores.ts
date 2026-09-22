@@ -53,6 +53,8 @@ interface PullScoreCursor {
   syncedFights: number;
   rankingsSynced: boolean;
   syncedAt: number;
+  /** Last time a rankings query actually ran — distinct from syncedAt, which every fights-sync write also bumps. */
+  rankingsAttemptedAt: number;
 }
 
 interface PullScoreFightRow {
@@ -143,7 +145,7 @@ async function loadCursors(db: D1Database, codes: string[]): Promise<Map<string,
   for (const codesChunk of chunk(codes, D1_PARAM_CHUNK)) {
     const result = await db
       .prepare(
-        `SELECT report_code, total_fights, synced_fights, rankings_synced, synced_at
+        `SELECT report_code, total_fights, synced_fights, rankings_synced, synced_at, rankings_attempted_at
            FROM pull_score_reports
           WHERE report_code IN (${codesChunk.map(() => '?').join(', ')})`
       )
@@ -156,6 +158,7 @@ async function loadCursors(db: D1Database, codes: string[]): Promise<Map<string,
         syncedFights: toInt(row.synced_fights),
         rankingsSynced: toInt(row.rankings_synced) === 1,
         syncedAt: toInt(row.synced_at),
+        rankingsAttemptedAt: toInt(row.rankings_attempted_at),
       });
     }
   }
@@ -171,7 +174,7 @@ function pendingPhase(
   if (cursor.syncedFights < cursor.totalFights) return 'fights';
   if (!cursor.rankingsSynced) {
     const endedDaysAgo = (nowUtc - report.endUtc) / 86_400;
-    const lastTriedHoursAgo = (nowUtc - cursor.syncedAt) / 3_600;
+    const lastTriedHoursAgo = cursor.rankingsAttemptedAt > 0 ? (nowUtc - cursor.rankingsAttemptedAt) / 3_600 : Infinity;
     if (endedDaysAgo < RANKINGS_MAX_AGE_DAYS && lastTriedHoursAgo > RANKINGS_RETRY_HOURS) return 'rankings';
   }
   return null;
@@ -347,18 +350,20 @@ async function syncReportFightsBatch(
 
   const syncedFights = startIndex + batch.length;
   const rankingsSynced = startFresh ? 0 : cursor?.rankingsSynced ? 1 : 0;
+  const rankingsAttemptedAt = startFresh ? 0 : cursor?.rankingsAttemptedAt ?? 0;
   statements.push(
     db
       .prepare(
-        `INSERT INTO pull_score_reports (report_code, total_fights, synced_fights, rankings_synced, synced_at)
-         VALUES (?, ?, ?, ?, unixepoch())
+        `INSERT INTO pull_score_reports (report_code, total_fights, synced_fights, rankings_synced, synced_at, rankings_attempted_at)
+         VALUES (?, ?, ?, ?, unixepoch(), ?)
          ON CONFLICT(report_code) DO UPDATE SET
            total_fights = excluded.total_fights,
            synced_fights = excluded.synced_fights,
            rankings_synced = excluded.rankings_synced,
-           synced_at = excluded.synced_at`
+           synced_at = excluded.synced_at,
+           rankings_attempted_at = excluded.rankings_attempted_at`
       )
-      .bind(report.code, qualifying.length, syncedFights, rankingsSynced)
+      .bind(report.code, qualifying.length, syncedFights, rankingsSynced, rankingsAttemptedAt)
   );
 
   await db.batch(statements);
@@ -378,7 +383,7 @@ async function syncReportRankings(
 
   if (killFightIds.length === 0) {
     await db
-      .prepare('UPDATE pull_score_reports SET rankings_synced = 1, synced_at = unixepoch() WHERE report_code = ?')
+      .prepare('UPDATE pull_score_reports SET rankings_synced = 1, rankings_attempted_at = unixepoch() WHERE report_code = ?')
       .bind(report.code)
       .run();
     return;
@@ -400,6 +405,7 @@ async function syncReportRankings(
   const rankingRows = rankingsData?.reportData?.report?.rankings?.data ?? [];
 
   const statements = [];
+  let matchedAny = false;
   for (const entry of rankingRows) {
     const fightId = toPositiveInt(entry.fightID);
     if (fightId <= 0) continue;
@@ -413,6 +419,7 @@ async function syncReportRankings(
         if (!charId) continue;
         const bracketPercent = Number(character.bracketPercent ?? NaN);
         if (!Number.isFinite(bracketPercent)) continue;
+        matchedAny = true;
         statements.push(
           db
             .prepare('UPDATE pull_score_pulls SET wcl_percent = ? WHERE report_code = ? AND fight_id = ? AND blizzard_char_id = ?')
@@ -421,8 +428,16 @@ async function syncReportRankings(
       }
     }
   }
+  // WCL computes rankings with a lag — an empty result this soon after the
+  // kill likely means "not ready yet", not "no data ever". Only rankings_synced
+  // when we actually wrote something; otherwise leave it pending so
+  // pendingPhase retries (up to RANKINGS_MAX_AGE_DAYS out).
   statements.push(
-    db.prepare('UPDATE pull_score_reports SET rankings_synced = 1, synced_at = unixepoch() WHERE report_code = ?').bind(report.code)
+    db
+      .prepare(
+        `UPDATE pull_score_reports SET rankings_synced = ?, rankings_attempted_at = unixepoch() WHERE report_code = ?`
+      )
+      .bind(matchedAny ? 1 : 0, report.code)
   );
   await db.batch(statements);
 }
