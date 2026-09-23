@@ -23,7 +23,7 @@ const statusParam = pageUrl.searchParams.get('status');
 ---
 
 <Layout title="Guild Feedback | The Hidden Lodge" description="Submit anonymous feedback or concerns to guild leadership.">
-  <section class="feedback-panel">
+  <section class="card feedback-panel">
     <h1 class="title-row"><Icon name="lucide:message-square-warning" class="title-icon" aria-hidden="true" />Guild Feedback & Concerns</h1>
     <p class="intro-copy">
       Use this form to share concerns, suggestions, or guild feedback. Submissions are completely anonymous unless you choose to include your name.
@@ -63,71 +63,68 @@ const statusParam = pageUrl.searchParams.get('status');
         placeholder="Share what happened, what concern you have, or what we can improve."
       ></textarea>
 
-      <button type="submit">Submit Feedback</button>
+      <button class="btn btn--primary" type="submit">Submit Feedback</button>
     </form>
   </section>
 </Layout>
 
 <style>
   .feedback-panel {
-    margin-top: 1rem;
-    border: 1px solid rgba(214, 176, 106, 0.36);
-    border-radius: 0.75rem;
+    margin-top: var(--space-6);
     background:
-      linear-gradient(160deg, rgba(214, 176, 106, 0.08), transparent 45%),
-      rgba(10, 18, 28, 0.78);
-    padding: 1rem;
+      linear-gradient(160deg, rgb(var(--gold-rgb) / 0.08), transparent 45%),
+      var(--surface-raised);
   }
 
   .intro-copy {
     max-width: 72ch;
-    color: #d8e2e8;
-    margin-top: 0.35rem;
+    color: var(--text);
+    margin-top: var(--space-3);
   }
 
   .flash {
-    margin-top: 0.8rem;
-    margin-bottom: 0.2rem;
-    padding: 0.55rem 0.7rem;
-    border-radius: 0.45rem;
+    margin-top: var(--space-5);
+    margin-bottom: var(--space-2);
+    padding: var(--space-4) var(--space-5);
+    border-radius: var(--radius-md);
     border: 1px solid;
     font-weight: 600;
   }
 
   .flash-ok {
-    border-color: rgba(45, 189, 126, 0.6);
-    background: rgba(45, 189, 126, 0.12);
-    color: #9cf0c5;
+    border-color: var(--success);
+    background: var(--success-bg);
+    color: var(--success);
   }
 
   .flash-error {
-    border-color: rgba(220, 92, 92, 0.6);
-    background: rgba(220, 92, 92, 0.12);
-    color: #ffb7b7;
+    border-color: var(--danger);
+    background: var(--danger-bg);
+    color: var(--danger);
   }
 
   .feedback-form {
-    margin-top: 1rem;
+    margin-top: var(--space-6);
     display: grid;
-    gap: 0.5rem;
+    gap: var(--space-4);
     max-width: 48rem;
   }
 
   .feedback-form label {
-    color: #d7b973;
+    color: var(--gold);
     font-weight: 700;
-    font-size: 0.9rem;
+    font-size: var(--text-base);
   }
 
   .feedback-form input,
   .feedback-form textarea {
     width: 100%;
-    border: 1px solid rgba(214, 176, 106, 0.38);
-    border-radius: 0.45rem;
-    background: rgba(8, 16, 24, 0.86);
-    color: #ecf2f7;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    background: var(--surface);
+    color: var(--text);
     font: inherit;
-    padding: 0.52rem 0.6rem;
+    padding: var(--space-4);
   }
 
   .feedback-form textarea {
@@ -137,19 +134,5 @@ const statusParam = pageUrl.searchParams.get('status');
 
   .feedback-form button {
     justify-self: start;
-    border: 1px solid rgba(214, 176, 106, 0.45);
-    border-radius: 0.45rem;
-    background: rgba(214, 176, 106, 0.12);
-    color: #f0cc89;
-    font: inherit;
-    font-weight: 700;
-    padding: 0.42rem 0.9rem;
-    cursor: pointer;
-  }
-
-  .feedback-form button:hover,
-  .feedback-form button:focus-visible {
-    border-color: rgba(214, 176, 106, 0.7);
-    background: rgba(214, 176, 106, 0.22);
   }
 </style>
