@@ -8,6 +8,7 @@ import { externalLinks } from '../data/externalLinks';
 import { Icon } from 'astro-icon/components';
 import packageJson from '../../package.json';
 import { FEATURE_FLAGS } from '../lib/feature-flags';
+import { env } from 'cloudflare:workers';
 import '../styles/base.css';
 import '../styles/components.css';
 
@@ -38,6 +39,7 @@ const toolsUtilityNavItems = [
 	...(isGuildMember ? [{ href: '/raiders/gear-summary', label: 'Gear Summary' }] : []),
 	...(user && FEATURE_FLAGS.tools ? [{ href: '/professions', label: 'Professions' }] : []),
 	...(user && FEATURE_FLAGS.tools ? [{ href: '/loot-history', label: 'Loot History' }] : []),
+	...(isGuildMember && FEATURE_FLAGS.feedback ? [{ href: '/feedback', label: 'Feedback' }] : []),
 ];
 
 const toolsAnalysisNavItems = [
@@ -58,8 +60,12 @@ const memberNavItems = [
 	...(isGuildMember && FEATURE_FLAGS.raidSignups ? [{ href: '/signup', label: 'Signup' }] : []),
 ];
 
+const unreadFeedbackCount = isOfficer && FEATURE_FLAGS.feedback
+	? (await env.DB.prepare(`SELECT COUNT(*) AS count FROM guild_feedback WHERE status = 'new'`).first<{ count: number }>())?.count ?? 0
+	: 0;
+
 const adminNavItems = [
-	...(isOfficer ? [{ href: '/admin', label: 'Admin' }] : []),
+	...(isOfficer ? [{ href: '/admin', label: 'Admin', badge: unreadFeedbackCount || null }] : []),
 ];
 
 const responsiveMainMenuItems = [...publicNavItems, ...guildNavItems, ...toolsNavItems];
@@ -209,7 +215,12 @@ const isIndexable = !NOINDEX_PREFIXES.some(
 								{
 									adminNavItems.map((item) => (
 										<li>
-											<a href={item.href}>{item.label}</a>
+											<a href={item.href}>
+												{item.label}
+												{item.badge && (
+													<span class="nav-badge" aria-label={`${item.badge} unread feedback`}>{item.badge}</span>
+												)}
+											</a>
 										</li>
 									))
 								}
@@ -615,6 +626,22 @@ const isIndexable = !NOINDEX_PREFIXES.some(
 	.member-nav a {
 		color: var(--gold-bright);
 		font-weight: 700;
+	}
+
+	.nav-badge {
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		min-width: 1.1rem;
+		height: 1.1rem;
+		margin-left: var(--space-2);
+		padding-inline: var(--space-2);
+		border-radius: var(--radius-pill);
+		background: var(--danger);
+		color: var(--bg);
+		font-size: var(--text-2xs);
+		font-weight: 700;
+		line-height: 1;
 	}
 
 	.member-nav .nav-dropdown-trigger {
