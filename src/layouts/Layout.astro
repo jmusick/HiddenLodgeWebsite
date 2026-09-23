@@ -34,19 +34,24 @@ const guildNavItems = [
 	{ href: '/leadership', label: 'Leadership' },
 ];
 
-const toolsNavItems = [
+const toolsUtilityNavItems = [
 	...(isGuildMember ? [{ href: '/raiders/gear-summary', label: 'Gear Summary' }] : []),
 	...(user && FEATURE_FLAGS.tools ? [{ href: '/professions', label: 'Professions' }] : []),
 	...(user && FEATURE_FLAGS.tools ? [{ href: '/loot-history', label: 'Loot History' }] : []),
+];
+
+const toolsAnalysisNavItems = [
+	...(isGuildMember && FEATURE_FLAGS.deathAnalysis && FEATURE_FLAGS.parseAnalysis
+		? [{ href: '/parse-analysis', label: 'Parse Analysis' }]
+		: []),
 	...(isGuildMember && FEATURE_FLAGS.deathAnalysis ? [{ href: '/death-analysis', label: 'Death Analysis' }] : []),
 	...(isGuildMember && FEATURE_FLAGS.deathAnalysis && FEATURE_FLAGS.mechanicsAnalysis
 		? [{ href: '/mechanics-analysis', label: 'Mechanics Analysis' }]
 		: []),
 	...(isGuildMember && FEATURE_FLAGS.deathAnalysis && FEATURE_FLAGS.raidComp ? [{ href: '/raid-composition', label: 'Raid Composition' }] : []),
-	...(isGuildMember && FEATURE_FLAGS.deathAnalysis && FEATURE_FLAGS.parseAnalysis
-		? [{ href: '/parse-analysis', label: 'Parse Analysis' }]
-		: []),
 ];
+
+const toolsNavItems = [...toolsUtilityNavItems, ...toolsAnalysisNavItems];
 
 const memberNavItems = [
 	...(isGuildMember ? [{ href: '/raiders', label: 'Raiders' }] : []),
@@ -168,15 +173,36 @@ const isIndexable = !NOINDEX_PREFIXES.some(
 									<li class="nav-dropdown member-tools-dropdown">
 										<div class="nav-dropdown-menu">
 											<button type="button" class="nav-dropdown-trigger">Tools</button>
-											<ul class="dropdown-panel" aria-label="Tools navigation">
-												{
-													toolsNavItems.map((item) => (
-														<li>
-															<a href={item.href}>{item.label}</a>
-														</li>
-													))
-												}
-											</ul>
+											<div class="dropdown-panel dropdown-panel-columns" aria-label="Tools navigation">
+												{toolsUtilityNavItems.length > 0 && (
+													<div class="dropdown-panel-column">
+														<p class="dropdown-panel-heading">Utility</p>
+														<ul>
+															{
+																toolsUtilityNavItems.map((item) => (
+																	<li>
+																		<a href={item.href}>{item.label}</a>
+																	</li>
+																))
+															}
+														</ul>
+													</div>
+												)}
+												{toolsAnalysisNavItems.length > 0 && (
+													<div class="dropdown-panel-column">
+														<p class="dropdown-panel-heading">Analysis</p>
+														<ul>
+															{
+																toolsAnalysisNavItems.map((item) => (
+																	<li>
+																		<a href={item.href}>{item.label}</a>
+																	</li>
+																))
+															}
+														</ul>
+													</div>
+												)}
+											</div>
 										</div>
 									</li>
 								)}
@@ -748,6 +774,33 @@ const isIndexable = !NOINDEX_PREFIXES.some(
 	.nav-dropdown-menu:hover > .dropdown-panel,
 	.nav-dropdown-menu:focus-within > .dropdown-panel {
 		display: grid;
+	}
+
+	.dropdown-panel-columns {
+		grid-auto-flow: column;
+		grid-auto-columns: max-content;
+		gap: 0.6rem;
+		align-items: start;
+	}
+
+	.dropdown-panel-column ul {
+		display: grid;
+		gap: 0.18rem;
+	}
+
+	.dropdown-panel-heading {
+		margin: 0.15rem 0.34rem 0.28rem;
+		font-size: 0.72rem;
+		font-weight: 700;
+		letter-spacing: 0.06em;
+		text-transform: uppercase;
+		color: var(--gold);
+		opacity: 0.85;
+	}
+
+	.dropdown-panel-column + .dropdown-panel-column {
+		padding-left: 0.6rem;
+		border-left: 1px solid rgba(214, 176, 106, 0.22);
 	}
 
 	.nav-dropdown-menu:hover > .nav-dropdown-trigger,
