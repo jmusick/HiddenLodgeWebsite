@@ -529,22 +529,25 @@ export async function refreshPullScores(
   let ops = 0;
 
   try {
-    for (const report of pendingFights) {
+    // Rankings first: it's one cheap query per report, not gated by fight
+    // count, and a report sitting ranking-ready shouldn't be starved every
+    // run just because other reports still have fights left to sync.
+    for (const report of pendingRankings) {
       if (Date.now() >= deadline || ops >= maxOps) {
         result.budgetExhausted = true;
         break;
       }
-      await syncReportFightsBatch(db, accessToken, ownership, report, cursors.get(report.code));
+      await syncReportRankings(db, accessToken, ownership, report);
       ops += 1;
       result.processed += 1;
     }
     if (!result.budgetExhausted) {
-      for (const report of pendingRankings) {
+      for (const report of pendingFights) {
         if (Date.now() >= deadline || ops >= maxOps) {
           result.budgetExhausted = true;
           break;
         }
-        await syncReportRankings(db, accessToken, ownership, report);
+        await syncReportFightsBatch(db, accessToken, ownership, report, cursors.get(report.code));
         ops += 1;
         result.processed += 1;
       }
