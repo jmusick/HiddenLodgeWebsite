@@ -7,7 +7,7 @@ import Layout from '../layouts/Layout.astro';
 	description="The Hidden Lodge raider features are currently offline. We'll return for Season 2."
 >
 	<div class="hiatus-wrap">
-		<div class="hiatus-card">
+		<div class="card hiatus-card">
 			<p class="hiatus-label">Guild Hiatus</p>
 			<h1>See You in Season 2</h1>
 			<p class="hiatus-body">
@@ -19,9 +19,9 @@ import Layout from '../layouts/Layout.astro';
 				articles for updates.
 			</p>
 			<div class="hiatus-links">
-				<a href="/">Home</a>
-				<a href="/roster">Roster</a>
-				<a href="/articles">Articles</a>
+				<a class="btn btn--secondary" href="/">Home</a>
+				<a class="btn btn--secondary" href="/roster">Roster</a>
+				<a class="btn btn--secondary" href="/articles">Articles</a>
 			</div>
 		</div>
 	</div>
@@ -39,16 +39,13 @@ import Layout from '../layouts/Layout.astro';
 		max-width: 38rem;
 		width: 100%;
 		text-align: center;
-		padding: 3rem 2rem;
-		border: 1px solid rgba(214, 176, 106, 0.28);
-		border-radius: 0.75rem;
-		background: rgba(13, 23, 34, 0.6);
+		padding: var(--space-8) var(--space-7);
 		backdrop-filter: blur(6px);
 	}
 
 	.hiatus-label {
-		margin: 0 0 0.75rem;
-		font-size: 0.8rem;
+		margin: 0 0 var(--space-5);
+		font-size: var(--text-sm);
 		text-transform: uppercase;
 		letter-spacing: 0.12em;
 		color: var(--gold);
@@ -56,39 +53,23 @@ import Layout from '../layouts/Layout.astro';
 	}
 
 	h1 {
-		margin: 0 0 1.5rem;
-		font-size: 2.2rem;
+		margin: 0 0 var(--space-7);
 		color: var(--gold-bright);
-		text-shadow: 0 0 24px rgba(214, 176, 106, 0.22);
+		text-shadow: 0 0 24px rgb(var(--gold-rgb) / 0.22);
 	}
 
 	.hiatus-body {
-		margin: 0 0 1rem;
+		margin: 0 0 var(--space-6);
 		color: var(--muted);
-		font-size: 1.05rem;
-		line-height: 1.6;
+		font-size: var(--text-lg);
+		line-height: var(--leading-loose);
 	}
 
 	.hiatus-links {
 		display: flex;
 		justify-content: center;
-		gap: 0.75rem;
+		gap: var(--space-5);
 		flex-wrap: wrap;
-		margin-top: 2rem;
-	}
-
-	.hiatus-links a {
-		padding: 0.5rem 1.1rem;
-		border: 1px solid rgba(214, 176, 106, 0.4);
-		border-radius: 0.45rem;
-		color: var(--gold);
-		font-weight: 600;
-		font-size: 0.95rem;
-		transition: background 160ms ease, color 160ms ease;
-	}
-
-	.hiatus-links a:hover {
-		background: rgba(214, 176, 106, 0.1);
-		color: var(--gold-bright);
+		margin-top: var(--space-7);
 	}
 </style>
