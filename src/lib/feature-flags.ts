@@ -15,7 +15,7 @@ export const FEATURE_FLAGS = {
   // deathAnalysis is on, regardless of this flag.
   parseAnalysis: true,
   applications: false,
-  feedback: false,
+  feedback: true,
   tools: true,
   sim: false,
 } as const;
