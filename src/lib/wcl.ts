@@ -363,6 +363,8 @@ export async function fetchReportFightStats(
   bossKillsByCharId: Map<number, number>;
   deathStatsByCharId: Map<number, WclDeathAggregate>;
   deathEvents: WclDeathEventRow[];
+  /** Spec id each character played most across the death-scoped fights (from CombatantInfo). */
+  specIdByCharId: Map<number, number>;
   reportStartUtc: number | null;
   reportEndUtc: number | null;
 }> {
@@ -432,6 +434,7 @@ export async function fetchReportFightStats(
       bossKillsByCharId: new Map(),
       deathStatsByCharId: new Map(),
       deathEvents: [],
+      specIdByCharId: new Map(),
       reportStartUtc: reportStartMs > 0 ? Math.floor(reportStartMs / 1000) : null,
       reportEndUtc: reportEndMs > 0 ? Math.floor(reportEndMs / 1000) : null,
     };
@@ -498,6 +501,7 @@ export async function fetchReportFightStats(
 
   const participantsByFight = new Map<number, Set<string>>();
   const participantsByFightChar = new Map<number, Set<number>>();
+  const specFightsByCharId = new Map<number, Map<number, number>>();
   let nextStart = Number.isFinite(minFightStart) ? minFightStart : 0;
   const absoluteEnd = Math.max(nextStart, maxFightEnd);
 
@@ -506,7 +510,7 @@ export async function fetchReportFightStats(
       reportData?: {
         report?: {
           events?: {
-            data?: Array<{ type?: string; sourceID?: number; fight?: number }>;
+            data?: Array<{ type?: string; sourceID?: number; fight?: number; specID?: number }>;
             nextPageTimestamp?: number | null;
           };
         };
@@ -557,6 +561,13 @@ export async function fetchReportFightStats(
         participantsByFightChar.set(fightId, fightCharSet);
       }
       fightCharSet.add(sourceCharId);
+
+      const specId = Number(event.specID ?? 0);
+      if (deathScopedFightIds.has(fightId) && Number.isFinite(specId) && specId > 0) {
+        const specFights = specFightsByCharId.get(sourceCharId) ?? new Map<number, number>();
+        specFights.set(specId, (specFights.get(specId) ?? 0) + 1);
+        specFightsByCharId.set(sourceCharId, specFights);
+      }
     }
 
     const nextPage = Number(page?.reportData?.report?.events?.nextPageTimestamp ?? 0);
@@ -731,6 +742,12 @@ export async function fetchReportFightStats(
     });
   }
 
+  const specIdByCharId = new Map<number, number>();
+  for (const [blizzardCharId, specFights] of specFightsByCharId) {
+    const [topSpecId] = [...specFights.entries()].sort((a, b) => b[1] - a[1])[0];
+    specIdByCharId.set(blizzardCharId, topSpecId);
+  }
+
   return {
     totalBossKills: killEncounterIds.size,
     totalBossWipes: Math.max(0, attemptedEncounterIds.size - killEncounterIds.size),
@@ -742,6 +759,7 @@ export async function fetchReportFightStats(
     bossKillsByCharId,
     deathStatsByCharId,
     deathEvents,
+    specIdByCharId,
     reportStartUtc: reportStartMs > 0 ? Math.floor(reportStartMs / 1000) : null,
     reportEndUtc: reportEndMs > 0 ? Math.floor(reportEndMs / 1000) : null,
   };

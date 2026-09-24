@@ -140,7 +140,7 @@ export function combineScores(components: ReadonlyArray<{ weight: number; value:
 /** Same combined-score formula as Bench Order, best raider first. */
 function rankByPriority(raiders: BenchRaider[], settings: RaidCompSettings): BenchRaider[] {
   const scored = raiders.filter((raider) => raider.pullScoreStatus === 'ok');
-  const deathPool = scored.map((raider) => raider.weightedScore);
+  const deathPool = scored.map((raider) => raider.adjustedScore);
   const pullScorePool = scored.map((raider) => raider.pullScore ?? 0);
   const vaultPool = scored.map((raider) => raider.vaultScore);
   const preparednessPool = scored.map((raider) => raider.preparednessScore);
@@ -157,7 +157,7 @@ function rankByPriority(raiders: BenchRaider[], settings: RaidCompSettings): Ben
     .map((raider) => {
       const pullScore = raider.pullScore ?? 0;
       const pullScoreValue = settings.scale === 'raw' ? pullScore : 100 * percentRank(pullScorePool, pullScore);
-      const deathPct = 100 * inversePercentRank(deathPool, raider.weightedScore);
+      const deathPct = 100 * inversePercentRank(deathPool, raider.adjustedScore);
       const vaultPct = 100 * percentRank(vaultPool, raider.vaultScore);
       const preparednessPct = 100 * percentRank(preparednessPool, raider.preparednessScore);
       const upgradesPct = relativeToMax(upgradesPool, raider.upgradesCompleted);

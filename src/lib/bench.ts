@@ -56,6 +56,8 @@ export interface BenchRaider {
   fightsPresent: number;
   totalDeaths: number;
   weightedScore: number;
+  /** Spec-adjusted death score (see DeathAnalysisEntry.adjustedScore); what Raid Comp's death percentile ranks on. */
+  adjustedScore: number;
   totalDeathRate: number;
   role: BenchRole;
   autoRole: BenchRole;
@@ -737,6 +739,7 @@ export async function getBenchData(dbInput?: D1Database): Promise<BenchData> {
       fightsPresent: entry.fightsPresent,
       totalDeaths: entry.totalDeaths,
       weightedScore: entry.weightedScore,
+      adjustedScore: entry.adjustedScore,
       totalDeathRate: entry.totalDeathRate,
       role,
       autoRole,

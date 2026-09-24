@@ -12,6 +12,7 @@ import {
 } from '../lib/death-analysis';
 import { classColor } from '../lib/wow';
 import { FEATURE_FLAGS } from '../lib/feature-flags';
+import { SPEC_DEATH_ADJUSTMENT_STRENGTH, specName } from '../lib/spec-death-rates';
 
 if (!FEATURE_FLAGS.tools || !FEATURE_FLAGS.deathAnalysis) {
   return Astro.redirect('/');
@@ -42,7 +43,12 @@ function formatDeathOffset(ms: number): string {
   const seconds = totalSeconds % 60;
   return `${minutes}:${String(seconds).padStart(2, '0')}`;
 }
-const guildRankingsUrl = 'https://www.warcraftlogs.com/guild/rankings/781707/latest?difficulty=4&playerdisplay=median&recent=true';
+const specStatsUrl = 'https://www.warcraftlogs.com/zone/statistics/53?metric=deaths&difficulty=4';
+function specAdjustmentLabel(specId: number | null, adjustment: number): string {
+  const label = specName(specId) ?? 'class avg';
+  return `${label} ÷${adjustment.toFixed(2)}`;
+}
+const guildRankingsUrl ='https://www.warcraftlogs.com/guild/rankings/781707/latest?difficulty=4&playerdisplay=median&recent=true';
 ---
 
 <Layout title="Death Analysis | The Hidden Lodge">
@@ -77,7 +83,7 @@ const guildRankingsUrl = 'https://www.warcraftlogs.com/guild/rankings/781707/lat
       <article class="overview-card">
         <span class="overview-label">Qualified Raiders</span>
         <strong>{review.qualifiedPlayers.toLocaleString()}</strong>
-        <p>Minimum sample: {review.minimumPulls} boss pulls across {review.minimumReports}+ reports. Average weighted score: {review.averageWeightedScore !== null ? review.averageWeightedScore.toFixed(2) : '—'}.</p>
+        <p>Minimum sample: {review.minimumPulls} boss pulls across {review.minimumReports}+ reports. Average weighted score: {review.averageWeightedScore !== null ? review.averageWeightedScore.toFixed(2) : '—'} ({review.averageAdjustedScore !== null ? review.averageAdjustedScore.toFixed(2) : '—'} spec-adjusted).</p>
       </article>
       <article class="overview-card">
         <span class="overview-label">Last Sync</span>
@@ -116,6 +122,10 @@ const guildRankingsUrl = 'https://www.warcraftlogs.com/guild/rankings/781707/lat
           <span class="formula-label">Death cap rule</span>
           <p><strong>Only the first 4 deaths per pull are counted.</strong> Deaths after the fourth in the same pull are ignored.</p>
         </div>
+        <div>
+          <span class="formula-label">Spec adjustment</span>
+          <p>Some specs die more than others everywhere. Each report’s score is divided by <strong>(spec death rate / average death rate)<sup>{SPEC_DEATH_ADJUSTMENT_STRENGTH}</sup></strong>, using <a href={specStatsUrl} target="_blank" rel="noopener noreferrer" class="report-link">WCL’s Heroic death stats</a>. The exponent softens the correction, since those stats also reflect who plays each spec. Rankings and highlights use the adjusted score.</p>
+        </div>
       </div>
     </section>
 
@@ -124,7 +134,7 @@ const guildRankingsUrl = 'https://www.warcraftlogs.com/guild/rankings/781707/lat
         <div>
           <h2>All Raider Rankings</h2>
           <p class="section-copy">
-            Raiders with {review.minimumPulls}+ boss pulls across {review.minimumReports}+ reports, sorted by weighted excessive-death score, then first-death count. Raiders more than 25% above the average are highlighted.
+            Raiders with {review.minimumPulls}+ boss pulls across {review.minimumReports}+ reports, sorted by spec-adjusted excessive-death score, then first-death count. Raiders more than 25% above the average adjusted score are highlighted.
           </p>
         </div>
       </div>
@@ -146,6 +156,7 @@ const guildRankingsUrl = 'https://www.warcraftlogs.com/guild/rankings/781707/lat
                 <th><button type="button" class="sort-btn" data-col-index="7" data-sort-type="number">3rd</button></th>
                 <th><button type="button" class="sort-btn" data-col-index="8" data-sort-type="number">4th</button></th>
                 <th><button type="button" class="sort-btn" data-col-index="9" data-sort-type="number">Weighted Score</button></th>
+                <th><button type="button" class="sort-btn" data-col-index="10" data-sort-type="number" data-sort-dir="desc">Spec-Adjusted</button></th>
               </tr>
             </thead>
             <tbody>
@@ -181,14 +192,18 @@ const guildRankingsUrl = 'https://www.warcraftlogs.com/guild/rankings/781707/lat
                     <td data-sort-value={String(row.fourthDeathCount)}>{row.fourthDeathCount.toLocaleString()}</td>
                     <td data-sort-value={row.weightedScore.toFixed(6)}>
                       <span class="score-cell">{row.weightedScore.toFixed(2)}</span>
+                    </td>
+                    <td data-sort-value={row.adjustedScore.toFixed(6)}>
+                      <span class="score-cell">{row.adjustedScore.toFixed(2)}</span>
+                      <small class="score-note">{specAdjustmentLabel(row.specId, row.specAdjustment)}</small>
                       {row.percentAboveAverage !== null && row.percentAboveAverage > 0 && (
-                        <small>{row.percentAboveAverage.toFixed(1)}% above avg</small>
+                        <small class="score-note">{row.percentAboveAverage.toFixed(1)}% above avg</small>
                       )}
                     </td>
                   </tr>
                   {row.deathLinks.length > 0 && (
                     <tr id={`death-links-${row.blizzardCharId}`} class="death-links-row" hidden>
-                      <td colspan={10}>
+                      <td colspan={11}>
                         <div class="death-links-panel">
                           <table class="death-links-table">
                             <thead>
@@ -628,7 +643,7 @@ const guildRankingsUrl = 'https://www.warcraftlogs.com/guild/rankings/781707/lat
 
   .formula-grid {
     display: grid;
-    grid-template-columns: repeat(5, minmax(0, 1fr));
+    grid-template-columns: repeat(3, minmax(0, 1fr));
     gap: 0.75rem;
   }
 
@@ -719,9 +734,14 @@ const guildRankingsUrl = 'https://www.warcraftlogs.com/guild/rankings/781707/lat
   }
 
   .raider-cell span,
-  .score-cell + small {
+  .score-note {
     color: var(--muted);
     font-size: 0.86rem;
+  }
+
+  .score-note {
+    display: block;
+    white-space: nowrap;
   }
 
   .death-links-toggle {

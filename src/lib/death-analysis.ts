@@ -15,6 +15,7 @@ import {
 } from './wcl';
 import { easternWallClockToUtcSeconds } from './wow-reset';
 import { isGuildOfficer } from './auth';
+import { specDeathAdjustment } from './spec-death-rates';
 
 export const DEATH_ANALYSIS_WINDOW_DAYS = 60;
 /** A raid night 30 days old contributes half as much as a raid night today. */
@@ -275,8 +276,8 @@ async function syncReport(
           .prepare(
             `INSERT INTO death_analysis_stats (
                report_code, blizzard_char_id, fights_present, total_deaths,
-               first_death_count, second_death_count, third_death_count, fourth_death_count
-             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+               first_death_count, second_death_count, third_death_count, fourth_death_count, spec_id
+             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
           )
           .bind(
             report.code,
@@ -286,7 +287,8 @@ async function syncReport(
             stats.firstDeathCount,
             stats.secondDeathCount,
             stats.thirdDeathCount,
-            stats.fourthDeathCount
+            stats.fourthDeathCount,
+            details.specIdByCharId.get(blizzardCharId) ?? null
           )
       ),
     db.prepare('DELETE FROM death_analysis_events WHERE report_code = ?').bind(report.code),
@@ -561,7 +563,18 @@ export interface DeathAnalysisEntry {
   thirdDeathCount: number;
   fourthDeathCount: number;
   weightedScore: number;
+  /**
+   * weightedScore with each report's deaths divided by that report's spec
+   * adjustment (see spec-death-rates.ts). Drives ranking, the above-average
+   * flag, and Raid Comp's death percentile.
+   */
+  adjustedScore: number;
+  /** Spec played in the most counted pulls, null if never seen. */
+  specId: number | null;
+  /** Effective divisor across all counted reports (weightedScore / adjustedScore); 1 = no adjustment. */
+  specAdjustment: number;
   totalDeathRate: number;
+  /** Relative to the guild's average adjustedScore. */
   percentAboveAverage: number | null;
   isSignificantlyAboveAverage: boolean;
   /** Individual counted deaths across the reports that fed this raider's stats, most recent first. */
@@ -578,6 +591,7 @@ export interface DeathAnalysisSummary {
   lastSyncedAt: number | null;
   qualifiedPlayers: number;
   averageWeightedScore: number | null;
+  averageAdjustedScore: number | null;
   rankings: DeathAnalysisEntry[];
   /** Raiders seen in counted reports but under the pull/report minimum; unsorted, no average comparison. */
   belowMinimum: DeathAnalysisEntry[];
@@ -718,9 +732,12 @@ export async function getDeathAnalysisSummary(dbInput?: D1Database): Promise<Dea
            s.first_death_count,
            s.second_death_count,
            s.third_death_count,
-           s.fourth_death_count
+           s.fourth_death_count,
+           -- Reports synced before spec_id existed fall back to the latest known spec.
+           COALESCE(s.spec_id, bmr.spec_id) AS spec_id
          FROM death_analysis_stats s
          LEFT JOIN identity_choice ic ON ic.blizzard_char_id = s.blizzard_char_id AND ic.rn = 1
+         LEFT JOIN bench_mechanic_roles bmr ON bmr.blizzard_char_id = s.blizzard_char_id
          WHERE s.report_code IN (${placeholders})`
       )
       .bind(...canonicalCodes)
@@ -742,6 +759,8 @@ export async function getDeathAnalysisSummary(dbInput?: D1Database): Promise<Dea
         weightedPulls: number;
         weightedDeaths: number;
         weightedDeathImpact: number;
+        adjustedDeathImpact: number;
+        pullsBySpec: Map<number, number>;
       }
     >();
     for (const row of result.results ?? []) {
@@ -770,7 +789,11 @@ export async function getDeathAnalysisSummary(dbInput?: D1Database): Promise<Dea
         weightedPulls: 0,
         weightedDeaths: 0,
         weightedDeathImpact: 0,
+        adjustedDeathImpact: 0,
+        pullsBySpec: new Map<number, number>(),
       };
+      const specId = toPositiveInt(row.spec_id) || null;
+      const deathImpact = (firstDeathCount * 4 + secondDeathCount * 3 + thirdDeathCount * 2 + fourthDeathCount) * weight;
       aggregate.reportCodes.add(reportCode);
       aggregate.fightsPresent += fightsPresent;
       aggregate.totalDeaths += totalDeaths;
@@ -780,12 +803,15 @@ export async function getDeathAnalysisSummary(dbInput?: D1Database): Promise<Dea
       aggregate.fourthDeathCount += fourthDeathCount;
       aggregate.weightedPulls += fightsPresent * weight;
       aggregate.weightedDeaths += totalDeaths * weight;
-      aggregate.weightedDeathImpact += (firstDeathCount * 4 + secondDeathCount * 3 + thirdDeathCount * 2 + fourthDeathCount) * weight;
+      aggregate.weightedDeathImpact += deathImpact;
+      aggregate.adjustedDeathImpact += deathImpact / specDeathAdjustment(specId, aggregate.className);
+      if (specId) aggregate.pullsBySpec.set(specId, (aggregate.pullsBySpec.get(specId) ?? 0) + fightsPresent);
       aggregates.set(blizzardCharId, aggregate);
     }
 
     for (const [blizzardCharId, aggregate] of aggregates) {
       if (aggregate.fightsPresent <= 0 || aggregate.weightedPulls <= 0) continue;
+      const topSpec = [...aggregate.pullsBySpec.entries()].sort((a, b) => b[1] - a[1])[0];
       rankings.push({
         blizzardCharId,
         name: aggregate.name,
@@ -799,6 +825,12 @@ export async function getDeathAnalysisSummary(dbInput?: D1Database): Promise<Dea
         thirdDeathCount: aggregate.thirdDeathCount,
         fourthDeathCount: aggregate.fourthDeathCount,
         weightedScore: aggregate.weightedDeathImpact / aggregate.weightedPulls,
+        adjustedScore: aggregate.adjustedDeathImpact / aggregate.weightedPulls,
+        specId: topSpec?.[0] ?? null,
+        specAdjustment:
+          aggregate.adjustedDeathImpact > 0
+            ? aggregate.weightedDeathImpact / aggregate.adjustedDeathImpact
+            : specDeathAdjustment(topSpec?.[0] ?? null, aggregate.className),
         totalDeathRate: aggregate.weightedDeaths / aggregate.weightedPulls,
         percentAboveAverage: null,
         isSignificantlyAboveAverage: false,
@@ -811,24 +843,26 @@ export async function getDeathAnalysisSummary(dbInput?: D1Database): Promise<Dea
     row.fightsPresent >= DEATH_ANALYSIS_MIN_PULLS && row.reportCount >= DEATH_ANALYSIS_MIN_REPORTS;
   const qualified = rankings.filter(meetsMinimum);
   const belowMinimum = rankings.filter((row) => !meetsMinimum(row));
-  const averageWeightedScore =
-    qualified.length > 0 ? qualified.reduce((sum, row) => sum + row.weightedScore, 0) / qualified.length : null;
+  const average = (pick: (row: DeathAnalysisEntry) => number) =>
+    qualified.length > 0 ? qualified.reduce((sum, row) => sum + pick(row), 0) / qualified.length : null;
+  const averageWeightedScore = average((row) => row.weightedScore);
+  const averageAdjustedScore = average((row) => row.adjustedScore);
 
-  if (averageWeightedScore !== null) {
+  if (averageAdjustedScore !== null) {
     for (const row of qualified) {
-      if (averageWeightedScore > 0) {
-        row.percentAboveAverage = ((row.weightedScore - averageWeightedScore) / averageWeightedScore) * 100;
+      if (averageAdjustedScore > 0) {
+        row.percentAboveAverage = ((row.adjustedScore - averageAdjustedScore) / averageAdjustedScore) * 100;
         row.isSignificantlyAboveAverage = row.percentAboveAverage > SIGNIFICANT_THRESHOLD * 100;
       } else {
-        row.percentAboveAverage = row.weightedScore > 0 ? 100 : 0;
-        row.isSignificantlyAboveAverage = row.weightedScore > 0;
+        row.percentAboveAverage = row.adjustedScore > 0 ? 100 : 0;
+        row.isSignificantlyAboveAverage = row.adjustedScore > 0;
       }
     }
   }
 
   qualified.sort(
     (a, b) =>
-      b.weightedScore - a.weightedScore ||
+      b.adjustedScore - a.adjustedScore ||
       b.firstDeathCount - a.firstDeathCount ||
       b.totalDeaths - a.totalDeaths ||
       a.name.localeCompare(b.name)
@@ -845,6 +879,7 @@ export async function getDeathAnalysisSummary(dbInput?: D1Database): Promise<Dea
     lastSyncedAt: allSyncedAt.length > 0 ? Math.max(...allSyncedAt) : null,
     qualifiedPlayers: qualified.length,
     averageWeightedScore,
+    averageAdjustedScore,
     rankings: qualified,
     belowMinimum,
   };
