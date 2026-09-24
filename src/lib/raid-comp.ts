@@ -111,6 +111,15 @@ function relativeToMax(pool: number[], value: number): number {
 }
 
 /**
+ * Upgrades credit, 0–100. A raider with no upgrade ranks left has nothing to
+ * do this week, so they get full credit instead of being scored as if they
+ * skipped their upgrades; everyone else is scored relativeToMax.
+ */
+export function upgradesCredit(pool: number[], raider: Pick<BenchRaider, 'upgradesCompleted' | 'upgradesMissing'>): number {
+  return raider.upgradesMissing === 0 ? 100 : relativeToMax(pool, raider.upgradesCompleted);
+}
+
+/**
  * A metric where every raider holds the same value can't separate anyone, and
  * because the percentiles above are tie-aware it would hand all of them 100%.
  * That silently spends its weight on a constant, diluting the metrics that do
@@ -137,30 +146,37 @@ export function combineScores(components: ReadonlyArray<{ weight: number; value:
   return activeWeight > 0 ? weighted / activeWeight : 0;
 }
 
-/** Same combined-score formula as Bench Order, best raider first. */
+/**
+ * Same combined-score formula as Bench Order, best raider first. Raiders
+ * without enough data to score (below the death-data minimum or without a
+ * role Pull Score) are appended after every scored raider, in the order
+ * given, so they only fill a role quota the scored roster can't cover.
+ */
 function rankByPriority(raiders: BenchRaider[], settings: RaidCompSettings): BenchRaider[] {
   const scored = raiders.filter((raider) => raider.pullScoreStatus === 'ok');
+  const unscored = raiders.filter((raider) => raider.pullScoreStatus !== 'ok');
   const deathPool = scored.map((raider) => raider.adjustedScore);
   const pullScorePool = scored.map((raider) => raider.pullScore ?? 0);
   const vaultPool = scored.map((raider) => raider.vaultScore);
   const preparednessPool = scored.map((raider) => raider.preparednessScore);
   const upgradesPool = scored.map((raider) => raider.upgradesCompleted);
+  const upgradesCredits = new Map(scored.map((raider) => [raider.blizzardCharId, upgradesCredit(upgradesPool, raider)]));
   const varies = {
     pullScore: hasVariance(pullScorePool),
     death: hasVariance(deathPool),
     vault: hasVariance(vaultPool),
     preparedness: hasVariance(preparednessPool),
-    upgrades: hasVariance(upgradesPool),
+    upgrades: hasVariance([...upgradesCredits.values()]),
   };
 
-  return scored
+  const rankedScored = scored
     .map((raider) => {
       const pullScore = raider.pullScore ?? 0;
       const pullScoreValue = settings.scale === 'raw' ? pullScore : 100 * percentRank(pullScorePool, pullScore);
       const deathPct = 100 * inversePercentRank(deathPool, raider.adjustedScore);
       const vaultPct = 100 * percentRank(vaultPool, raider.vaultScore);
       const preparednessPct = 100 * percentRank(preparednessPool, raider.preparednessScore);
-      const upgradesPct = relativeToMax(upgradesPool, raider.upgradesCompleted);
+      const upgradesPct = upgradesCredits.get(raider.blizzardCharId) ?? 0;
       const combined = combineScores([
         { weight: settings.parseWeight, value: pullScoreValue, varies: varies.pullScore },
         { weight: settings.deathWeight, value: deathPct, varies: varies.death },
@@ -172,6 +188,7 @@ function rankByPriority(raiders: BenchRaider[], settings: RaidCompSettings): Ben
     })
     .sort((a, b) => b.combined - a.combined || b.deathPct - a.deathPct || a.raider.name.localeCompare(b.raider.name))
     .map((row) => row.raider);
+  return [...rankedScored, ...unscored];
 }
 
 /** Picks `raider.isRaidLeader` members first (regardless of score), then fills the rest of the quota by priority. */
@@ -889,7 +906,7 @@ export async function swapRaidCompAssignments(
 export async function regenerateRaidComp(dbInput: D1Database | undefined, settings: RaidCompSettings, userId: number): Promise<void> {
   const db = getDatabase(dbInput);
   const [bench, utilityMinimums, buffMinimums] = await Promise.all([getBenchData(db), getUtilityMinimums(db), getBuffMinimums(db)]);
-  const priorityOrder = rankByPriority(bench.ranked, settings);
+  const priorityOrder = rankByPriority([...bench.ranked, ...bench.belowMinimum], settings);
   const assignments = buildAssignments(priorityOrder, settings, utilityMinimums, buffMinimums);
 
   const statements = [

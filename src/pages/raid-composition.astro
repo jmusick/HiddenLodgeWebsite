@@ -53,7 +53,7 @@ const rosterColumns: ReadonlyArray<{ label: string; help: string; className?: st
   { label: 'Death Pct', className: 'num', help: 'Guild-relative survival score from Death Analysis. Fewer deaths per counted pull produces a higher percentage and contributes according to the Deaths weight.' },
   { label: 'Vault Pct', className: 'num', help: 'Guild-relative Great Vault completion percentile. Higher Vault scores rank higher and contribute according to the Great Vault weight.' },
   { label: 'Prepared Pct', className: 'num', help: 'Guild-relative preparedness percentile, based on the rolling gem and enchant coverage score. Higher is better and contributes according to the Preparedness weight.' },
-  { label: 'Upgrade Pct', className: 'num', help: 'Weekly gear upgrades completed, measured from the decrease in missing upgrade ranks since reset, shown as a share of whoever upgraded the most this week. The top upgrader is 100 and nobody who upgraded nothing scores above 0, so doing twice as much reads as roughly twice the score. Contributes according to the Upgrades weight.' },
+  { label: 'Upgrade Pct', className: 'num', help: 'Weekly gear upgrades completed, measured from the decrease in missing upgrade ranks since reset, shown as a share of whoever upgraded the most this week. The top upgrader is 100 and nobody who upgraded nothing scores above 0, so doing twice as much reads as roughly twice the score. Raiders with no upgrade ranks left get 100, since they have nothing to upgrade. Contributes according to the Upgrades weight.' },
   { label: 'Combined', className: 'num', help: 'Final live priority score: Pull Score, Deaths, Vault, Preparedness, and Upgrades multiplied by their configured weights. The five weights must total 100%; higher Combined ranks first.' },
   { label: 'Role', help: 'Effective tank, healer, or DPS role. Auto-detected from ranked Warcraft Logs bosses unless an officer sets an override. It determines the quota bucket for Regenerate.' },
   { label: 'Melee/Ranged', help: 'DPS sub-role used to balance melee and ranged selections. Derived from the latest WCL spec or class fallback, and can be overridden by an officer.' },
@@ -92,6 +92,7 @@ const toTemporaryClient = (candidate: (typeof temporaryCandidates)[number]) => {
     vaultScore: 0,
     preparednessScore: 0,
     upgradesCompleted: 0,
+    upgradesMissing: null,
     isTemporary: true,
   };
 };
@@ -230,7 +231,7 @@ const clientData = {
         </div>
       </div>
       <p class="section-copy">
-        Available raiders not currently in the comp, grouped by role. Raiders marked <em>Not scored</em> are available for manual placement but are excluded from automatic regeneration.
+        Available raiders not currently in the comp, grouped by role. Raiders marked <em>Not scored</em> are only auto-selected by Regenerate when there aren't enough scored raiders to fill their role.
         Click the <strong>?</strong> on a raider to see why they're benched.
         {isOfficer ? ' Officers can also click Absent to exclude someone from Regenerate — click it again to clear it.' : ''}
       </p>
@@ -403,8 +404,8 @@ const clientData = {
             <h3>Not Scored</h3>
             <p class="section-copy">
               Not enough death data (under {bench.summary.minimumPulls} pulls or {bench.summary.minimumReports} reports), or fewer than
-              {' '}{pullScoreMinPulls} scored {difficultyLabel} kills in their role. They are not ranked or auto-selected by Regenerate,
-              but remain available on the Bench for officers to place manually.
+              {' '}{pullScoreMinPulls} scored {difficultyLabel} kills in their role. They are not ranked, and Regenerate only picks them
+              to fill a role quota the scored roster can't cover. They remain available on the Bench for officers to place manually.
             </p>
             <div class="table-wrap">
               <table class="review-table">
@@ -476,6 +477,7 @@ const clientData = {
     vaultScore: number;
     preparednessScore: number;
     upgradesCompleted: number;
+    upgradesMissing: number | null;
     isTemporary: boolean;
   }
   interface RaidCompClientData {
@@ -609,6 +611,11 @@ const clientData = {
     return max > 0 ? (value / max) * 100 : 0;
   }
 
+  /** Full credit when no upgrade ranks are left to do; otherwise relativeToMax on upgrades completed since reset. */
+  function upgradesCredit(pool: number[], raider: Raider): number {
+    return raider.upgradesMissing === 0 ? 100 : relativeToMax(pool, raider.upgradesCompleted);
+  }
+
   function hasVariance(pool: number[]): boolean {
     return pool.length > 1 && pool.some((entry) => entry !== pool[0]);
   }
@@ -629,7 +636,7 @@ const clientData = {
     death: hasVariance(deathPool),
     vault: hasVariance(vaultPool),
     preparedness: hasVariance(preparednessPool),
-    upgrades: hasVariance(upgradesPool),
+    upgrades: hasVariance(scored.map((raider) => upgradesCredit(upgradesPool, raider))),
   };
 
   /** Reads the live weights/scale from Configuration Settings (present for every visitor, editable only by officers). */
@@ -667,7 +674,7 @@ const clientData = {
       const deathPct = 100 * inversePercentRank(deathPool, raider.adjustedScore);
       const vaultPct = 100 * percentRank(vaultPool, raider.vaultScore);
       const preparednessPct = 100 * percentRank(preparednessPool, raider.preparednessScore);
-      const upgradesPct = relativeToMax(upgradesPool, raider.upgradesCompleted);
+      const upgradesPct = upgradesCredit(upgradesPool, raider);
       const combined = combineScores([
         { weight: settings.parseWeight, value: pullScoreValue, varies: poolVaries.pullScore },
         { weight: settings.deathWeight, value: deathPct, varies: poolVaries.death },
@@ -881,7 +888,7 @@ const clientData = {
     if (temporaryIds.has(raider.blizzardCharId)) {
       reasons.push('Temporary PUG/trial candidate — available for manual placement only and never selected by automatic Regenerate.');
     } else if (!scoredIds.has(raider.blizzardCharId)) {
-      reasons.push('Not scored — available for manual placement, but excluded from automatic Regenerate until enough raid data and a role Pull Score are available.');
+      reasons.push('Not scored — Regenerate only picks them to fill a role quota the scored roster can’t cover, until enough raid data and a role Pull Score are available.');
     }
     if (raider.isAbsent) reasons.push('Marked absent — excluded from Regenerate regardless of priority.');
 
@@ -902,7 +909,11 @@ const clientData = {
       reasons.push(
         `Great Vault ${raider.vaultScore}/100 (${scoreRow.vaultPct.toFixed(1)} guild percentile) · Preparedness ${raider.preparednessScore.toFixed(1)}% (${scoreRow.preparednessPct.toFixed(1)} guild percentile).`
       );
-      reasons.push(`Upgrades completed since reset: ${raider.upgradesCompleted} (${scoreRow.upgradesPct.toFixed(1)} guild percentile).`);
+      reasons.push(
+        raider.upgradesMissing === 0
+          ? `Fully upgraded — no upgrades left to do, so Upgrades gets full credit (${scoreRow.upgradesPct.toFixed(1)}).`
+          : `Upgrades completed since reset: ${raider.upgradesCompleted} (${scoreRow.upgradesPct.toFixed(1)} of the guild's best week).`
+      );
       reasons.push(
         `Current weighted contributions: Pull Score ${(settings.parseWeight * scoreRow.pullScoreValue / 100).toFixed(1)} · Deaths ${(settings.deathWeight * scoreRow.deathPct / 100).toFixed(1)} · Vault ${(settings.vaultWeight * scoreRow.vaultPct / 100).toFixed(1)} · Preparedness ${(settings.preparednessWeight * scoreRow.preparednessPct / 100).toFixed(1)} · Upgrades ${(settings.upgradesWeight * scoreRow.upgradesPct / 100).toFixed(1)}.`
       );

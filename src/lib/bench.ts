@@ -94,6 +94,8 @@ export interface BenchRaider {
   preparednessScore: number;
   /** Upgrades completed since the weekly reset, based on the drop in missing upgrade ranks. */
   upgradesCompleted: number;
+  /** Upgrade ranks still missing across equipped gear right now; 0 means fully upgraded. Null when not yet synced. */
+  upgradesMissing: number | null;
 }
 
 export interface BenchFlags {
@@ -498,9 +500,11 @@ async function loadWeeklyUpgradeProgress(db: D1Database, charIds: number[]): Pro
   return out;
 }
 
-async function loadBenchMetrics(db: D1Database, charIds: number[]): Promise<Map<number, { vaultScore: number; preparednessScore: number; upgradesCompleted: number }>> {
+type BenchMetrics = Pick<BenchRaider, 'vaultScore' | 'preparednessScore' | 'upgradesCompleted' | 'upgradesMissing'>;
+
+async function loadBenchMetrics(db: D1Database, charIds: number[]): Promise<Map<number, BenchMetrics>> {
   const priorWeekMissing = await loadWeeklyUpgradeProgress(db, charIds);
-  const out = new Map<number, { vaultScore: number; preparednessScore: number; upgradesCompleted: number }>();
+  const out = new Map<number, BenchMetrics>();
   for (const ids of chunk(charIds, D1_PARAM_CHUNK)) {
     const result = await db
       .prepare(
@@ -526,6 +530,7 @@ async function loadBenchMetrics(db: D1Database, charIds: number[]): Promise<Map<
           priorMissing === undefined || row.total_upgrades_missing === null
             ? 0
             : Math.max(0, priorMissing - Number(row.total_upgrades_missing)),
+        upgradesMissing: row.total_upgrades_missing === null ? null : Number(row.total_upgrades_missing),
       });
     }
   }
@@ -727,7 +732,7 @@ export async function getBenchData(dbInput?: D1Database): Promise<BenchData> {
     const parse = row ? roleParse(row, role) : null;
     const wclParseStatus: BenchParseStatus = !row ? 'pending' : !row.wcl_found ? 'not-found' : parse?.median == null ? 'no-role-parse' : 'ok';
     const flags = benchFlags.get(entry.blizzardCharId) ?? noFlags;
-    const scores = metrics.get(entry.blizzardCharId) ?? { vaultScore: 0, preparednessScore: 0, upgradesCompleted: 0 };
+    const scores = metrics.get(entry.blizzardCharId) ?? { vaultScore: 0, preparednessScore: 0, upgradesCompleted: 0, upgradesMissing: null };
     const roleRows = (pullScoreRowsByChar.get(entry.blizzardCharId) ?? []).filter((pullRow) => pullRow.role === role);
     const pullScore = aggregatePullScoreRows(roleRows);
     return {
@@ -758,6 +763,7 @@ export async function getBenchData(dbInput?: D1Database): Promise<BenchData> {
       vaultScore: scores.vaultScore,
       preparednessScore: scores.preparednessScore,
       upgradesCompleted: scores.upgradesCompleted,
+      upgradesMissing: scores.upgradesMissing,
     };
   };
 
