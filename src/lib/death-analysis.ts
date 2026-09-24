@@ -234,7 +234,8 @@ async function syncReport(
   db: D1Database,
   accessToken: string,
   ownership: WclCharacterLookup,
-  report: InWindowReport
+  report: InWindowReport,
+  options?: { keepSyncedAt?: boolean }
 ): Promise<void> {
   if (!report.zoneId) throw new Error('Report has no zone.');
   const encounters = await getZoneEncounters(accessToken, report.zoneId);
@@ -258,7 +259,9 @@ async function syncReport(
            report_end_utc = excluded.report_end_utc,
            boss_pulls = excluded.boss_pulls,
            boss_kills = excluded.boss_kills,
-           synced_at = excluded.synced_at`
+           -- A spec backfill keeps synced_at: mechanics and Pull Scores re-sync any
+           -- report whose synced_at moves, and nothing they read has changed.
+           synced_at = CASE WHEN ? THEN death_analysis_reports.synced_at ELSE excluded.synced_at END`
       )
       .bind(
         report.code,
@@ -266,7 +269,8 @@ async function syncReport(
         details.reportStartUtc ?? report.startUtc,
         details.reportEndUtc ?? report.endUtc,
         details.scopedFightCount,
-        details.scopedKillCount
+        details.scopedKillCount,
+        options?.keepSyncedAt ? 1 : 0
       ),
     db.prepare('DELETE FROM death_analysis_stats WHERE report_code = ?').bind(report.code),
     ...[...details.deathStatsByCharId.entries()]
@@ -288,7 +292,8 @@ async function syncReport(
             stats.secondDeathCount,
             stats.thirdDeathCount,
             stats.fourthDeathCount,
-            details.specIdByCharId.get(blizzardCharId) ?? null
+            // 0 = synced but WCL gave no spec; NULL = synced before spec_id existed (backfill pending).
+            details.specIdByCharId.get(blizzardCharId) ?? 0
           )
       ),
     db.prepare('DELETE FROM death_analysis_events WHERE report_code = ?').bind(report.code),
@@ -442,6 +447,18 @@ export async function refreshDeathAnalysis(
     })
     .sort((a, b) => b.startUtc - a.startUtc);
 
+  // Already-synced reports with stats rows from before spec_id existed. Re-read
+  // after new work, newest first, without bumping synced_at (see syncReport).
+  const pendingCodes = new Set(pending.map((report) => report.code));
+  const backfillResult = await db
+    .prepare('SELECT DISTINCT report_code FROM death_analysis_stats WHERE spec_id IS NULL AND fights_present > 0')
+    .all<{ report_code: string }>();
+  const backfillCodes = new Set((backfillResult.results ?? []).map((row) => row.report_code));
+  const backfill = inWindow
+    .filter((report) => backfillCodes.has(report.code) && !pendingCodes.has(report.code) && seen.has(report.code))
+    .map((report) => ({ ...report, nightKey: seen.get(report.code)!.night_key }))
+    .sort((a, b) => b.startUtc - a.startUtc);
+
   const result: DeathAnalysisRefreshResult = {
     inWindowReports: inWindow.length,
     processed: 0,
@@ -450,16 +467,20 @@ export async function refreshDeathAnalysis(
     rateLimited: false,
     budgetExhausted: false,
   };
-  if (pending.length === 0) return result;
+  const work = [
+    ...pending.map((report) => ({ report, keepSyncedAt: false })),
+    ...backfill.map((report) => ({ report, keepSyncedAt: true })),
+  ];
+  if (work.length === 0) return result;
 
   const ownership = await loadWclCharacterLookup(db);
-  for (const report of pending.slice(0, maxReports)) {
+  for (const { report, keepSyncedAt } of work.slice(0, maxReports)) {
     if (Date.now() >= deadline) {
       result.budgetExhausted = true;
       break;
     }
     try {
-      await syncReport(db, accessToken, ownership, report);
+      await syncReport(db, accessToken, ownership, report, { keepSyncedAt });
       result.processed += 1;
     } catch (error) {
       if (error instanceof WclRateLimitError) {
@@ -476,7 +497,7 @@ export async function refreshDeathAnalysis(
   }
 
   if (!result.rateLimited) await clearWclBackoff(db);
-  result.remaining = Math.max(0, pending.length - result.processed);
+  result.remaining = Math.max(0, work.length - result.processed);
   return result;
 }
 
@@ -734,7 +755,7 @@ export async function getDeathAnalysisSummary(dbInput?: D1Database): Promise<Dea
            s.third_death_count,
            s.fourth_death_count,
            -- Reports synced before spec_id existed fall back to the latest known spec.
-           COALESCE(s.spec_id, bmr.spec_id) AS spec_id
+           COALESCE(NULLIF(s.spec_id, 0), bmr.spec_id) AS spec_id
          FROM death_analysis_stats s
          LEFT JOIN identity_choice ic ON ic.blizzard_char_id = s.blizzard_char_id AND ic.rn = 1
          LEFT JOIN bench_mechanic_roles bmr ON bmr.blizzard_char_id = s.blizzard_char_id
