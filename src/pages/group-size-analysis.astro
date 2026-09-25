@@ -30,8 +30,8 @@ const pulls = (await getPullScoreRows(env.DB))
     <PageHeader title="Group Size Analysis" description="Heroic Ula'tek: review real pulls, boss damage pace, and each DPS player's target." />
 
     <div class="intro card">
-      <p>Select an ingested Heroic Ula’tek pull to compare its boss-health pace against a 10:00 planning target. Member damage counts only Ula’tek, Venomous Heart, and the shared-health Gore Rattle tail.</p>
-      <p>Short-wipe projections extend the pace seen so far. Future Heart burns, phase downtime, and deaths can change it; the expandable math panel shows how each number was calculated.</p>
+      <p>Select an ingested Heroic Ula’tek pull to compare its boss damage against the 10:00 enrage. Member damage counts only Ula’tek, Venomous Heart, and the shared-health Gore Rattle tail.</p>
+      <p>The fight runs on a fixed clock: three 20-second Heart burns (2:15, 4:44, 9:33) deal about half of all boss damage, while the Stage 2 add phase and the intermission deal almost none. Pace is measured against that timeline, so a short wipe isn’t flattered by skipping the downtime or penalized for missing later burns. The expandable math panel shows how each number was calculated.</p>
     </div>
 
     <GroupSizePulls pulls={pulls} />
@@ -41,7 +41,9 @@ const pulls = (await getPullScoreRows(env.DB))
       <ul>
         <li><a href="https://www.warcraftlogs.com/v2-api-docs/warcraft/report.doc.html" target="_blank" rel="noopener noreferrer">Warcraft Logs report API</a> supplies fight duration, boss remaining percentage, player roles, and damage filtered to the three shared-health targets. Each pull is cached locally after it is opened.</li>
         <li>WCL does not provide maximum boss HP directly. Starting HP is estimated from boss-only damage and the remaining-health percentage. Pulls with 5% or less progress do not receive an HP estimate or DPS target.</li>
-        <li>10:00 is a planning benchmark, not a verified encounter enrage. Straight-line projections do not model future phases, deaths, downtime, or cooldown timing.</li>
+        <li>10:00 is the encounter enrage: guild logs show the boss gaining Fury Unleashed at 9:58.7 and Berserk at 10:15.9.</li>
+        <li>Heart burn windows come from the boss’s Venomous Heart aura, which starts at the same second on every pull; each pull is aligned to its own first burn. Stage weights are the guild’s median boss damage per stage relative to Stage 1, measured from 21 pulls of 7:39 or longer (Sep 19–25, 2026). Burn 3 and Stage 3 weights rest on the 3 pulls that reached Burn 3, so treat them as rough.</li>
+        <li>Projections assume the raid keeps its pace through the stages a pull didn’t reach. They don’t model deaths, cooldown timing, or a burn going unusually well or badly.</li>
       </ul>
     </details>
   </div>

@@ -3,8 +3,28 @@ import { getDeathAnalysisNights, requireAccessToken } from './death-analysis';
 import { WclRateLimitError, applyWclRateLimitBackoff, getWclBackoffUntil, queryWcl } from './wcl';
 
 export const ULATEK_ENCOUNTER_ID = 3492;
-export const GROUP_SIZE_DEADLINE_SECONDS = 600; // Planning benchmark, not a verified encounter enrage.
+// Fury Unleashed lands at 9:58.7 and Berserk at 10:15.9 in guild logs.
+export const GROUP_SIZE_DEADLINE_SECONDS = 600;
 const BOSS_TARGET_NAMES = new Set(["Ula'tek", 'Venomous Heart', 'Gore Rattle']);
+const VENOMOUS_HEART_AURA_ID = 1299526;
+const SNAPSHOT_VERSION = 2;
+
+// Heroic Ula'tek runs on a fixed clock: the Venomous Heart aura marks each 20s
+// burn and stage changes land at the same second on every pull. Each weight is
+// the segment's median raid boss DPS relative to Stage 1, measured from 21 guild
+// pulls of 7:39 or longer (Sep 19-25, 2026). Burn 3 and the final seconds come
+// from the 3 pulls that reached them; Stage 3 uses the pulls that reached Burn 3.
+export const ULATEK_TIMELINE = [
+  { key: 'stage1', label: 'Stage 1', start: 0, weight: 1 },
+  { key: 'burn1', label: 'Heart burn 1', start: 135.4, weight: 5.8 },
+  { key: 'stage2', label: 'Stage 2 (adds)', start: 155.4, weight: 0.04 },
+  { key: 'burn2', label: 'Heart burn 2', start: 284.4, weight: 4.0 },
+  { key: 'intermission', label: 'Intermission', start: 304.4, weight: 0.06 },
+  { key: 'stage3', label: 'Stage 3', start: 362.5, weight: 0.64 },
+  { key: 'burn3', label: 'Heart burn 3', start: 573.6, weight: 1.9 },
+  { key: 'final', label: 'Final seconds', start: 593.6, weight: 0.1 },
+] as const;
+const FIRST_BURN_START = 135.4;
 
 export type PullRole = 'tank' | 'healer' | 'dps';
 export interface PullPlayer {
@@ -23,10 +43,28 @@ export interface PullSnapshot {
   bossTargets: string[];
   players: PullPlayer[];
   raidBossDamage: number;
+  snapshotVersion: number;
+  // Seconds the pull's clock runs ahead (+) or behind (-) the standard timeline,
+  // from the first Venomous Heart burn.
+  timelineOffsetSeconds: number;
+  // Shared-health target damage taken in each ULATEK_TIMELINE segment.
+  segmentDamage: number[];
 }
 export interface PullPlayerResult extends PullPlayer {
   bossDps: number;
+  paceDps: number;
   meetsMinimum: boolean | null;
+}
+export interface PullSegmentResult {
+  key: string;
+  label: string;
+  start: number;
+  end: number;
+  weight: number;
+  elapsedSeconds: number;
+  damage: number;
+  // Damage this segment needs at the required pace, over its full length.
+  requiredDamage: number | null;
 }
 export interface PullAnalysis extends PullSnapshot {
   groupSize: number;
@@ -34,13 +72,17 @@ export interface PullAnalysis extends PullSnapshot {
   healers: number;
   damageDealers: number;
   inferredBossHealth: number | null;
-  observedProgressDamage: number | null;
+  weightedSecondsElapsed: number;
+  weightedSecondsToDeadline: number;
+  paceDps: number;
+  requiredPaceDps: number | null;
+  paceRatio: number | null;
   projectedKillSeconds: number | null;
-  projectedSecondsFromDeadline: number | null;
   projectedRemainingPercent: number | null;
-  requiredDpsPerDamageDealer: number | null;
-  roleBossDps: number;
+  requiredPaceDpsPerDamageDealer: number | null;
+  rolePaceDps: number;
   playersWithMinimum: number | null;
+  segments: PullSegmentResult[];
   players: PullPlayerResult[];
 }
 
@@ -67,6 +109,41 @@ function playersByRole(value: unknown): Record<PullRole, WclPlayer[]> {
   return { tank: data?.tanks ?? [], healer: data?.healers ?? [], dps: data?.dps ?? [] };
 }
 
+interface TimelineSegment { key: string; label: string; start: number; end: number; weight: number }
+
+// The standard timeline shifted by the pull's offset. The final segment runs to
+// the deadline, or past it for pulls that outlived the enrage.
+function timelineFor(offsetSeconds: number, durationSeconds: number): TimelineSegment[] {
+  return ULATEK_TIMELINE.map((segment, index) => {
+    const next = ULATEK_TIMELINE[index + 1];
+    return {
+      key: segment.key, label: segment.label, weight: segment.weight,
+      start: index === 0 ? 0 : segment.start + offsetSeconds,
+      end: next ? next.start + offsetSeconds : Math.max(GROUP_SIZE_DEADLINE_SECONDS, durationSeconds),
+    };
+  });
+}
+
+// Stage 1-equivalent seconds: each second counts at its segment's typical weight.
+function weightedSeconds(timeline: TimelineSegment[], untilSeconds: number): number {
+  return timeline.reduce((sum, segment) =>
+    sum + segment.weight * Math.max(0, Math.min(untilSeconds, segment.end) - segment.start), 0);
+}
+
+// Walks the rest of the timeline at the pull's pace; null if the boss outlives the enrage.
+function projectKillSeconds(timeline: TimelineSegment[], fromSeconds: number, remainingDamage: number, paceDps: number): number | null {
+  let left = remainingDamage;
+  for (const segment of timeline) {
+    const from = Math.max(segment.start, fromSeconds);
+    const to = Math.min(segment.end, GROUP_SIZE_DEADLINE_SECONDS);
+    if (to <= from) continue;
+    const rate = paceDps * segment.weight;
+    if (rate * (to - from) >= left) return from + left / rate;
+    left -= rate * (to - from);
+  }
+  return null;
+}
+
 export function analyzePull(snapshot: PullSnapshot): PullAnalysis {
   const groupSize = snapshot.players.length;
   const tanks = snapshot.players.filter((player) => player.role === 'tank').length;
@@ -79,31 +156,45 @@ export function analyzePull(snapshot: PullSnapshot): PullAnalysis {
     ? snapshot.raidBossDamage / progressFraction : null;
   const inferredBossHealth = estimate !== null && Number.isFinite(estimate) && estimate > 0 ? estimate : null;
   const duration = Math.max(1, snapshot.durationSeconds);
-  const observedProgressDamage = inferredBossHealth === null ? null : inferredBossHealth * progressFraction;
-  const observedRaidDps = observedProgressDamage === null ? null : observedProgressDamage / duration;
-  const projectedKillSeconds = inferredBossHealth !== null && observedRaidDps !== null && observedRaidDps > 0
-    ? inferredBossHealth / observedRaidDps : null;
-  const projectedRemainingPercent = inferredBossHealth !== null && observedRaidDps !== null && observedRaidDps > 0
-    ? Math.max(0, 100 * (1 - observedRaidDps * GROUP_SIZE_DEADLINE_SECONDS / inferredBossHealth)) : null;
-  const roleBossDps = snapshot.players
+  const timeline = timelineFor(snapshot.timelineOffsetSeconds, duration);
+  const weightedSecondsElapsed = Math.max(1, weightedSeconds(timeline, duration));
+  const weightedSecondsToDeadline = weightedSeconds(timeline, GROUP_SIZE_DEADLINE_SECONDS);
+  const paceDps = snapshot.raidBossDamage / weightedSecondsElapsed;
+  const requiredPaceDps = inferredBossHealth === null ? null : inferredBossHealth / weightedSecondsToDeadline;
+  const remainingDamage = inferredBossHealth === null ? null : Math.max(0, inferredBossHealth - snapshot.raidBossDamage);
+  const projectedKillSeconds = snapshot.isKill || remainingDamage === null || paceDps <= 0 || duration >= GROUP_SIZE_DEADLINE_SECONDS
+    ? null : projectKillSeconds(timeline, duration, remainingDamage, paceDps);
+  const projectedRemainingPercent = snapshot.isKill || inferredBossHealth === null ? null
+    : duration >= GROUP_SIZE_DEADLINE_SECONDS ? snapshot.bossRemainingPercent
+    : Math.max(0, 100 * (1 - (snapshot.raidBossDamage + paceDps * (weightedSecondsToDeadline - weightedSecondsElapsed)) / inferredBossHealth));
+  const rolePaceDps = snapshot.players
     .filter((player) => player.role !== 'dps')
-    .reduce((sum, player) => sum + player.bossDamage / duration, 0);
-  const requiredDpsPerDamageDealer = inferredBossHealth !== null && damageDealers > 0
-    ? Math.max(0, (inferredBossHealth / GROUP_SIZE_DEADLINE_SECONDS - roleBossDps) / damageDealers) : null;
+    .reduce((sum, player) => sum + player.bossDamage / weightedSecondsElapsed, 0);
+  const requiredPaceDpsPerDamageDealer = requiredPaceDps !== null && damageDealers > 0
+    ? Math.max(0, (requiredPaceDps - rolePaceDps) / damageDealers) : null;
   const players = snapshot.players.map((player) => {
-    const bossDps = player.bossDamage / duration;
-    return { ...player, bossDps,
-      meetsMinimum: player.role === 'dps' && requiredDpsPerDamageDealer !== null
-        ? bossDps >= requiredDpsPerDamageDealer : null };
+    const paceDps = player.bossDamage / weightedSecondsElapsed;
+    return { ...player, bossDps: player.bossDamage / duration, paceDps,
+      meetsMinimum: player.role === 'dps' && requiredPaceDpsPerDamageDealer !== null
+        ? paceDps >= requiredPaceDpsPerDamageDealer : null };
+  });
+  const segments = timeline.map((segment, index) => {
+    const end = Math.min(segment.end, Math.max(GROUP_SIZE_DEADLINE_SECONDS, duration));
+    return {
+      ...segment, end,
+      elapsedSeconds: Math.max(0, Math.min(duration, end) - segment.start),
+      damage: snapshot.segmentDamage[index] ?? 0,
+      requiredDamage: requiredPaceDps === null ? null
+        : requiredPaceDps * segment.weight * Math.max(0, Math.min(end, GROUP_SIZE_DEADLINE_SECONDS) - segment.start),
+    };
   });
   return {
     ...snapshot, groupSize, tanks, healers, damageDealers,
-    inferredBossHealth,
-    observedProgressDamage, projectedKillSeconds,
-    projectedSecondsFromDeadline: projectedKillSeconds === null ? null : projectedKillSeconds - GROUP_SIZE_DEADLINE_SECONDS,
-    projectedRemainingPercent, requiredDpsPerDamageDealer, roleBossDps,
-    playersWithMinimum: requiredDpsPerDamageDealer === null ? null : players.filter((player) => player.meetsMinimum === true).length,
-    players,
+    inferredBossHealth, weightedSecondsElapsed, weightedSecondsToDeadline,
+    paceDps, requiredPaceDps, paceRatio: requiredPaceDps ? paceDps / requiredPaceDps : null,
+    projectedKillSeconds, projectedRemainingPercent, requiredPaceDpsPerDamageDealer, rolePaceDps,
+    playersWithMinimum: requiredPaceDpsPerDamageDealer === null ? null : players.filter((player) => player.meetsMinimum === true).length,
+    segments, players,
   };
 }
 
@@ -115,6 +206,7 @@ async function fetchPullFromWcl(db: D1Database, reportCode: string, fightId: num
       fights?: WclFight[];
       masterData?: { actors?: Array<{ id?: number; name?: string }> };
       playerDetails?: unknown;
+      burns?: unknown;
     } | null };
   }>(token, `query GroupSizePull($code: String!) {
     reportData { report(code: $code) {
@@ -122,6 +214,7 @@ async function fetchPullFromWcl(db: D1Database, reportCode: string, fightId: num
       fights(fightIDs: [${fightId}]) { id startTime endTime encounterID difficulty kill bossPercentage enemyNPCs { id } }
       masterData { actors(type: "NPC") { id name } }
       playerDetails(fightIDs: [${fightId}])
+      burns: table(dataType: Buffs, hostilityType: Enemies, fightIDs: [${fightId}], abilityID: ${VENOMOUS_HEART_AURA_ID})
     } }
   }`, { code: reportCode });
   const report = metadata?.reportData?.report;
@@ -142,9 +235,27 @@ async function fetchPullFromWcl(db: D1Database, reportCode: string, fightId: num
   ].filter((player) => Number.isInteger(player.guid) && player.guid > 0);
   if (players.length === 0) throw new Error('No players were found in this pull.');
 
-  const tableFields = targets.map((target, index) =>
-    `t${index}: table(dataType: DamageDone, fightIDs: [${fightId}], targetID: ${target.id})`
-  ).join('\n');
+  // A pull's clock can run a second or two off; align the timeline to its first burn.
+  const fightStart = Number(fight.startTime ?? 0);
+  const fightEnd = Number(fight.endTime ?? 0);
+  const firstBurn = (report.burns as { data?: { auras?: Array<{ bands?: Array<{ startTime?: number }> }> } } | null)
+    ?.data?.auras?.[0]?.bands?.[0]?.startTime;
+  const measuredOffset = firstBurn === undefined ? 0 : (Number(firstBurn) - fightStart) / 1000 - FIRST_BURN_START;
+  const timelineOffsetSeconds = Number.isFinite(measuredOffset) && Math.abs(measuredOffset) <= 10 ? measuredOffset : 0;
+  const timeline = timelineFor(timelineOffsetSeconds, (fightEnd - fightStart) / 1000);
+
+  const tableFields = [
+    ...targets.map((target, index) =>
+      `t${index}: table(dataType: DamageDone, fightIDs: [${fightId}], targetID: ${target.id})`),
+    // Damage taken by enemies, per segment; filtered to the shared-health targets below.
+    ...timeline.map((segment, index) => {
+      const start = fightStart + Math.round(segment.start * 1000);
+      const end = Math.min(fightEnd, fightStart + Math.round(segment.end * 1000));
+      return end > start
+        ? `s${index}: table(dataType: DamageTaken, hostilityType: Enemies, fightIDs: [${fightId}], startTime: ${start}, endTime: ${end})`
+        : '';
+    }),
+  ].filter(Boolean).join('\n');
   const tableData = await queryWcl<{ reportData?: { report?: Record<string, unknown> | null } }>(token,
     `query GroupSizeTargets($code: String!) { reportData { report(code: $code) { ${tableFields} } } }`,
     { code: reportCode });
@@ -160,14 +271,20 @@ async function fetchPullFromWcl(db: D1Database, reportCode: string, fightId: num
     }
   });
   if (raidBossDamage <= 0) throw new Error('No boss-only damage was found in this pull.');
+  const segmentDamage = timeline.map((_segment, index) => (
+    (tableData?.reportData?.report?.[`s${index}`] as { data?: { entries?: Array<{ name?: string; total?: number }> } } | undefined)
+      ?.data?.entries ?? []
+  ).filter((entry) => BOSS_TARGET_NAMES.has(entry.name ?? ''))
+    .reduce((sum, entry) => sum + Math.max(0, Number(entry.total ?? 0) || 0), 0));
   return {
     reportCode, fightId,
     startedUtc: Math.floor((Number(report.startTime ?? 0) + Number(fight.startTime ?? 0)) / 1000),
-    durationSeconds: (Number(fight.endTime ?? 0) - Number(fight.startTime ?? 0)) / 1000,
+    durationSeconds: (fightEnd - fightStart) / 1000,
     isKill: fight.kill === true,
     bossRemainingPercent: fight.kill ? 0 : Number(fight.bossPercentage ?? 100),
     bossTargets: targets.map((target) => target.name ?? ''),
     players, raidBossDamage,
+    snapshotVersion: SNAPSHOT_VERSION, timelineOffsetSeconds, segmentDamage,
   };
 }
 
@@ -183,7 +300,11 @@ export async function getGroupSizePull(db: D1Database, reportCode: string, fight
     'SELECT source_synced_at, payload_json FROM group_size_pull_cache WHERE report_code = ? AND fight_id = ?'
   ).bind(reportCode, fightId).first<{ source_synced_at: number; payload_json: string }>();
   if (cached && cached.source_synced_at >= canonical.syncedAt) {
-    try { return analyzePull(JSON.parse(cached.payload_json) as PullSnapshot); } catch { /* Refetch corrupt cache. */ }
+    try {
+      const snapshot = JSON.parse(cached.payload_json) as PullSnapshot;
+      // Snapshots from before the stage timeline lack segment damage; refetch those.
+      if (snapshot.snapshotVersion === SNAPSHOT_VERSION) return analyzePull(snapshot);
+    } catch { /* Refetch corrupt cache. */ }
   }
   const backoffUntil = await getWclBackoffUntil(db);
   if (backoffUntil && backoffUntil > Math.floor(Date.now() / 1000)) throw new Error('Warcraft Logs is temporarily rate limited. Try again later.');

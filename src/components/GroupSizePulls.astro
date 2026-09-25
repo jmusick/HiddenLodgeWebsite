@@ -24,7 +24,7 @@ const date = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', mo
       <div id="pull-detail" class="pull-detail" hidden></div>
       <div class="table-wrap">
         <table class="data-table data-table--compact">
-          <thead><tr><th scope="col">Pull</th><th scope="col">Ended (ET)</th><th scope="col">Result</th><th scope="col">Players</th><th scope="col"><button type="button" class="column-help" data-column-tooltip="WCL does not provide maximum boss HP directly. Estimate = damage to Ula’tek, Venomous Heart, and Gore Rattle ÷ (1 − WCL boss remaining %). Pulls with 5% or less progress have no reliable estimate." aria-label="Boss HP estimate: how it is calculated">Boss HP est.</button></th><th scope="col">Boss left</th><th scope="col">10:00 pace</th><th scope="col">DPS meeting target</th></tr></thead>
+          <thead><tr><th scope="col">Pull</th><th scope="col">Ended (ET)</th><th scope="col">Result</th><th scope="col">Players</th><th scope="col"><button type="button" class="column-help" data-column-tooltip="WCL does not provide maximum boss HP directly. Estimate = damage to Ula’tek, Venomous Heart, and Gore Rattle ÷ (1 − WCL boss remaining %). Pulls with 5% or less progress have no reliable estimate." aria-label="Boss HP estimate: how it is calculated">Boss HP est.</button></th><th scope="col">Boss left</th><th scope="col"><button type="button" class="column-help" data-column-tooltip="The pull’s damage compared with the damage needed to kill by the 10:00 enrage, after allowing for Heart burns and downtime. 100% or more is on pace; below 100% shows the boss health projected to remain at 10:00." aria-label="Pace vs. enrage: how it is calculated">Pace vs. enrage</button></th><th scope="col">DPS meeting target</th></tr></thead>
           <tbody>
             {pulls.map((pull) => (
               <tr data-report={pull.reportCode} data-fight={pull.fightId}>
@@ -58,6 +58,7 @@ const date = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', mo
     const pending = new Map<string, Promise<PullAnalysis>>();
     const int = (value: number) => Math.ceil(value).toLocaleString('en-US');
     const decimal = (value: number) => value.toLocaleString('en-US', { maximumFractionDigits: 1 });
+    const percent = (ratio: number) => `${Math.round(ratio * 100)}%`;
     const clock = (seconds: number) => `${Math.floor(seconds / 60)}:${String(Math.floor(seconds % 60)).padStart(2, '0')}`;
     const key = (row: HTMLTableRowElement) => `${row.dataset.report}:${row.dataset.fight}`;
     const node = <K extends keyof HTMLElementTagNameMap>(tag: K, className = '', content = ''): HTMLElementTagNameMap[K] => {
@@ -68,13 +69,13 @@ const date = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', mo
     };
 
     // Match the hover and keyboard column tooltips used by Parse Analysis.
-    const helpButton = section.querySelector<HTMLButtonElement>('.column-help');
-    if (helpButton) {
-      const tooltip = node('div', 'group-size-column-tooltip');
-      tooltip.id = 'group-size-boss-hp-tooltip';
-      tooltip.role = 'tooltip';
-      tooltip.hidden = true;
-      document.body.append(tooltip);
+    const helpButtons = [...section.querySelectorAll<HTMLButtonElement>('.column-help')];
+    const tooltip = node('div', 'group-size-column-tooltip');
+    tooltip.id = 'group-size-column-tooltip';
+    tooltip.role = 'tooltip';
+    tooltip.hidden = true;
+    if (helpButtons.length > 0) document.body.append(tooltip);
+    for (const helpButton of helpButtons) {
       const hideTooltip = () => { tooltip.hidden = true; helpButton.setAttribute('aria-expanded', 'false'); };
       const showTooltip = () => {
         tooltip.textContent = helpButton.dataset.columnTooltip ?? '';
@@ -110,8 +111,9 @@ const date = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', mo
         cache.set(id, result);
         cell.textContent = result.isKill
           ? `Killed in ${clock(result.durationSeconds)}`
-          : result.projectedSecondsFromDeadline === null ? 'No pace estimate'
-          : `${result.projectedSecondsFromDeadline > 0 ? '+' : '−'}${clock(Math.abs(result.projectedSecondsFromDeadline))} projected`;
+          : result.paceRatio === null ? 'No pace estimate'
+          : result.projectedKillSeconds !== null ? `${percent(result.paceRatio)} · kill ~${clock(result.projectedKillSeconds)}`
+          : `${percent(result.paceRatio)} · ${decimal(result.projectedRemainingPercent ?? 0)}% left at 10:00`;
         row.querySelector<HTMLElement>('[data-boss-left]')!.textContent = `${decimal(result.bossRemainingPercent)}%`;
         row.querySelector<HTMLElement>('[data-players]')!.textContent = String(result.groupSize);
         row.querySelector<HTMLElement>('[data-health]')!.textContent = result.inferredBossHealth === null ? 'Unavailable' : int(result.inferredBossHealth);
@@ -142,7 +144,9 @@ const date = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', mo
         ['Boss HP estimate', result.inferredBossHealth === null ? 'Unavailable' : int(result.inferredBossHealth)],
         ['Boss left', `${decimal(result.bossRemainingPercent)}%`],
         ['Boss damage', int(result.raidBossDamage)],
-        ['DPS player target', result.requiredDpsPerDamageDealer === null ? 'Unavailable' : `${int(result.requiredDpsPerDamageDealer)} boss DPS`],
+        ['Raid pace', result.requiredPaceDps === null ? `${int(result.paceDps)} (no target)` : `${int(result.paceDps)} of ${int(result.requiredPaceDps)} needed`],
+        ['DPS player target', result.requiredPaceDpsPerDamageDealer === null ? 'Unavailable' : `${int(result.requiredPaceDpsPerDamageDealer)} pace DPS`],
+        ['Pace vs. enrage', result.paceRatio === null ? 'Unavailable' : percent(result.paceRatio)],
       ];
       for (const [label, value] of facts) {
         const item = node('div', 'summary-fact');
@@ -151,26 +155,50 @@ const date = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', mo
       }
       detail.append(summary);
       if (result.inferredBossHealth === null) detail.append(node('p', 'caveat', 'This pull lost 5% or less boss health, so its remaining-health percentage cannot support a useful HP or DPS target estimate.'));
+      const onPace = result.paceRatio !== null && result.paceRatio >= 1;
       const verdict = result.isKill
-        ? `Kill at ${clock(result.durationSeconds)} — ${clock(Math.abs(result.durationSeconds - 600))} ${result.durationSeconds <= 600 ? 'before' : 'after'} the 10:00 planning deadline.`
-        : result.projectedKillSeconds === null ? 'No 10:00 projection is available without an estimated starting HP.'
-        : `Straight-line projection: kill at ${clock(result.projectedKillSeconds)}, ${clock(Math.abs(result.projectedSecondsFromDeadline ?? 0))} ${result.projectedKillSeconds <= 600 ? 'before' : 'after'} 10:00. At that pace, ${decimal(result.projectedRemainingPercent ?? 0)}% would remain at 10:00.`;
-      detail.append(node('p', result.isKill ? 'verdict good' : 'verdict', verdict));
-      if (!result.isKill) detail.append(node('p', 'caveat', 'Projection from the pull’s observed boss-health pace. Short wipes can change substantially with later Heart burns, downtime, cooldowns, and deaths.'));
+        ? `Kill at ${clock(result.durationSeconds)} — ${clock(Math.abs(result.durationSeconds - 600))} ${result.durationSeconds <= 600 ? 'before' : 'after'} the 10:00 enrage.`
+        : result.paceRatio === null ? 'No 10:00 projection is available without an estimated starting HP.'
+        : result.durationSeconds >= 600 ? `This pull reached the 10:00 enrage with ${decimal(result.bossRemainingPercent)}% boss health left, at ${percent(result.paceRatio)} of the pace needed.`
+        : result.projectedKillSeconds !== null ? `On pace: ${percent(result.paceRatio)} of the pace needed. Continuing through the remaining stages and Heart burns at this pace projects a kill at ${clock(result.projectedKillSeconds)}.`
+        : `Behind pace: ${percent(result.paceRatio)} of the pace needed. Continuing through the remaining stages and Heart burns at this pace leaves ${decimal(result.projectedRemainingPercent ?? 0)}% boss health at the 10:00 enrage.`;
+      detail.append(node('p', result.isKill || onPace ? 'verdict good' : 'verdict', verdict));
+      if (!result.isKill && result.durationSeconds < 600) detail.append(node('p', 'caveat', 'Stages this pull did not reach are projected from the guild’s typical damage in each stage. Deaths, cooldown timing, and a stronger or weaker Heart burn can move the result.'));
+
+      detail.append(node('h4', '', 'Boss damage by stage'));
+      const stageWrap = node('div', 'table-wrap');
+      const stageTable = node('table', 'data-table data-table--compact member-table stage-table');
+      const stageHead = node('thead');
+      const stageHeaderRow = node('tr');
+      for (const title of ['Stage', 'Time', 'Typical weight', 'Time played', 'Boss damage', 'Needed for 10:00 kill']) stageHeaderRow.append(node('th', '', title));
+      stageHead.append(stageHeaderRow); stageTable.append(stageHead);
+      const stageBody = node('tbody');
+      for (const segment of result.segments) {
+        const tr = node('tr');
+        const cells = [segment.label, `${clock(segment.start)}–${clock(segment.end)}`, `${segment.weight.toLocaleString('en-US', { maximumFractionDigits: 2 })}×`,
+          segment.elapsedSeconds > 0 ? `${decimal(segment.elapsedSeconds)}s` : 'Not reached',
+          segment.elapsedSeconds > 0 ? int(segment.damage) : '—',
+          segment.requiredDamage === null ? '—' : int(segment.requiredDamage)];
+        cells.forEach((value, index) => tr.append(node('td', index >= 2 ? 'number-cell' : '', value)));
+        stageBody.append(tr);
+      }
+      stageTable.append(stageBody); stageWrap.append(stageTable); detail.append(stageWrap);
+      detail.append(node('p', 'caveat table-note', 'Typical weight is the guild’s median raid boss DPS in that stage relative to Stage 1. “Needed” splits the boss’s health across the full fight at the required pace; a partly played stage shows its damage so far against the full-stage need.'));
 
       detail.append(node('h4', '', 'Member boss damage'));
       const wrap = node('div', 'table-wrap');
       const table = node('table', 'data-table data-table--compact member-table');
       const head = node('thead');
       const headerRow = node('tr');
-      for (const title of ['Raider', 'Role', 'Boss damage', 'Boss DPS', 'DPS target', 'Result']) headerRow.append(node('th', '', title));
+      for (const title of ['Raider', 'Role', 'Boss damage', 'Boss DPS', 'Pace DPS', 'Pace target', 'Result']) headerRow.append(node('th', '', title));
       head.append(headerRow); table.append(head);
       const body = node('tbody');
       const roleOrder = { tank: 0, healer: 1, dps: 2 };
       for (const player of [...result.players].sort((a, b) => roleOrder[a.role] - roleOrder[b.role] || b.bossDps - a.bossDps)) {
         const tr = node('tr');
         const cells = [player.name, player.role === 'dps' ? 'DPS' : player.role === 'tank' ? 'Tank' : 'Healer',
-          int(player.bossDamage), int(player.bossDps), player.role === 'dps' && result.requiredDpsPerDamageDealer !== null ? int(result.requiredDpsPerDamageDealer) : '—'];
+          int(player.bossDamage), int(player.bossDps), int(player.paceDps),
+          player.role === 'dps' && result.requiredPaceDpsPerDamageDealer !== null ? int(result.requiredPaceDpsPerDamageDealer) : '—'];
         cells.forEach((value, index) => tr.append(node('td', index >= 2 ? 'number-cell' : '', value)));
         const resultCell = node('td');
         const statusClass = player.role === 'dps' && player.meetsMinimum === null ? 'unavailable' : player.meetsMinimum === null ? 'contribution' : player.meetsMinimum ? 'meets' : 'below';
@@ -184,13 +212,21 @@ const date = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', mo
       const math = node('details', 'math-detail');
       math.append(node('summary', '', 'Show all math and formulas'));
       const list = node('ol');
+      const offset = Math.abs(result.timelineOffsetSeconds) >= 0.5
+        ? ` This pull’s first Heart burn started ${decimal(Math.abs(result.timelineOffsetSeconds))}s ${result.timelineOffsetSeconds > 0 ? 'late' : 'early'}, so its stage times are shifted to match.` : '';
+      const remaining = result.inferredBossHealth === null ? 0 : result.inferredBossHealth - result.raidBossDamage;
       const formulas = [
         `WCL shared-health target damage = Ula’tek + Venomous Heart + Gore Rattle = ${int(result.raidBossDamage)}. WCL boss remaining = ${decimal(result.bossRemainingPercent)}%.`,
         result.inferredBossHealth === null ? 'Starting HP is unavailable because the pull lost 5% or less boss health.' : `Inferred starting health = ${int(result.raidBossDamage)} ÷ (1 − ${result.bossRemainingPercent}% / 100) = ${int(result.inferredBossHealth)}. WCL does not provide maximum boss HP directly.`,
-        result.observedProgressDamage === null ? 'Observed boss-health pace and the 10:00 projection are unavailable without starting HP.' : `Observed boss health lost = starting health × (1 − remaining fraction) = ${int(result.observedProgressDamage)}. Observed boss pace = ${int(result.observedProgressDamage)} ÷ ${decimal(result.durationSeconds)}s = ${int(result.observedProgressDamage / result.durationSeconds)} DPS.`,
-        `Projected kill time = starting health ÷ observed boss pace = ${result.projectedKillSeconds === null ? 'unavailable' : `${decimal(result.projectedKillSeconds)}s`}. The difference from 600s is ${result.projectedSecondsFromDeadline === null ? 'unavailable' : `${decimal(result.projectedSecondsFromDeadline)}s`}. This extrapolates the observed pace; it does not model future phases.`,
-        `Tank and healer boss pace = their combined target damage ÷ ${decimal(result.durationSeconds)}s = ${int(result.roleBossDps)} DPS. Per-DPS-player minimum = max(0, (starting health ÷ 600s − role boss pace) ÷ ${result.damageDealers}) = ${result.requiredDpsPerDamageDealer === null ? 'unavailable' : `${int(result.requiredDpsPerDamageDealer)} boss DPS`}.`,
-        'Each DPS player’s boss DPS = their damage to the three shared-health targets ÷ full pull length. A DPS player meets the minimum when that value is at least the per-DPS-player target. Tank and healer rows show contributions without a pass/fail label.',
+        `The fight runs on a fixed clock: Heart burns at 2:15, 4:44 and 9:33 (20s each), a Stage 2 add phase and an intermission where the boss takes almost no damage, and the enrage at 10:00. Each stage’s typical weight is the guild’s median raid boss DPS there relative to Stage 1 (see the stage table).${offset}`,
+        `Weighted seconds = Σ (seconds played in each stage × its weight). This pull: ${decimal(result.weightedSecondsElapsed)} weighted seconds in ${decimal(result.durationSeconds)}s. A full fight to 10:00: ${decimal(result.weightedSecondsToDeadline)} weighted seconds.`,
+        `Raid pace = boss damage ÷ weighted seconds so far = ${int(result.raidBossDamage)} ÷ ${decimal(result.weightedSecondsElapsed)} = ${int(result.paceDps)} DPS, in Stage 1 terms. Heart burns and downtime no longer inflate or deflate it.`,
+        result.requiredPaceDps === null ? 'Required pace is unavailable without starting HP.' : `Required pace = starting health ÷ full-fight weighted seconds = ${int(result.inferredBossHealth ?? 0)} ÷ ${decimal(result.weightedSecondsToDeadline)} = ${int(result.requiredPaceDps)} DPS. Pace vs. enrage = ${int(result.paceDps)} ÷ ${int(result.requiredPaceDps)} = ${percent(result.paceRatio ?? 0)}.`,
+        result.isKill || result.inferredBossHealth === null ? 'No projection is needed for a kill or possible without starting HP.'
+          : result.durationSeconds >= 600 ? 'This pull reached the enrage, so its actual boss health left is used instead of a projection.'
+          : `Projection: the remaining ${int(remaining)} boss health is dealt stage by stage from ${clock(result.durationSeconds)} at raid pace × each stage’s weight. ${result.projectedKillSeconds !== null ? `It runs out at ${clock(result.projectedKillSeconds)}.` : `By 10:00 that deals ${int(result.paceDps * (result.weightedSecondsToDeadline - result.weightedSecondsElapsed))}, leaving ${decimal(result.projectedRemainingPercent ?? 0)}%.`}`,
+        `Tank and healer pace = their combined target damage ÷ ${decimal(result.weightedSecondsElapsed)} weighted seconds = ${int(result.rolePaceDps)} DPS. Per-DPS-player target = max(0, (required pace − tank and healer pace) ÷ ${result.damageDealers}) = ${result.requiredPaceDpsPerDamageDealer === null ? 'unavailable' : `${int(result.requiredPaceDpsPerDamageDealer)} pace DPS`}.`,
+        'Each player’s boss DPS = their damage to the three shared-health targets ÷ full pull length. Their pace DPS = the same damage ÷ the pull’s weighted seconds, so it can be compared with the target however far the pull got. A DPS player meets the target when their pace DPS is at least the per-DPS-player target. Tank and healer rows show contributions without a pass/fail label.',
       ];
       formulas.forEach((formula) => list.append(node('li', '', formula)));
       math.append(list); detail.append(math);
@@ -251,7 +287,8 @@ const date = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', mo
   .pull-detail :global(.member-table) { --table-min: 750px; }
   .pull-detail :global(.member-table th), .pull-detail :global(.member-table td) { padding: var(--space-4) var(--space-5); }
   .pull-detail :global(.member-table tbody tr:nth-child(even)) { background: var(--surface-zebra); }
-  .pull-detail :global(.member-table th:nth-child(n+3):nth-child(-n+5)), .pull-detail :global(.member-table .number-cell) { text-align: right; font-variant-numeric: tabular-nums; }
+  .pull-detail :global(.member-table th:nth-child(n+3):nth-child(-n+6)), .pull-detail :global(.member-table .number-cell) { text-align: right; font-variant-numeric: tabular-nums; }
+  .pull-detail :global(.table-note) { margin-top: var(--space-4); font-size: var(--text-sm); }
   .pull-detail :global(.result-badge) { display: inline-flex; align-items: center; justify-content: center; min-width: 7.5rem; padding: var(--space-2) var(--space-4); border: 1px solid; border-radius: var(--radius-pill); font-size: var(--text-sm); font-weight: 700; line-height: 1.25; white-space: nowrap; }
   .pull-detail :global(.result-badge--contribution) { color: var(--info); border-color: var(--info); background: var(--info-bg); }
   .pull-detail :global(.result-badge--unavailable) { color: var(--muted); border-color: var(--border-soft); background: var(--surface-sunken); }
