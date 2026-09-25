@@ -17,5 +17,6 @@ export const FEATURE_FLAGS = {
   applications: false,
   feedback: true,
   tools: true,
+  groupSizeAnalysis: true,
   sim: false,
 } as const;

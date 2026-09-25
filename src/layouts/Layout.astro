@@ -43,6 +43,7 @@ const toolsUtilityNavItems = [
 ];
 
 const toolsAnalysisNavItems = [
+	...(isGuildMember && FEATURE_FLAGS.tools && FEATURE_FLAGS.groupSizeAnalysis ? [{ href: '/group-size-analysis', label: 'Group Size Analysis' }] : []),
 	...(isGuildMember && FEATURE_FLAGS.deathAnalysis && FEATURE_FLAGS.parseAnalysis
 		? [{ href: '/parse-analysis', label: 'Parse Analysis' }]
 		: []),
@@ -91,6 +92,7 @@ const NOINDEX_PREFIXES = [
 	'/death-analysis',
 	'/mechanics-analysis',
 	'/parse-analysis',
+	'/group-size-analysis',
 ];
 const currentPath = Astro.url.pathname;
 const isIndexable = !NOINDEX_PREFIXES.some(

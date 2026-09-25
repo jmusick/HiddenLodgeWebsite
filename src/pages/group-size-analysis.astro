@@ -1,0 +1,59 @@
+---
+export const prerender = false;
+
+import Layout from '../layouts/Layout.astro';
+import PageHeader from '../components/PageHeader.astro';
+import GroupSizePulls from '../components/GroupSizePulls.astro';
+import { env } from 'cloudflare:workers';
+import { FEATURE_FLAGS } from '../lib/feature-flags';
+import { getPullScoreRows } from '../lib/pull-scores';
+import { ULATEK_ENCOUNTER_ID } from '../lib/group-size-pulls';
+
+if (!Astro.locals.isGuildMember) return Astro.redirect('/auth/login');
+if (!FEATURE_FLAGS.tools || !FEATURE_FLAGS.groupSizeAnalysis) return Astro.redirect('/');
+
+const seen = new Set<string>();
+const pulls = (await getPullScoreRows(env.DB))
+  .filter((row) => row.encounterId === ULATEK_ENCOUNTER_ID && row.difficulty === 4)
+  .filter((row) => {
+    const key = `${row.reportCode}:${row.fightId}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  })
+  .map(({ reportCode, fightId, fightEndUtc, isKill }) => ({ reportCode, fightId, fightEndUtc, isKill }))
+  .sort((a, b) => b.fightEndUtc - a.fightEndUtc);
+---
+
+<Layout title="Group Size Analysis | The Hidden Lodge" description="Review Heroic Ula'tek pull damage, 10-minute pace, and each DPS player's boss damage requirement.">
+  <div class="analysis-page">
+    <PageHeader title="Group Size Analysis" description="Heroic Ula'tek: review real pulls, boss damage pace, and each DPS player's target." />
+
+    <div class="intro card">
+      <p>Select an ingested Heroic Ula’tek pull to compare its boss-health pace against a 10:00 planning target. Member damage counts only Ula’tek, Venomous Heart, and the shared-health Gore Rattle tail.</p>
+      <p>Short-wipe projections extend the pace seen so far. Future Heart burns, phase downtime, and deaths can change it; the expandable math panel shows how each number was calculated.</p>
+    </div>
+
+    <GroupSizePulls pulls={pulls} />
+
+    <details class="card sources">
+      <summary>Sources and limits</summary>
+      <ul>
+        <li><a href="https://www.warcraftlogs.com/v2-api-docs/warcraft/report.doc.html" target="_blank" rel="noopener noreferrer">Warcraft Logs report API</a> supplies fight duration, boss remaining percentage, player roles, and damage filtered to the three shared-health targets. Each pull is cached locally after it is opened.</li>
+        <li>WCL does not provide maximum boss HP directly. Starting HP is estimated from boss-only damage and the remaining-health percentage. Pulls with 5% or less progress do not receive an HP estimate or DPS target.</li>
+        <li>10:00 is a planning benchmark, not a verified encounter enrage. Straight-line projections do not model future phases, deaths, downtime, or cooldown timing.</li>
+      </ul>
+    </details>
+  </div>
+</Layout>
+
+<style>
+  .analysis-page { max-width: 1200px; margin: 0 auto; padding: var(--space-7) var(--space-5) var(--space-9); display: grid; gap: var(--space-6); }
+  .analysis-page :global(.page-header) { margin-bottom: 0; }
+  .intro p, .sources li { color: var(--muted); line-height: 1.55; }
+  .intro p:first-child { margin-top: 0; }
+  .intro p:last-child { margin-bottom: 0; }
+  .sources summary { cursor: pointer; font-weight: 700; }
+  .sources ul { padding-left: var(--space-5); margin-bottom: 0; }
+  .sources a { color: var(--gold-bright); }
+</style>

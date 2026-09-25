@@ -1,0 +1,269 @@
+---
+interface ListedPull {
+  reportCode: string;
+  fightId: number;
+  fightEndUtc: number;
+  isKill: boolean;
+}
+interface Props { pulls: ListedPull[] }
+const { pulls } = Astro.props;
+const date = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+---
+
+<section class="card pull-section" id="group-size-pulls">
+  <div class="pull-heading">
+    <div>
+      <h2>Heroic Ula’tek pulls</h2>
+      <p>Canonical guild logs from the last 90 days. Select a pull to load boss-only damage; results are cached for later visits.</p>
+    </div>
+    {pulls.length > 0 && <button class="btn btn--secondary" type="button" id="analyze-all-pulls">Analyze all pulls</button>}
+  </div>
+  {pulls.length === 0 ? <p class="empty-state">No synced Heroic Ula’tek pulls yet.</p> : (
+    <>
+      <p id="pull-load-status" class="load-status" aria-live="polite"></p>
+      <div id="pull-detail" class="pull-detail" hidden></div>
+      <div class="table-wrap">
+        <table class="data-table data-table--compact">
+          <thead><tr><th scope="col">Pull</th><th scope="col">Ended (ET)</th><th scope="col">Result</th><th scope="col">Players</th><th scope="col"><button type="button" class="column-help" data-column-tooltip="WCL does not provide maximum boss HP directly. Estimate = damage to Ula’tek, Venomous Heart, and Gore Rattle ÷ (1 − WCL boss remaining %). Pulls with 5% or less progress have no reliable estimate." aria-label="Boss HP estimate: how it is calculated">Boss HP est.</button></th><th scope="col">Boss left</th><th scope="col">10:00 pace</th><th scope="col">DPS meeting target</th></tr></thead>
+          <tbody>
+            {pulls.map((pull) => (
+              <tr data-report={pull.reportCode} data-fight={pull.fightId}>
+                <td><button class="pull-link" type="button" data-select-pull>{pull.reportCode.slice(0, 4)} · #{pull.fightId}</button></td>
+                <td>{date.format(new Date(pull.fightEndUtc * 1000))}</td>
+                <td>{pull.isKill ? 'Kill' : 'Wipe'}</td>
+                <td data-players>—</td>
+                <td data-health>—</td>
+                <td data-boss-left>Load pull</td>
+                <td data-pace>Load pull</td>
+                <td data-members>—</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </>
+  )}
+</section>
+
+<script>
+  import type { PullAnalysis } from '../lib/group-size-pulls';
+
+  const section = document.querySelector<HTMLElement>('#group-size-pulls');
+  if (section) {
+    const rows = [...section.querySelectorAll<HTMLTableRowElement>('tr[data-report][data-fight]')];
+    const detail = section.querySelector<HTMLElement>('#pull-detail');
+    const status = section.querySelector<HTMLElement>('#pull-load-status');
+    const allButton = section.querySelector<HTMLButtonElement>('#analyze-all-pulls');
+    const cache = new Map<string, PullAnalysis>();
+    const pending = new Map<string, Promise<PullAnalysis>>();
+    const int = (value: number) => Math.ceil(value).toLocaleString('en-US');
+    const decimal = (value: number) => value.toLocaleString('en-US', { maximumFractionDigits: 1 });
+    const clock = (seconds: number) => `${Math.floor(seconds / 60)}:${String(Math.floor(seconds % 60)).padStart(2, '0')}`;
+    const key = (row: HTMLTableRowElement) => `${row.dataset.report}:${row.dataset.fight}`;
+    const node = <K extends keyof HTMLElementTagNameMap>(tag: K, className = '', content = ''): HTMLElementTagNameMap[K] => {
+      const item = document.createElement(tag);
+      item.className = className;
+      item.textContent = content;
+      return item;
+    };
+
+    // Match the hover and keyboard column tooltips used by Parse Analysis.
+    const helpButton = section.querySelector<HTMLButtonElement>('.column-help');
+    if (helpButton) {
+      const tooltip = node('div', 'group-size-column-tooltip');
+      tooltip.id = 'group-size-boss-hp-tooltip';
+      tooltip.role = 'tooltip';
+      tooltip.hidden = true;
+      document.body.append(tooltip);
+      const hideTooltip = () => { tooltip.hidden = true; helpButton.setAttribute('aria-expanded', 'false'); };
+      const showTooltip = () => {
+        tooltip.textContent = helpButton.dataset.columnTooltip ?? '';
+        tooltip.hidden = false;
+        helpButton.setAttribute('aria-describedby', tooltip.id);
+        helpButton.setAttribute('aria-expanded', 'true');
+        const rect = helpButton.getBoundingClientRect();
+        const tip = tooltip.getBoundingClientRect();
+        tooltip.style.left = `${Math.max(10, Math.min(rect.left, window.innerWidth - tip.width - 10))}px`;
+        tooltip.style.top = `${rect.bottom + tip.height + 10 <= window.innerHeight ? rect.bottom + 8 : Math.max(10, rect.top - tip.height - 8)}px`;
+      };
+      helpButton.setAttribute('aria-expanded', 'false');
+      helpButton.addEventListener('mouseenter', showTooltip);
+      helpButton.addEventListener('focus', showTooltip);
+      helpButton.addEventListener('mouseleave', hideTooltip);
+      helpButton.addEventListener('blur', hideTooltip);
+      helpButton.addEventListener('click', showTooltip);
+    }
+
+    async function load(row: HTMLTableRowElement): Promise<PullAnalysis> {
+      const id = key(row);
+      const existing = cache.get(id);
+      if (existing) return existing;
+      const inFlight = pending.get(id);
+      if (inFlight) return inFlight;
+      const cell = row.querySelector<HTMLElement>('[data-pace]')!;
+      cell.textContent = 'Loading…';
+      const task = (async () => {
+        const params = new URLSearchParams({ report: row.dataset.report!, fight: row.dataset.fight! });
+        const response = await fetch(`/api/group-size-analysis/pull?${params}`);
+        if (!response.ok) throw new Error((await response.text()) || 'Could not load pull');
+        const result = await response.json() as PullAnalysis;
+        cache.set(id, result);
+        cell.textContent = result.isKill
+          ? `Killed in ${clock(result.durationSeconds)}`
+          : result.projectedSecondsFromDeadline === null ? 'No pace estimate'
+          : `${result.projectedSecondsFromDeadline > 0 ? '+' : '−'}${clock(Math.abs(result.projectedSecondsFromDeadline))} projected`;
+        row.querySelector<HTMLElement>('[data-boss-left]')!.textContent = `${decimal(result.bossRemainingPercent)}%`;
+        row.querySelector<HTMLElement>('[data-players]')!.textContent = String(result.groupSize);
+        row.querySelector<HTMLElement>('[data-health]')!.textContent = result.inferredBossHealth === null ? 'Unavailable' : int(result.inferredBossHealth);
+        row.querySelector<HTMLElement>('[data-members]')!.textContent = result.playersWithMinimum === null ? 'No target' : `${result.playersWithMinimum}/${result.damageDealers} DPS`;
+        return result;
+      })();
+      pending.set(id, task);
+      try { return await task; } catch (error) {
+        cell.textContent = 'Retry';
+        throw error;
+      } finally { pending.delete(id); }
+    }
+
+    function render(result: PullAnalysis) {
+      if (!detail) return;
+      detail.replaceChildren();
+      detail.hidden = false;
+      const heading = node('div', 'detail-heading');
+      heading.append(node('h3', '', `Pull #${result.fightId} · ${result.isKill ? 'Kill' : 'Wipe'}`));
+      const link = node('a', '', 'Open in Warcraft Logs ↗');
+      link.href = `https://www.warcraftlogs.com/reports/${result.reportCode}#fight=${result.fightId}&type=damage-done`;
+      link.target = '_blank'; link.rel = 'noopener noreferrer'; heading.append(link);
+      detail.append(heading);
+      const summary = node('div', 'pull-summary');
+      const facts: Array<[string, string]> = [
+        ['Pull length', clock(result.durationSeconds)],
+        ['Players', `${result.groupSize} (${result.tanks} tanks · ${result.healers} healers · ${result.damageDealers} DPS)`],
+        ['Boss HP estimate', result.inferredBossHealth === null ? 'Unavailable' : int(result.inferredBossHealth)],
+        ['Boss left', `${decimal(result.bossRemainingPercent)}%`],
+        ['Boss damage', int(result.raidBossDamage)],
+        ['DPS player target', result.requiredDpsPerDamageDealer === null ? 'Unavailable' : `${int(result.requiredDpsPerDamageDealer)} boss DPS`],
+      ];
+      for (const [label, value] of facts) {
+        const item = node('div', 'summary-fact');
+        item.append(node('span', 'label', label), node('strong', '', value));
+        summary.append(item);
+      }
+      detail.append(summary);
+      if (result.inferredBossHealth === null) detail.append(node('p', 'caveat', 'This pull lost 5% or less boss health, so its remaining-health percentage cannot support a useful HP or DPS target estimate.'));
+      const verdict = result.isKill
+        ? `Kill at ${clock(result.durationSeconds)} — ${clock(Math.abs(result.durationSeconds - 600))} ${result.durationSeconds <= 600 ? 'before' : 'after'} the 10:00 planning deadline.`
+        : result.projectedKillSeconds === null ? 'No 10:00 projection is available without an estimated starting HP.'
+        : `Straight-line projection: kill at ${clock(result.projectedKillSeconds)}, ${clock(Math.abs(result.projectedSecondsFromDeadline ?? 0))} ${result.projectedKillSeconds <= 600 ? 'before' : 'after'} 10:00. At that pace, ${decimal(result.projectedRemainingPercent ?? 0)}% would remain at 10:00.`;
+      detail.append(node('p', result.isKill ? 'verdict good' : 'verdict', verdict));
+      if (!result.isKill) detail.append(node('p', 'caveat', 'Projection from the pull’s observed boss-health pace. Short wipes can change substantially with later Heart burns, downtime, cooldowns, and deaths.'));
+
+      detail.append(node('h4', '', 'Member boss damage'));
+      const wrap = node('div', 'table-wrap');
+      const table = node('table', 'data-table data-table--compact member-table');
+      const head = node('thead');
+      const headerRow = node('tr');
+      for (const title of ['Raider', 'Role', 'Boss damage', 'Boss DPS', 'DPS target', 'Result']) headerRow.append(node('th', '', title));
+      head.append(headerRow); table.append(head);
+      const body = node('tbody');
+      const roleOrder = { tank: 0, healer: 1, dps: 2 };
+      for (const player of [...result.players].sort((a, b) => roleOrder[a.role] - roleOrder[b.role] || b.bossDps - a.bossDps)) {
+        const tr = node('tr');
+        const cells = [player.name, player.role === 'dps' ? 'DPS' : player.role === 'tank' ? 'Tank' : 'Healer',
+          int(player.bossDamage), int(player.bossDps), player.role === 'dps' && result.requiredDpsPerDamageDealer !== null ? int(result.requiredDpsPerDamageDealer) : '—'];
+        cells.forEach((value, index) => tr.append(node('td', index >= 2 ? 'number-cell' : '', value)));
+        const resultCell = node('td');
+        const statusClass = player.role === 'dps' && player.meetsMinimum === null ? 'unavailable' : player.meetsMinimum === null ? 'contribution' : player.meetsMinimum ? 'meets' : 'below';
+        const statusLabel = player.role === 'dps' && player.meetsMinimum === null ? 'No target' : player.meetsMinimum === null ? 'Contribution' : player.meetsMinimum ? 'Meets target' : 'Below target';
+        resultCell.append(node('span', `result-badge result-badge--${statusClass}`, statusLabel));
+        tr.append(resultCell);
+        body.append(tr);
+      }
+      table.append(body); wrap.append(table); detail.append(wrap);
+
+      const math = node('details', 'math-detail');
+      math.append(node('summary', '', 'Show all math and formulas'));
+      const list = node('ol');
+      const formulas = [
+        `WCL shared-health target damage = Ula’tek + Venomous Heart + Gore Rattle = ${int(result.raidBossDamage)}. WCL boss remaining = ${decimal(result.bossRemainingPercent)}%.`,
+        result.inferredBossHealth === null ? 'Starting HP is unavailable because the pull lost 5% or less boss health.' : `Inferred starting health = ${int(result.raidBossDamage)} ÷ (1 − ${result.bossRemainingPercent}% / 100) = ${int(result.inferredBossHealth)}. WCL does not provide maximum boss HP directly.`,
+        result.observedProgressDamage === null ? 'Observed boss-health pace and the 10:00 projection are unavailable without starting HP.' : `Observed boss health lost = starting health × (1 − remaining fraction) = ${int(result.observedProgressDamage)}. Observed boss pace = ${int(result.observedProgressDamage)} ÷ ${decimal(result.durationSeconds)}s = ${int(result.observedProgressDamage / result.durationSeconds)} DPS.`,
+        `Projected kill time = starting health ÷ observed boss pace = ${result.projectedKillSeconds === null ? 'unavailable' : `${decimal(result.projectedKillSeconds)}s`}. The difference from 600s is ${result.projectedSecondsFromDeadline === null ? 'unavailable' : `${decimal(result.projectedSecondsFromDeadline)}s`}. This extrapolates the observed pace; it does not model future phases.`,
+        `Tank and healer boss pace = their combined target damage ÷ ${decimal(result.durationSeconds)}s = ${int(result.roleBossDps)} DPS. Per-DPS-player minimum = max(0, (starting health ÷ 600s − role boss pace) ÷ ${result.damageDealers}) = ${result.requiredDpsPerDamageDealer === null ? 'unavailable' : `${int(result.requiredDpsPerDamageDealer)} boss DPS`}.`,
+        'Each DPS player’s boss DPS = their damage to the three shared-health targets ÷ full pull length. A DPS player meets the minimum when that value is at least the per-DPS-player target. Tank and healer rows show contributions without a pass/fail label.',
+      ];
+      formulas.forEach((formula) => list.append(node('li', '', formula)));
+      math.append(list); detail.append(math);
+    }
+
+    rows.forEach((row) => row.querySelector('[data-select-pull]')?.addEventListener('click', async () => {
+      rows.forEach((other) => other.classList.toggle('selected-row', other === row));
+      if (status) status.textContent = 'Loading pull…';
+      try { render(await load(row)); if (status) status.textContent = ''; detail?.scrollIntoView({ block: 'start', behavior: 'smooth' }); }
+      catch (error) { if (status) status.textContent = error instanceof Error ? error.message : 'Could not load pull'; }
+    }));
+    allButton?.addEventListener('click', async () => {
+      allButton.disabled = true;
+      let done = 0;
+      let failed = 0;
+      // Bound WCL requests: each uncached pull makes two GraphQL calls.
+      const queue = [...rows];
+      await Promise.all(Array.from({ length: 2 }, async () => {
+        while (queue.length > 0) {
+          const row = queue.shift()!;
+          try { await load(row); } catch { failed++; }
+          done++;
+          if (status) status.textContent = `Analyzed ${done}/${rows.length} pulls${failed ? ` · ${failed} could not load` : ''}`;
+        }
+      }));
+      allButton.disabled = false;
+    });
+    if (rows[0]) {
+      // Load the newest pull without moving the reader's initial scroll position.
+      load(rows[0]).then((result) => { rows[0].classList.add('selected-row'); render(result); })
+        .catch((error) => { if (status) status.textContent = error instanceof Error ? error.message : 'Could not load pull'; });
+    }
+  }
+</script>
+
+<style>
+  .pull-section { min-width: 0; }
+  .pull-heading { display: flex; justify-content: space-between; align-items: start; gap: var(--space-4); flex-wrap: wrap; }
+  h2, h3, h4 { margin: 0 0 var(--space-3); }
+  .pull-heading p, .load-status, .caveat { color: var(--muted); margin: 0 0 var(--space-4); }
+  .pull-link { border: 0; padding: 0; color: var(--gold-bright); background: transparent; font: inherit; cursor: pointer; text-decoration: underline; }
+  .pull-section :global(.data-table) { --table-min: 900px; }
+  .pull-section :global(.selected-row) { background: var(--surface-active); }
+  .column-help { display: inline; padding: 0; border: 0; background: none; color: inherit; font: inherit; text-align: inherit; text-decoration: underline dotted var(--gold-bright); text-underline-offset: 0.25em; cursor: help; }
+  .column-help:hover, .column-help:focus-visible { color: var(--gold-bright); }
+  :global(.group-size-column-tooltip) { position: fixed; z-index: 50; box-sizing: border-box; width: min(21rem, calc(100vw - 1.25rem)); padding: var(--space-4) var(--space-5); border: 1px solid var(--gold-bright); border-radius: var(--radius-md); background: var(--surface-raised); box-shadow: 0 12px 28px rgb(0 0 0 / 40%); color: var(--text); font-size: var(--text-sm); font-weight: 400; line-height: 1.45; pointer-events: none; }
+  .pull-detail { margin: var(--space-5) 0 var(--space-7); border-top: 1px solid var(--border-soft); padding-top: var(--space-6); scroll-margin-top: var(--space-7); }
+  .pull-detail :global(.detail-heading) { display: flex; justify-content: space-between; align-items: baseline; gap: var(--space-5); flex-wrap: wrap; margin-bottom: var(--space-5); }
+  .pull-detail :global(.detail-heading h3) { margin: 0; }
+  .pull-detail :global(.detail-heading a) { color: var(--gold-bright); }
+  .pull-detail :global(.pull-summary) { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--space-4); margin: 0 0 var(--space-6); }
+  .pull-detail :global(.summary-fact) { display: flex; flex-direction: column; gap: var(--space-2); min-width: 0; padding: var(--space-5); border: 1px solid var(--border-subtle); border-radius: var(--radius-md); background: var(--surface-sunken); }
+  .pull-detail :global(.summary-fact strong) { font-size: var(--text-lg); line-height: 1.3; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+  .pull-detail :global(.caveat) { color: var(--muted); line-height: 1.5; margin: 0 0 var(--space-5); }
+  .pull-detail :global(.verdict) { padding: var(--space-5) var(--space-6); margin: 0 0 var(--space-5); border: 1px solid var(--border-soft); border-left: 3px solid var(--warning); border-radius: var(--radius-md); background: var(--surface-sunken); line-height: 1.5; }
+  .pull-detail :global(.verdict.good) { border-left-color: var(--success); }
+  .pull-detail :global(h4) { margin: var(--space-7) 0 var(--space-4); }
+  .pull-detail :global(.member-table) { --table-min: 750px; }
+  .pull-detail :global(.member-table th), .pull-detail :global(.member-table td) { padding: var(--space-4) var(--space-5); }
+  .pull-detail :global(.member-table tbody tr:nth-child(even)) { background: var(--surface-zebra); }
+  .pull-detail :global(.member-table th:nth-child(n+3):nth-child(-n+5)), .pull-detail :global(.member-table .number-cell) { text-align: right; font-variant-numeric: tabular-nums; }
+  .pull-detail :global(.result-badge) { display: inline-flex; align-items: center; justify-content: center; min-width: 7.5rem; padding: var(--space-2) var(--space-4); border: 1px solid; border-radius: var(--radius-pill); font-size: var(--text-sm); font-weight: 700; line-height: 1.25; white-space: nowrap; }
+  .pull-detail :global(.result-badge--contribution) { color: var(--info); border-color: var(--info); background: var(--info-bg); }
+  .pull-detail :global(.result-badge--unavailable) { color: var(--muted); border-color: var(--border-soft); background: var(--surface-sunken); }
+  .pull-detail :global(.result-badge--meets) { color: var(--success); border-color: var(--success); background: var(--success-bg); }
+  .pull-detail :global(.result-badge--below) { color: var(--danger); border-color: var(--danger); background: var(--danger-bg); }
+  .pull-detail :global(.math-detail) { margin-top: var(--space-7); padding: var(--space-5); border: 1px solid var(--border-soft); border-radius: var(--radius-md); }
+  .pull-detail :global(.math-detail summary) { cursor: pointer; font-weight: 700; }
+  .pull-detail :global(.math-detail li) { margin-top: var(--space-4); line-height: 1.5; color: var(--muted); }
+  @media (max-width: 800px) {
+    .pull-detail :global(.pull-summary) { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  }
+  @media (max-width: 480px) {
+    .pull-detail :global(.pull-summary) { grid-template-columns: 1fr; }
+  }
+</style>
