@@ -7,7 +7,7 @@ export const ULATEK_ENCOUNTER_ID = 3492;
 export const GROUP_SIZE_DEADLINE_SECONDS = 600;
 const BOSS_TARGET_NAMES = new Set(["Ula'tek", 'Venomous Heart', 'Gore Rattle']);
 const VENOMOUS_HEART_AURA_ID = 1299526;
-const SNAPSHOT_VERSION = 2;
+const SNAPSHOT_VERSION = 3;
 
 // Heroic Ula'tek runs on a fixed clock: the Venomous Heart aura marks each 20s
 // burn and stage changes land at the same second on every pull. Each weight is
@@ -32,6 +32,8 @@ export interface PullPlayer {
   name: string;
   role: PullRole;
   bossDamage: number;
+  // Shared-health target damage in each ULATEK_TIMELINE segment.
+  segmentDamage: number[];
 }
 export interface PullSnapshot {
   reportCode: string;
@@ -47,13 +49,21 @@ export interface PullSnapshot {
   // Seconds the pull's clock runs ahead (+) or behind (-) the standard timeline,
   // from the first Venomous Heart burn.
   timelineOffsetSeconds: number;
-  // Shared-health target damage taken in each ULATEK_TIMELINE segment.
+  // Shared-health target damage in each ULATEK_TIMELINE segment.
   segmentDamage: number[];
+}
+export interface PullPlayerStage {
+  // Boss DPS over the part of the stage the pull reached; null if not reached.
+  dps: number | null;
+  // DPS players only: the pace target scaled by the stage's weight.
+  target: number | null;
+  meetsTarget: boolean | null;
 }
 export interface PullPlayerResult extends PullPlayer {
   bossDps: number;
   paceDps: number;
   meetsMinimum: boolean | null;
+  stages: PullPlayerStage[];
 }
 export interface PullSegmentResult {
   key: string;
@@ -172,12 +182,6 @@ export function analyzePull(snapshot: PullSnapshot): PullAnalysis {
     .reduce((sum, player) => sum + player.bossDamage / weightedSecondsElapsed, 0);
   const requiredPaceDpsPerDamageDealer = requiredPaceDps !== null && damageDealers > 0
     ? Math.max(0, (requiredPaceDps - rolePaceDps) / damageDealers) : null;
-  const players = snapshot.players.map((player) => {
-    const paceDps = player.bossDamage / weightedSecondsElapsed;
-    return { ...player, bossDps: player.bossDamage / duration, paceDps,
-      meetsMinimum: player.role === 'dps' && requiredPaceDpsPerDamageDealer !== null
-        ? paceDps >= requiredPaceDpsPerDamageDealer : null };
-  });
   const segments = timeline.map((segment, index) => {
     const end = Math.min(segment.end, Math.max(GROUP_SIZE_DEADLINE_SECONDS, duration));
     return {
@@ -187,6 +191,18 @@ export function analyzePull(snapshot: PullSnapshot): PullAnalysis {
       requiredDamage: requiredPaceDps === null ? null
         : requiredPaceDps * segment.weight * Math.max(0, Math.min(end, GROUP_SIZE_DEADLINE_SECONDS) - segment.start),
     };
+  });
+  const players = snapshot.players.map((player) => {
+    const paceDps = player.bossDamage / weightedSecondsElapsed;
+    const isDps = player.role === 'dps' && requiredPaceDpsPerDamageDealer !== null;
+    const stages = segments.map((segment, index) => {
+      if (segment.elapsedSeconds < 1) return { dps: null, target: null, meetsTarget: null };
+      const dps = (player.segmentDamage?.[index] ?? 0) / segment.elapsedSeconds;
+      const target = isDps ? requiredPaceDpsPerDamageDealer * segment.weight : null;
+      return { dps, target, meetsTarget: target === null ? null : dps >= target };
+    });
+    return { ...player, bossDps: player.bossDamage / duration, paceDps, stages,
+      meetsMinimum: isDps ? paceDps >= requiredPaceDpsPerDamageDealer : null };
   });
   return {
     ...snapshot, groupSize, tanks, healers, damageDealers,
@@ -229,9 +245,9 @@ async function fetchPullFromWcl(db: D1Database, reportCode: string, fightId: num
   if (targets.length === 0) throw new Error('No shared-health boss targets were found in this pull.');
   const roles = playersByRole(report.playerDetails);
   const players: PullPlayer[] = [
-    ...roles.tank.map((player) => ({ guid: Number(player.guid), name: player.name ?? '', role: 'tank' as const, bossDamage: 0 })),
-    ...roles.healer.map((player) => ({ guid: Number(player.guid), name: player.name ?? '', role: 'healer' as const, bossDamage: 0 })),
-    ...roles.dps.map((player) => ({ guid: Number(player.guid), name: player.name ?? '', role: 'dps' as const, bossDamage: 0 })),
+    ...roles.tank.map((player) => ({ guid: Number(player.guid), name: player.name ?? '', role: 'tank' as const, bossDamage: 0, segmentDamage: [] as number[] })),
+    ...roles.healer.map((player) => ({ guid: Number(player.guid), name: player.name ?? '', role: 'healer' as const, bossDamage: 0, segmentDamage: [] as number[] })),
+    ...roles.dps.map((player) => ({ guid: Number(player.guid), name: player.name ?? '', role: 'dps' as const, bossDamage: 0, segmentDamage: [] as number[] })),
   ].filter((player) => Number.isInteger(player.guid) && player.guid > 0);
   if (players.length === 0) throw new Error('No players were found in this pull.');
 
@@ -247,18 +263,19 @@ async function fetchPullFromWcl(db: D1Database, reportCode: string, fightId: num
   const tableFields = [
     ...targets.map((target, index) =>
       `t${index}: table(dataType: DamageDone, fightIDs: [${fightId}], targetID: ${target.id})`),
-    // Damage taken by enemies, per segment; filtered to the shared-health targets below.
+    // Per-player damage to the shared-health targets in each segment.
     ...timeline.map((segment, index) => {
       const start = fightStart + Math.round(segment.start * 1000);
       const end = Math.min(fightEnd, fightStart + Math.round(segment.end * 1000));
       return end > start
-        ? `s${index}: table(dataType: DamageTaken, hostilityType: Enemies, fightIDs: [${fightId}], startTime: ${start}, endTime: ${end})`
+        ? `s${index}: table(dataType: DamageDone, fightIDs: [${fightId}], startTime: ${start}, endTime: ${end}, filterExpression: $targets)`
         : '';
     }),
   ].filter(Boolean).join('\n');
   const tableData = await queryWcl<{ reportData?: { report?: Record<string, unknown> | null } }>(token,
-    `query GroupSizeTargets($code: String!) { reportData { report(code: $code) { ${tableFields} } } }`,
-    { code: reportCode });
+    `query GroupSizeTargets($code: String!, $targets: String!) { reportData { report(code: $code) { ${tableFields} } } }`,
+    // WCL's filter syntax matches target.name; target.id returns nothing.
+    { code: reportCode, targets: [...BOSS_TARGET_NAMES].map((name) => `target.name = ${JSON.stringify(name)}`).join(' or ') });
   const byGuid = new Map(players.map((player) => [player.guid, player]));
   let raidBossDamage = 0;
   targets.forEach((_target, index) => {
@@ -271,11 +288,18 @@ async function fetchPullFromWcl(db: D1Database, reportCode: string, fightId: num
     }
   });
   if (raidBossDamage <= 0) throw new Error('No boss-only damage was found in this pull.');
-  const segmentDamage = timeline.map((_segment, index) => (
-    (tableData?.reportData?.report?.[`s${index}`] as { data?: { entries?: Array<{ name?: string; total?: number }> } } | undefined)
-      ?.data?.entries ?? []
-  ).filter((entry) => BOSS_TARGET_NAMES.has(entry.name ?? ''))
-    .reduce((sum, entry) => sum + Math.max(0, Number(entry.total ?? 0) || 0), 0));
+  for (const player of players) player.segmentDamage = timeline.map(() => 0);
+  const segmentDamage = timeline.map((_segment, index) => {
+    let total = 0;
+    for (const entry of entries(tableData?.reportData?.report?.[`s${index}`])) {
+      const damage = Number(entry.total ?? 0);
+      if (!Number.isFinite(damage) || damage < 0) continue;
+      total += damage;
+      const player = byGuid.get(Number(entry.guid));
+      if (player) player.segmentDamage[index] += damage;
+    }
+    return total;
+  });
   return {
     reportCode, fightId,
     startedUtc: Math.floor((Number(report.startTime ?? 0) + Number(fight.startTime ?? 0)) / 1000),

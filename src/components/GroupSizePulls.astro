@@ -59,6 +59,9 @@ const date = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', mo
     const int = (value: number) => Math.ceil(value).toLocaleString('en-US');
     const decimal = (value: number) => value.toLocaleString('en-US', { maximumFractionDigits: 1 });
     const percent = (ratio: number) => `${Math.round(ratio * 100)}%`;
+    const compact = (value: number) => value.toLocaleString('en-US', { notation: 'compact', maximumFractionDigits: value >= 1e6 ? 2 : 0 });
+    // Kept across pulls so switching pulls doesn't reset the member table view.
+    let memberView: 'overall' | 'stage' = 'overall';
     const clock = (seconds: number) => `${Math.floor(seconds / 60)}:${String(Math.floor(seconds % 60)).padStart(2, '0')}`;
     const key = (row: HTMLTableRowElement) => `${row.dataset.report}:${row.dataset.fight}`;
     const node = <K extends keyof HTMLElementTagNameMap>(tag: K, className = '', content = ''): HTMLElementTagNameMap[K] => {
@@ -185,29 +188,67 @@ const date = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', mo
       stageTable.append(stageBody); stageWrap.append(stageTable); detail.append(stageWrap);
       detail.append(node('p', 'caveat table-note', 'Typical weight is the guild’s median raid boss DPS in that stage relative to Stage 1. “Needed” splits the boss’s health across the full fight at the required pace; a partly played stage shows its damage so far against the full-stage need.'));
 
-      detail.append(node('h4', '', 'Member boss damage'));
+      const memberHeading = node('div', 'member-heading');
+      memberHeading.append(node('h4', '', 'Member boss damage'));
+      const viewToggle = node('div', 'view-toggle');
+      viewToggle.role = 'group';
+      viewToggle.setAttribute('aria-label', 'Member table view');
+      memberHeading.append(viewToggle);
+      detail.append(memberHeading);
       const wrap = node('div', 'table-wrap');
-      const table = node('table', 'data-table data-table--compact member-table');
-      const head = node('thead');
-      const headerRow = node('tr');
-      for (const title of ['Raider', 'Role', 'Boss damage', 'Boss DPS', 'Pace DPS', 'Pace target', 'Result']) headerRow.append(node('th', '', title));
-      head.append(headerRow); table.append(head);
-      const body = node('tbody');
+      const stageNote = node('p', 'caveat table-note', 'Each cell is the raider’s boss DPS over the part of that stage the pull reached. A DPS player’s stage target is their pace target × the stage’s typical weight, so hitting every stage target adds up to the overall pace target.');
+      detail.append(wrap, stageNote);
       const roleOrder = { tank: 0, healer: 1, dps: 2 };
-      for (const player of [...result.players].sort((a, b) => roleOrder[a.role] - roleOrder[b.role] || b.bossDps - a.bossDps)) {
-        const tr = node('tr');
-        const cells = [player.name, player.role === 'dps' ? 'DPS' : player.role === 'tank' ? 'Tank' : 'Healer',
-          int(player.bossDamage), int(player.bossDps), int(player.paceDps),
-          player.role === 'dps' && result.requiredPaceDpsPerDamageDealer !== null ? int(result.requiredPaceDpsPerDamageDealer) : '—'];
-        cells.forEach((value, index) => tr.append(node('td', index >= 2 ? 'number-cell' : '', value)));
-        const resultCell = node('td');
-        const statusClass = player.role === 'dps' && player.meetsMinimum === null ? 'unavailable' : player.meetsMinimum === null ? 'contribution' : player.meetsMinimum ? 'meets' : 'below';
-        const statusLabel = player.role === 'dps' && player.meetsMinimum === null ? 'No target' : player.meetsMinimum === null ? 'Contribution' : player.meetsMinimum ? 'Meets target' : 'Below target';
-        resultCell.append(node('span', `result-badge result-badge--${statusClass}`, statusLabel));
-        tr.append(resultCell);
-        body.append(tr);
+      const sortedPlayers = [...result.players].sort((a, b) => roleOrder[a.role] - roleOrder[b.role] || b.bossDps - a.bossDps);
+      const roleLabel = (role: string) => role === 'dps' ? 'DPS' : role === 'tank' ? 'Tank' : 'Healer';
+      const reachedStages = result.segments.map((segment, index) => ({ segment, index })).filter(({ segment }) => segment.elapsedSeconds >= 1);
+
+      const renderMembers = () => {
+        const byStage = memberView === 'stage';
+        const table = node('table', `data-table data-table--compact member-table${byStage ? ' member-table--stages' : ''}`);
+        const head = node('thead');
+        const headerRow = node('tr');
+        const titles = byStage ? ['Raider', 'Role', ...reachedStages.map(({ segment }) => segment.label)]
+          : ['Raider', 'Role', 'Boss damage', 'Boss DPS', 'Pace DPS', 'Pace target', 'Result'];
+        for (const title of titles) headerRow.append(node('th', '', title));
+        head.append(headerRow); table.append(head);
+        const body = node('tbody');
+        for (const player of sortedPlayers) {
+          const tr = node('tr');
+          tr.append(node('td', '', player.name), node('td', '', roleLabel(player.role)));
+          if (byStage) {
+            for (const { index } of reachedStages) {
+              const stage = player.stages[index];
+              const cell = node('td', `number-cell stage-cell${stage.meetsTarget === null ? '' : stage.meetsTarget ? ' stage-cell--meets' : ' stage-cell--below'}`);
+              cell.append(node('span', 'stage-dps', compact(stage.dps ?? 0)));
+              if (stage.target !== null) cell.append(node('span', 'stage-target', `of ${compact(stage.target)}`));
+              tr.append(cell);
+            }
+          } else {
+            const cells = [int(player.bossDamage), int(player.bossDps), int(player.paceDps),
+              player.role === 'dps' && result.requiredPaceDpsPerDamageDealer !== null ? int(result.requiredPaceDpsPerDamageDealer) : '—'];
+            cells.forEach((value) => tr.append(node('td', 'number-cell', value)));
+            const resultCell = node('td');
+            const statusClass = player.role === 'dps' && player.meetsMinimum === null ? 'unavailable' : player.meetsMinimum === null ? 'contribution' : player.meetsMinimum ? 'meets' : 'below';
+            const statusLabel = player.role === 'dps' && player.meetsMinimum === null ? 'No target' : player.meetsMinimum === null ? 'Contribution' : player.meetsMinimum ? 'Meets target' : 'Below target';
+            resultCell.append(node('span', `result-badge result-badge--${statusClass}`, statusLabel));
+            tr.append(resultCell);
+          }
+          body.append(tr);
+        }
+        table.append(body);
+        wrap.replaceChildren(table);
+        stageNote.hidden = !byStage;
+        viewToggle.querySelectorAll<HTMLButtonElement>('button').forEach((button) => button.setAttribute('aria-pressed', String(button.dataset.view === memberView)));
+      };
+      for (const [view, label] of [['overall', 'Overall'], ['stage', 'By stage']] as const) {
+        const button = node('button', 'view-toggle-button', label);
+        button.type = 'button';
+        button.dataset.view = view;
+        button.addEventListener('click', () => { memberView = view; renderMembers(); });
+        viewToggle.append(button);
       }
-      table.append(body); wrap.append(table); detail.append(wrap);
+      renderMembers();
 
       const math = node('details', 'math-detail');
       math.append(node('summary', '', 'Show all math and formulas'));
@@ -227,6 +268,7 @@ const date = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', mo
           : `Projection: the remaining ${int(remaining)} boss health is dealt stage by stage from ${clock(result.durationSeconds)} at raid pace × each stage’s weight. ${result.projectedKillSeconds !== null ? `It runs out at ${clock(result.projectedKillSeconds)}.` : `By 10:00 that deals ${int(result.paceDps * (result.weightedSecondsToDeadline - result.weightedSecondsElapsed))}, leaving ${decimal(result.projectedRemainingPercent ?? 0)}%.`}`,
         `Tank and healer pace = their combined target damage ÷ ${decimal(result.weightedSecondsElapsed)} weighted seconds = ${int(result.rolePaceDps)} DPS. Per-DPS-player target = max(0, (required pace − tank and healer pace) ÷ ${result.damageDealers}) = ${result.requiredPaceDpsPerDamageDealer === null ? 'unavailable' : `${int(result.requiredPaceDpsPerDamageDealer)} pace DPS`}.`,
         'Each player’s boss DPS = their damage to the three shared-health targets ÷ full pull length. Their pace DPS = the same damage ÷ the pull’s weighted seconds, so it can be compared with the target however far the pull got. A DPS player meets the target when their pace DPS is at least the per-DPS-player target. Tank and healer rows show contributions without a pass/fail label.',
+        `By stage: a raider’s stage DPS = their target damage in that stage ÷ the seconds of it the pull reached. A DPS player’s stage target = per-DPS-player target × the stage’s weight${result.requiredPaceDpsPerDamageDealer === null ? '' : ` (for example Stage 1 ${int(result.requiredPaceDpsPerDamageDealer)}, Heart burn 1 ${int(result.requiredPaceDpsPerDamageDealer * (result.segments[1]?.weight ?? 0))})`}. Meeting every stage target is the same as meeting the overall pace target; the overall result can still pass with a weak stage made up elsewhere.`,
       ];
       formulas.forEach((formula) => list.append(node('li', '', formula)));
       math.append(list); detail.append(math);
@@ -289,6 +331,17 @@ const date = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', mo
   .pull-detail :global(.member-table tbody tr:nth-child(even)) { background: var(--surface-zebra); }
   .pull-detail :global(.member-table th:nth-child(n+3):nth-child(-n+6)), .pull-detail :global(.member-table .number-cell) { text-align: right; font-variant-numeric: tabular-nums; }
   .pull-detail :global(.table-note) { margin-top: var(--space-4); font-size: var(--text-sm); }
+  .pull-detail :global(.member-heading) { display: flex; justify-content: space-between; align-items: center; gap: var(--space-4); flex-wrap: wrap; margin: var(--space-7) 0 var(--space-4); }
+  .pull-detail :global(.member-heading h4) { margin: 0; }
+  .pull-detail :global(.view-toggle) { display: inline-flex; border: 1px solid var(--border-soft); border-radius: var(--radius-pill); overflow: hidden; }
+  .pull-detail :global(.view-toggle-button) { padding: var(--space-2) var(--space-5); border: 0; background: transparent; color: var(--muted); font: inherit; font-size: var(--text-sm); cursor: pointer; }
+  .pull-detail :global(.view-toggle-button[aria-pressed="true"]) { background: var(--surface-active); color: var(--gold-bright); font-weight: 700; }
+  .pull-detail :global(.member-table--stages) { --table-min: 1000px; }
+  .pull-detail :global(.member-table--stages th:nth-child(n+3)) { text-align: right; }
+  .pull-detail :global(.stage-cell span) { display: block; white-space: nowrap; }
+  .pull-detail :global(.stage-target) { font-size: var(--text-xs); color: var(--muted); }
+  .pull-detail :global(.stage-cell--meets .stage-dps) { color: var(--success); }
+  .pull-detail :global(.stage-cell--below .stage-dps) { color: var(--danger); }
   .pull-detail :global(.result-badge) { display: inline-flex; align-items: center; justify-content: center; min-width: 7.5rem; padding: var(--space-2) var(--space-4); border: 1px solid; border-radius: var(--radius-pill); font-size: var(--text-sm); font-weight: 700; line-height: 1.25; white-space: nowrap; }
   .pull-detail :global(.result-badge--contribution) { color: var(--info); border-color: var(--info); background: var(--info-bg); }
   .pull-detail :global(.result-badge--unavailable) { color: var(--muted); border-color: var(--border-soft); background: var(--surface-sunken); }
