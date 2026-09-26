@@ -59,7 +59,8 @@ const date = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', mo
     const int = (value: number) => Math.ceil(value).toLocaleString('en-US');
     const decimal = (value: number) => value.toLocaleString('en-US', { maximumFractionDigits: 1 });
     const percent = (ratio: number) => `${Math.round(ratio * 100)}%`;
-    const compact = (value: number) => value.toLocaleString('en-US', { notation: 'compact', maximumFractionDigits: value >= 1e6 ? 2 : 0 });
+    // Three significant digits so a narrow miss (5.63K of 6.29K) doesn't read as a tie.
+    const compact = (value: number) => value.toLocaleString('en-US', { notation: 'compact', maximumSignificantDigits: 3 });
     // Kept across pulls so switching pulls doesn't reset the member table view.
     let memberView: 'overall' | 'stage' = 'overall';
     const clock = (seconds: number) => `${Math.floor(seconds / 60)}:${String(Math.floor(seconds % 60)).padStart(2, '0')}`;
@@ -222,6 +223,7 @@ const date = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', mo
               const cell = node('td', `number-cell stage-cell${stage.meetsTarget === null ? '' : stage.meetsTarget ? ' stage-cell--meets' : ' stage-cell--below'}`);
               cell.append(node('span', 'stage-dps', compact(stage.dps ?? 0)));
               if (stage.target !== null) cell.append(node('span', 'stage-target', `of ${compact(stage.target)}`));
+              cell.title = stage.target === null ? `${int(stage.dps ?? 0)} boss DPS` : `${int(stage.dps ?? 0)} of ${int(stage.target)} boss DPS`;
               tr.append(cell);
             }
           } else {
