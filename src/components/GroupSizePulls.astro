@@ -60,6 +60,7 @@ const date = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', mo
     const decimal = (value: number) => value.toLocaleString('en-US', { maximumFractionDigits: 1 });
     const percent = (ratio: number) => `${Math.round(ratio * 100)}%`;
     // Three significant digits so a narrow miss (5.63K of 6.29K) doesn't read as a tie.
+    const exact = (value: number) => Math.round(value).toLocaleString('en-US');
     const compact = (value: number) => value.toLocaleString('en-US', { notation: 'compact', maximumSignificantDigits: 3 });
     // Kept across pulls so switching pulls doesn't reset the member table view.
     let memberView: 'overall' | 'stage' = 'overall';
@@ -78,18 +79,33 @@ const date = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', mo
     tooltip.id = 'group-size-column-tooltip';
     tooltip.role = 'tooltip';
     tooltip.hidden = true;
-    if (helpButtons.length > 0) document.body.append(tooltip);
+    document.body.append(tooltip);
+    const showTooltipAt = (anchor: HTMLElement, content: string | Node[]) => {
+      if (typeof content === 'string') tooltip.textContent = content;
+      else tooltip.replaceChildren(...content);
+      tooltip.hidden = false;
+      const rect = anchor.getBoundingClientRect();
+      const tip = tooltip.getBoundingClientRect();
+      tooltip.style.left = `${Math.max(10, Math.min(rect.left, window.innerWidth - tip.width - 10))}px`;
+      tooltip.style.top = `${rect.bottom + tip.height + 10 <= window.innerHeight ? rect.bottom + 8 : Math.max(10, rect.top - tip.height - 8)}px`;
+    };
+    // Stage cells build their tooltip content at render time.
+    const cellTooltips = new WeakMap<HTMLElement, () => Node[]>();
+    section.addEventListener('mouseover', (event) => {
+      const cell = (event.target as HTMLElement).closest<HTMLElement>('.stage-cell');
+      const build = cell ? cellTooltips.get(cell) : undefined;
+      if (cell && build) showTooltipAt(cell, build());
+    });
+    section.addEventListener('mouseout', (event) => {
+      const cell = (event.target as HTMLElement).closest('.stage-cell');
+      if (cell && !cell.contains(event.relatedTarget as Node | null)) tooltip.hidden = true;
+    });
     for (const helpButton of helpButtons) {
       const hideTooltip = () => { tooltip.hidden = true; helpButton.setAttribute('aria-expanded', 'false'); };
       const showTooltip = () => {
-        tooltip.textContent = helpButton.dataset.columnTooltip ?? '';
-        tooltip.hidden = false;
         helpButton.setAttribute('aria-describedby', tooltip.id);
         helpButton.setAttribute('aria-expanded', 'true');
-        const rect = helpButton.getBoundingClientRect();
-        const tip = tooltip.getBoundingClientRect();
-        tooltip.style.left = `${Math.max(10, Math.min(rect.left, window.innerWidth - tip.width - 10))}px`;
-        tooltip.style.top = `${rect.bottom + tip.height + 10 <= window.innerHeight ? rect.bottom + 8 : Math.max(10, rect.top - tip.height - 8)}px`;
+        showTooltipAt(helpButton, helpButton.dataset.columnTooltip ?? '');
       };
       helpButton.setAttribute('aria-expanded', 'false');
       helpButton.addEventListener('mouseenter', showTooltip);
@@ -218,12 +234,34 @@ const date = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', mo
           const tr = node('tr');
           tr.append(node('td', '', player.name), node('td', '', roleLabel(player.role)));
           if (byStage) {
-            for (const { index } of reachedStages) {
+            for (const { segment, index } of reachedStages) {
               const stage = player.stages[index];
+              const dps = stage.dps ?? 0;
               const cell = node('td', `number-cell stage-cell${stage.meetsTarget === null ? '' : stage.meetsTarget ? ' stage-cell--meets' : ' stage-cell--below'}`);
-              cell.append(node('span', 'stage-dps', compact(stage.dps ?? 0)));
+              cell.append(node('span', 'stage-dps', compact(dps)));
               if (stage.target !== null) cell.append(node('span', 'stage-target', `of ${compact(stage.target)}`));
-              cell.title = stage.target === null ? `${int(stage.dps ?? 0)} boss DPS` : `${int(stage.dps ?? 0)} of ${int(stage.target)} boss DPS`;
+              cell.append(node('span', 'sr-only', stage.target === null ? `${exact(dps)} boss DPS` : `${exact(dps)} of ${exact(stage.target)} boss DPS`));
+              cellTooltips.set(cell, () => {
+                const rows: Node[] = [node('strong', 'tooltip-title', `${player.name} · ${segment.label}`)];
+                const line = (label: string, value: string, className = '') => {
+                  const row = node('div', `tooltip-row ${className}`);
+                  row.append(node('span', '', label), node('span', 'tooltip-value', value));
+                  rows.push(row);
+                };
+                line('Boss DPS', exact(dps));
+                if (stage.target !== null) {
+                  line('Stage target', exact(stage.target));
+                  const gap = dps - stage.target;
+                  line(gap >= 0 ? 'Above target' : 'Short of target',
+                    `${gap >= 0 ? '+' : '−'}${exact(Math.abs(gap))} (${gap >= 0 ? '+' : '−'}${decimal(stage.target > 0 ? Math.abs(gap) / stage.target * 100 : 0)}%)`,
+                    gap >= 0 ? 'tooltip-row--meets' : 'tooltip-row--below');
+                } else {
+                  rows.push(node('div', 'tooltip-note', player.role === 'dps' ? 'No target without a boss HP estimate.' : 'Tank and healer damage counts toward the raid; no individual target.'));
+                }
+                const full = Math.min(segment.end, 600) - segment.start;
+                line('Stage played', segment.elapsedSeconds + 0.5 < full ? `${decimal(segment.elapsedSeconds)}s of ${decimal(full)}s` : `${decimal(full)}s (full)`);
+                return rows;
+              });
               tr.append(cell);
             }
           } else {
@@ -340,7 +378,14 @@ const date = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', mo
   .pull-detail :global(.view-toggle-button[aria-pressed="true"]) { background: var(--surface-active); color: var(--gold-bright); font-weight: 700; }
   .pull-detail :global(.member-table--stages) { --table-min: 1000px; }
   .pull-detail :global(.member-table--stages th:nth-child(n+3)) { text-align: right; }
-  .pull-detail :global(.stage-cell span) { display: block; white-space: nowrap; }
+  .pull-detail :global(.stage-cell) { cursor: help; }
+  .pull-detail :global(.stage-cell span:not(.sr-only)) { display: block; white-space: nowrap; }
+  :global(.group-size-column-tooltip .tooltip-title) { display: block; margin-bottom: var(--space-3); color: var(--gold-bright); }
+  :global(.group-size-column-tooltip .tooltip-row) { display: flex; justify-content: space-between; gap: var(--space-5); }
+  :global(.group-size-column-tooltip .tooltip-value) { font-variant-numeric: tabular-nums; font-weight: 700; }
+  :global(.group-size-column-tooltip .tooltip-row--meets .tooltip-value) { color: var(--success); }
+  :global(.group-size-column-tooltip .tooltip-row--below .tooltip-value) { color: var(--danger); }
+  :global(.group-size-column-tooltip .tooltip-note) { margin: var(--space-2) 0; color: var(--muted); }
   .pull-detail :global(.stage-target) { font-size: var(--text-xs); color: var(--muted); }
   .pull-detail :global(.stage-cell--meets .stage-dps) { color: var(--success); }
   .pull-detail :global(.stage-cell--below .stage-dps) { color: var(--danger); }
